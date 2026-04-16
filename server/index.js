@@ -17,6 +17,11 @@ if (process.env.NODE_ENV === 'production') {
     console.error(`[Startup] Missing required production environment variables: ${missingProd.join(', ')}`);
     process.exit(1);
   }
+  // Refuse to boot with a short/placeholder JWT secret in production.
+  if ((process.env.JWT_SECRET || '').length < 32) {
+    console.error('[Startup] JWT_SECRET must be at least 32 characters long in production.');
+    process.exit(1);
+  }
 }
 
 const express = require('express');
@@ -42,6 +47,15 @@ const app        = express();
 const PORT       = process.env.PORT || 3001;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
 const IS_PROD    = process.env.NODE_ENV === 'production';
+
+// In production the app typically runs behind an IIS / Cloudflare / nginx reverse
+// proxy. We trust the first hop so req.ip reflects the real client for the rate
+// limiter. TRUST_PROXY can be overridden (e.g. "2" for nested proxies, or a
+// comma-separated CIDR list) — see https://expressjs.com/en/guide/behind-proxies.html
+if (IS_PROD) {
+  const trust = process.env.TRUST_PROXY || 1;
+  app.set('trust proxy', isNaN(Number(trust)) ? trust : Number(trust));
+}
 
 // ── Security headers (helmet) ─────────────────────────────────────────────────
 // In production Express serves the built SPA, so we allow inline scripts that
@@ -122,23 +136,40 @@ app.get('/api/users', authMiddleware, (req, res, next) => {
   }
 });
 
-// Health check
-app.get('/health', (req, res) =>
-  res.json({ status: 'ok', timestamp: new Date().toISOString(), env: process.env.NODE_ENV || 'development' })
-);
+// Health check — probes the DB so IIS / PM2 / uptime monitors can detect a
+// broken database connection rather than just a running Node process.
+app.get('/health', (req, res) => {
+  const base = { timestamp: new Date().toISOString(), env: process.env.NODE_ENV || 'development' };
+  try {
+    const db = require('./db/adapter');
+    const row = db.get('SELECT 1 AS ok', []);
+    if (!row || row.ok !== 1) throw new Error('db probe returned unexpected result');
+    return res.json({ status: 'ok', db: 'ok', ...base });
+  } catch (err) {
+    return res.status(503).json({ status: 'degraded', db: 'error', error: err.message, ...base });
+  }
+});
 
-// ── Static file serving (production) ─────────────────────────────────────────
-// In production, Express serves the Vite-built React SPA. The client dist folder
-// sits at ../client/dist relative to this server directory.
-if (IS_PROD) {
-  const clientDist = path.join(__dirname, '..', 'client', 'dist');
+// ── Static file serving ──────────────────────────────────────────────────────
+// In production, Express always serves the Vite-built React SPA.
+// In development, Express serves it too *if* client/dist exists — this lets you
+// run the whole app on a single port (3001) for demos via a tunnel (ngrok etc.)
+// without running the Vite dev server. Normal local dev still works: if
+// client/dist doesn't exist, Express only serves /api and you use Vite on 5173.
+const clientDist = path.join(__dirname, '..', 'client', 'dist');
+const serveClient = IS_PROD || fs.existsSync(clientDist);
+
+if (serveClient) {
   if (fs.existsSync(clientDist)) {
     app.use(express.static(clientDist));
     // Serve React app for all non-API routes (SPA client-side routing)
     app.get('*', (req, res) => {
       res.sendFile(path.join(clientDist, 'index.html'));
     });
-  } else {
+    if (!IS_PROD) {
+      console.log('[Startup] Serving built client from client/dist (demo / single-port mode).');
+    }
+  } else if (IS_PROD) {
     console.warn('[Startup] client/dist not found — run "npm run build" in the client directory first.');
   }
 }

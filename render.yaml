@@ -1,0 +1,45 @@
+# Render deployment config — https://render.com/docs/blueprint-spec
+#
+# Point Render at this repo (New → Blueprint) and this file tells it how to
+# build, run, and persist data for the PDI Inspection App.
+#
+# Cost estimate: Starter plan $7/month + 1 GB disk $0.25/month ≈ $7.25/month.
+# Free tier works for a quick try but the web service spins down after 15 min
+# of inactivity and does NOT retain the database or uploads between deploys.
+
+services:
+  - type: web
+    name: pdi-inspection
+    runtime: node
+    plan: starter          # change to "free" to try it at $0, see caveats above
+    region: oregon         # oregon, ohio, virginia, frankfurt, singapore
+    branch: main
+    rootDir: .
+    buildCommand: |
+      cd server && npm ci --omit=dev &&
+      cd ../client && npm ci && npm run build
+    startCommand: cd server && npm start
+    healthCheckPath: /health
+    disk:
+      name: pdi-data
+      mountPath: /var/pdi-data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: development           # keeps local email/password auth active; no Azure needed
+      - key: NODE_VERSION
+        value: 22.11.0
+      - key: PORT
+        value: 3001
+      - key: SQLITE_PATH
+        value: /var/pdi-data/inspection.db
+      - key: UPLOAD_DIR
+        value: /var/pdi-data/uploads
+      - key: MAX_FILE_SIZE_MB
+        value: 25
+      - key: DB_ADAPTER
+        value: sqlite
+      - key: JWT_SECRET
+        generateValue: true          # Render generates a strong random value on first deploy
+      - key: ADMIN_PASSWORD
+        sync: false                  # you'll set this manually in the Render UI

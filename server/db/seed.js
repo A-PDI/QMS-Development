@@ -286,16 +286,30 @@ async function seed() {
     // ── Admin user ──────────────────────────────────────────────────────────
     const existingAdmin = db.get("SELECT id FROM users WHERE email = ?", ['admin@pdi.com']);
     if (!existingAdmin) {
+      const isProd = process.env.NODE_ENV === 'production';
+      const suppliedPassword = process.env.ADMIN_PASSWORD;
+
+      // In production the default "changeme" password is not acceptable — refuse
+      // to create the admin until ADMIN_PASSWORD is explicitly provided and long
+      // enough. The production deploy should also migrate to Entra sign-in
+      // (password_hash left NULL) for real users.
+      if (isProd) {
+        if (!suppliedPassword || suppliedPassword.length < 12) {
+          console.error('[Seed] Refusing to create default admin: set ADMIN_PASSWORD (>= 12 chars) before seeding in production.');
+          process.exit(1);
+        }
+      }
+
       const adminId = uuidv4();
-      const password = process.env.ADMIN_PASSWORD || 'changeme';
+      const password = suppliedPassword || 'changeme';
       const hash = bcrypt.hashSync(password, 10);
       db.run(
         "INSERT INTO users (id, name, email, role, password_hash, active) VALUES (?, ?, ?, ?, ?, ?)",
         [adminId, 'PDI Admin', 'admin@pdi.com', 'admin', hash, 1]
       );
       console.log('[Seed] Created admin user: admin@pdi.com');
-      if (!process.env.ADMIN_PASSWORD) {
-        console.warn('[Seed] WARNING: Using default password "changeme". Set ADMIN_PASSWORD env var before production use.');
+      if (!suppliedPassword) {
+        console.warn('[Seed] WARNING: Using default password "changeme". Acceptable only for local development.');
       }
     } else {
       console.log('[Seed] Admin user already exists');
