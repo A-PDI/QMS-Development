@@ -1,0 +1,7 @@
+# Never commit SQLite sidecar files — they are regenerated at runtime and
+# their presence next to a seeded .db file can cause SQLite to think the
+# database is in an inconsistent state on boot.
+*.db-wal
+*.db-shm
+*.db-journal
+.fuse_hidden*

@@ -3,11 +3,22 @@
 const { DatabaseSync } = require('node:sqlite');
 const path = require('path');
 const fs = require('fs');
+const { bootstrapFromSeed } = require('./bootstrap');
 
 const dbPath = process.env.SQLITE_PATH || './data/inspection.db';
 const dir = path.dirname(dbPath);
 if (!fs.existsSync(dir)) {
   fs.mkdirSync(dir, { recursive: true });
+}
+
+// First-boot seed: if the target .db file doesn't exist yet and a committed
+// seed bundle is present in server/db/seed/, copy it into place before any
+// connection is opened. On subsequent boots (persistent disk already has a
+// database) this is a no-op.
+try {
+  bootstrapFromSeed(dbPath);
+} catch (err) {
+  console.error('[SQLite] Bootstrap from seed failed (continuing with empty DB):', err.message);
 }
 
 let rawDb = null;

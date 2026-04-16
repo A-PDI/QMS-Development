@@ -41,12 +41,17 @@ export default function Layout() {
           >
             <Menu size={22} />
           </button>
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-pdi-navy">PDI</span>
-            <span className="text-xs text-gray-400 uppercase tracking-wider">QC</span>
+          <div className="flex items-center gap-2 min-w-0">
+            <img
+              src="/pdi-logo.png"
+              alt="PDI"
+              className="h-7 w-auto object-contain flex-shrink-0"
+              onError={e => { e.currentTarget.style.display = 'none' }}
+            />
+            <span className="text-xs font-semibold text-pdi-navy uppercase tracking-wider truncate">Quality Control</span>
           </div>
           {/* Spacer to balance the hamburger icon so the title stays centered */}
-          <div className="w-9" aria-hidden="true" />
+          <div className="w-9 flex-shrink-0" aria-hidden="true" />
         </header>
 
         <main className="flex-1 overflow-y-auto">
