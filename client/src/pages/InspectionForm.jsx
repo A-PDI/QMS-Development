@@ -43,12 +43,12 @@ function CollapsibleSection({ title, children, defaultOpen = true }) {
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between px-5 py-3.5 bg-pdi-frost hover:bg-pdi-steel/30 transition-colors"
+        className="w-full flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 bg-pdi-frost hover:bg-pdi-steel/30 transition-colors min-h-[48px]"
       >
-        <span className="text-base font-semibold text-pdi-navy">{title}</span>
-        {open ? <ChevronUp size={16} className="text-pdi-navy" /> : <ChevronDown size={16} className="text-pdi-navy" />}
+        <span className="text-sm sm:text-base font-semibold text-pdi-navy text-left truncate pr-2">{title}</span>
+        {open ? <ChevronUp size={16} className="text-pdi-navy flex-shrink-0" /> : <ChevronDown size={16} className="text-pdi-navy flex-shrink-0" />}
       </button>
-      {open && <div className="p-5">{children}</div>}
+      {open && <div className="p-3 sm:p-5">{children}</div>}
     </div>
   )
 }
@@ -264,81 +264,92 @@ export default function InspectionForm() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Sticky header */}
-      <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3 flex-wrap">
-          <span className="font-mono text-sm font-bold text-pdi-navy">{template.form_no}</span>
-          <span className="text-gray-400 text-sm">·</span>
-          <span className="text-sm text-gray-700">{inspection.part_number || 'No part #'}</span>
+      {/* Sticky header — stacks title line + actions on mobile */}
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-200 shadow-sm flex-shrink-0">
+        {/* Title line */}
+        <div className="px-4 sm:px-6 pt-2 sm:pt-3 flex items-center gap-2 flex-wrap">
+          <span className="font-mono text-xs sm:text-sm font-bold text-pdi-navy">{template.form_no}</span>
+          <span className="text-gray-400 text-xs sm:text-sm">·</span>
+          <span className="text-xs sm:text-sm text-gray-700 truncate max-w-[50%] sm:max-w-none">{inspection.part_number || 'No part #'}</span>
           {inspection.po_number && (
             <>
-              <span className="text-gray-400 text-sm">·</span>
-              <span className="text-sm text-gray-500">PO {inspection.po_number}</span>
+              <span className="text-gray-400 text-xs sm:text-sm hidden sm:inline">·</span>
+              <span className="text-xs sm:text-sm text-gray-500 hidden sm:inline">PO {inspection.po_number}</span>
             </>
           )}
           <StatusBadge status={inspection.status} />
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={`text-xs mr-1 ${saveState === 'saving' ? 'text-gray-400' : saveState === 'saved' ? 'text-green-600' : saveState === 'error' ? 'text-red-500' : 'text-transparent'}`}>
+          <span className={`text-xs ml-auto ${saveState === 'saving' ? 'text-gray-400' : saveState === 'saved' ? 'text-green-600' : saveState === 'error' ? 'text-red-500' : 'text-transparent'}`}>
             {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? '✓ Saved' : saveState === 'error' ? 'Save failed' : '·'}
           </span>
+        </div>
+        {/* Action bar — horizontally scrollable on very narrow screens */}
+        <div className="px-4 sm:px-6 py-2 sm:py-3 flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
           <button
             onClick={handleDownloadPdf}
             disabled={pdfLoading}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 active:bg-purple-800 disabled:opacity-50"
+            title="Print / PDF"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 active:bg-purple-800 disabled:opacity-50 flex-shrink-0 min-h-[40px]"
           >
             {pdfLoading ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
-            Print
+            <span className="hidden sm:inline">Print</span>
           </button>
           <button
             onClick={handleEmail}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 active:bg-indigo-700"
+            title="Email"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 active:bg-indigo-700 flex-shrink-0 min-h-[40px]"
           >
             <Mail size={14} />
-            Email
+            <span className="hidden sm:inline">Email</span>
           </button>
           <button
             onClick={() => debouncedSave()}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light active:bg-pdi-navy"
+            title="Save"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light active:bg-pdi-navy flex-shrink-0 min-h-[40px]"
           >
             <Save size={14} />
-            Save
+            <span className="hidden sm:inline">Save</span>
           </button>
           <button
             onClick={handleComplete}
             disabled={!disposition || complete.isPending}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-pdi-teal text-white rounded-lg hover:bg-teal-700 active:bg-teal-800 disabled:opacity-40"
-          >
-            <CheckSquare size={14} />
-            {complete.isPending ? 'Completing…' : (
+            title={complete.isPending ? 'Completing…' : (
               Object.values(sections).some(s => s.optional) && !dimensionalAdded
                 ? 'Complete (Visual Only)'
                 : 'Complete'
             )}
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 text-sm bg-pdi-teal text-white rounded-lg hover:bg-teal-700 active:bg-teal-800 disabled:opacity-40 flex-shrink-0 min-h-[40px]"
+          >
+            <CheckSquare size={14} />
+            <span className="hidden sm:inline">{complete.isPending ? 'Completing…' : (
+              Object.values(sections).some(s => s.optional) && !dimensionalAdded
+                ? 'Complete (Visual Only)'
+                : 'Complete'
+            )}</span>
           </button>
           <button
             onClick={() => navigate(returnTo)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100 active:bg-gray-200"
+            title="Close"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100 active:bg-gray-200 flex-shrink-0 min-h-[40px] ml-auto sm:ml-0"
           >
             <X size={14} />
-            Close
+            <span className="hidden sm:inline">Close</span>
           </button>
         </div>
       </div>
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-[1440px] mx-auto p-6 space-y-4">
+        <div className="max-w-[1440px] mx-auto p-3 sm:p-6 space-y-3 sm:space-y-4">
 
           {/* Header fields (read-only summary) */}
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <h2 className="text-base font-semibold text-gray-700 mb-3">Inspection Details</h2>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-3">
+          <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
+            <h2 className="text-sm sm:text-base font-semibold text-gray-700 mb-3">Inspection Details</h2>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-4 sm:gap-x-6 gap-y-2 sm:gap-y-3">
               {headerFields.map(field => (
                 inspection[field] && (
-                  <div key={field}>
-                    <div className="text-xs text-gray-400">{HEADER_FIELD_LABELS[field] || field}</div>
-                    <div className="text-base font-medium text-gray-800">{inspection[field]}</div>
+                  <div key={field} className="min-w-0">
+                    <div className="text-xs text-gray-400 truncate">{HEADER_FIELD_LABELS[field] || field}</div>
+                    <div className="text-sm sm:text-base font-medium text-gray-800 truncate">{inspection[field]}</div>
                   </div>
                 )
               ))}
@@ -388,13 +399,13 @@ export default function InspectionForm() {
           {/* Final Results */}
           <CollapsibleSection title="Final Results">
             <div className="space-y-4">
-              <div className="flex flex-wrap gap-3">
+              <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 sm:gap-3">
                 {dispositionOptions.map(opt => (
                   <button
                     key={opt}
                     type="button"
                     onClick={() => setDisposition(d => d === opt ? '' : opt)}
-                    className={`px-6 py-3 text-sm font-bold rounded-lg border-2 transition-all ${
+                    className={`px-4 sm:px-6 py-3 text-sm font-bold rounded-lg border-2 transition-all min-h-[48px] ${
                       disposition === opt
                         ? DISPOSITION_COLORS[opt] || 'bg-blue-100 text-blue-700 border-blue-400'
                         : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'
@@ -421,22 +432,22 @@ export default function InspectionForm() {
               {generalAttachments.length > 0 && (
                 <div className="space-y-2">
                   {generalAttachments.map(att => (
-                    <div key={att.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
-                      <div className="flex items-center gap-2">
-                        <Paperclip size={14} className="text-gray-400" />
+                    <div key={att.id} className="flex items-center justify-between gap-2 p-3 bg-gray-50 rounded-lg border border-gray-100">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <Paperclip size={14} className="text-gray-400 flex-shrink-0" />
                         <a
                           href={`/api/attachments/download/${att.id}`}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-sm text-pdi-navy hover:underline"
+                          className="text-sm text-pdi-navy hover:underline truncate"
                         >
                           {att.file_name}
                         </a>
-                        <span className="text-xs text-gray-400">{formatFileSize(att.file_size_bytes)}</span>
+                        <span className="text-xs text-gray-400 flex-shrink-0 hidden sm:inline">{formatFileSize(att.file_size_bytes)}</span>
                       </div>
                       <button
                         onClick={() => handleDeleteFile(att.id)}
-                        className="text-xs text-red-400 hover:text-red-600"
+                        className="text-xs text-red-400 hover:text-red-600 flex-shrink-0 px-2 py-1 min-h-[32px]"
                       >
                         Remove
                       </button>

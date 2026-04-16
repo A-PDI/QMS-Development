@@ -86,8 +86,8 @@ export default function InspectionDetail() {
     }
   }
 
-  if (loadingInsp || loadingTpl) return <div className="p-6 text-gray-400">Loading…</div>
-  if (!inspection || !template) return <div className="p-6 text-red-500">Not found</div>
+  if (loadingInsp || loadingTpl) return <div className="p-4 sm:p-6 text-gray-400">Loading…</div>
+  if (!inspection || !template) return <div className="p-4 sm:p-6 text-red-500">Not found</div>
 
   const sections = typeof template.sections === 'string' ? JSON.parse(template.sections) : template.sections
   const sectionData = typeof inspection.section_data === 'string'
@@ -98,76 +98,88 @@ export default function InspectionDetail() {
 
   return (
     <div>
-      {/* Header */}
-      <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3 flex-wrap">
-          <span className="font-mono text-sm font-bold text-pdi-navy">{template.form_no}</span>
-          <span className="text-gray-400">·</span>
-          <span className="text-sm text-gray-700">{inspection.part_number || 'No part #'}</span>
-          {inspection.po_number && <><span className="text-gray-400">·</span><span className="text-sm text-gray-500">PO {inspection.po_number}</span></>}
+      {/* Header — stacks on mobile, single row on desktop */}
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-200 shadow-sm">
+        {/* Title line */}
+        <div className="px-4 sm:px-6 pt-2 sm:pt-3 flex items-center gap-2 flex-wrap">
+          <span className="font-mono text-xs sm:text-sm font-bold text-pdi-navy">{template.form_no}</span>
+          <span className="text-gray-400 hidden sm:inline">·</span>
+          <span className="text-xs sm:text-sm text-gray-700 truncate max-w-[40vw] sm:max-w-none">{inspection.part_number || 'No part #'}</span>
+          {inspection.po_number && (
+            <>
+              <span className="text-gray-400 hidden sm:inline">·</span>
+              <span className="text-xs sm:text-sm text-gray-500 truncate max-w-[40vw] sm:max-w-none">PO {inspection.po_number}</span>
+            </>
+          )}
           <StatusBadge status={inspection.status} />
           {inspection.disposition && <StatusBadge disposition={inspection.disposition} />}
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        {/* Action bar — horizontally scrollable on mobile */}
+        <div className="px-4 sm:px-6 py-2 sm:py-3 flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
           {canEdit && (
             <button
               onClick={() => navigate(`/inspections/${id}/edit`)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light active:bg-pdi-navy"
+              title="Edit"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light active:bg-pdi-navy min-h-[40px] flex-shrink-0"
             >
               <Edit size={14} />
-              Edit
+              <span className="hidden sm:inline">Edit</span>
             </button>
           )}
           <button
             onClick={() => navigate(`/ncrs/new?inspection_id=${id}`)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-orange-500 text-white rounded-lg hover:bg-orange-600 active:bg-orange-700"
+            title="NCR"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-orange-500 text-white rounded-lg hover:bg-orange-600 active:bg-orange-700 min-h-[40px] flex-shrink-0"
           >
             <AlertTriangle size={14} />
-            NCR
+            <span className="hidden sm:inline">NCR</span>
           </button>
           <button
             onClick={handleDownloadPdf}
             disabled={pdfLoading}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 active:bg-purple-800 disabled:opacity-50"
+            title="Print / PDF"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 active:bg-purple-800 disabled:opacity-50 min-h-[40px] flex-shrink-0"
           >
             {pdfLoading ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
-            {pdfLoading ? 'Generating…' : 'Print'}
+            <span className="hidden sm:inline">{pdfLoading ? 'Generating…' : 'Print'}</span>
           </button>
           <button
             onClick={handleEmail}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 active:bg-indigo-700"
+            title="Email"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 active:bg-indigo-700 min-h-[40px] flex-shrink-0"
           >
             <Mail size={14} />
-            Email
+            <span className="hidden sm:inline">Email</span>
           </button>
           <button
             onClick={() => navigate('/inspections')}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100 active:bg-gray-200"
+            title="Close"
+            className="ml-auto flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100 active:bg-gray-200 min-h-[40px] flex-shrink-0"
           >
             <X size={14} />
-            Close
+            <span className="hidden sm:inline">Close</span>
           </button>
         </div>
       </div>
 
-      <div className="max-w-[1440px] mx-auto p-6 space-y-4">
+      <div className="max-w-[1440px] mx-auto p-3 sm:p-6 space-y-3 sm:space-y-4">
         {/* Header details */}
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-3">
+        <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-5">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-4 sm:gap-x-6 gap-y-2.5 sm:gap-y-3">
             {headerFields.map(field => inspection[field] && (
-              <div key={field}>
+              <div key={field} className="min-w-0">
                 <div className="text-xs text-gray-400">{HEADER_FIELD_LABELS[field] || field}</div>
-                <div className="text-base font-medium text-gray-800">{inspection[field]}</div>
+                <div className="text-sm sm:text-base font-medium text-gray-800 break-words">{inspection[field]}</div>
               </div>
             ))}
-            <div>
+            <div className="min-w-0">
               <div className="text-xs text-gray-400">Created</div>
-              <div className="text-base text-gray-800">{formatDate(inspection.created_at)}</div>
+              <div className="text-sm sm:text-base text-gray-800">{formatDate(inspection.created_at)}</div>
             </div>
             {inspection.submitted_at && (
-              <div>
+              <div className="min-w-0">
                 <div className="text-xs text-gray-400">Submitted</div>
-                <div className="text-base text-gray-800">{formatDateTime(inspection.submitted_at)}</div>
+                <div className="text-sm sm:text-base text-gray-800">{formatDateTime(inspection.submitted_at)}</div>
               </div>
             )}
           </div>
@@ -182,10 +194,10 @@ export default function InspectionDetail() {
           if (!Component) return null
           return (
             <div key={key} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              <div className="px-5 py-3.5 bg-pdi-frost">
-                <span className="text-base font-semibold text-pdi-navy">{section.title}</span>
+              <div className="px-3 sm:px-5 py-3 sm:py-3.5 bg-pdi-frost">
+                <span className="text-sm sm:text-base font-semibold text-pdi-navy">{section.title}</span>
               </div>
-              <div className="p-4">
+              <div className="p-3 sm:p-4">
                 <Component section={section} data={sectionData[key]} readOnly />
               </div>
             </div>
@@ -194,10 +206,10 @@ export default function InspectionDetail() {
 
         {/* Final Results */}
         {inspection.disposition && (
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <div className="text-sm font-semibold text-gray-700 mb-3">Final Results</div>
-            <div className="flex items-center gap-3">
-              <span className={`px-5 py-2 text-sm font-bold rounded-lg border-2 ${DISPOSITION_COLORS[inspection.disposition] || 'bg-gray-100 text-gray-700 border-gray-300'}`}>
+          <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-5">
+            <div className="text-sm font-semibold text-gray-700 mb-2 sm:mb-3">Final Results</div>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+              <span className={`px-4 sm:px-5 py-2 text-sm font-bold rounded-lg border-2 inline-block w-fit ${DISPOSITION_COLORS[inspection.disposition] || 'bg-gray-100 text-gray-700 border-gray-300'}`}>
                 {inspection.disposition}
               </span>
               {inspection.disposition_notes && (
@@ -209,7 +221,7 @@ export default function InspectionDetail() {
 
         {/* Completed at */}
         {inspection.completed_at && (
-          <div className="rounded-xl border border-green-200 bg-green-50 p-4">
+          <div className="rounded-xl border border-green-200 bg-green-50 p-3 sm:p-4">
             <div className="text-sm font-semibold text-green-700 mb-0.5">Completed</div>
             <div className="text-xs text-gray-500">{formatDateTime(inspection.completed_at)}</div>
           </div>
@@ -217,21 +229,24 @@ export default function InspectionDetail() {
 
         {/* Attachments */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="px-5 py-3.5 bg-pdi-frost">
+          <div className="px-3 sm:px-5 py-3 sm:py-3.5 bg-pdi-frost">
             <span className="text-sm font-semibold text-pdi-navy">Attachments ({attachments.length})</span>
           </div>
-          <div className="p-4 space-y-3">
+          <div className="p-3 sm:p-4 space-y-2 sm:space-y-3">
             <FileUploadZone onUpload={handleUpload} />
             {attachments.map(att => (
-              <div key={att.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
-                <div className="flex items-center gap-2">
-                  <Paperclip size={14} className="text-gray-400" />
-                  <a href={`/api/attachments/download/${att.id}`} target="_blank" rel="noreferrer" className="text-sm text-pdi-navy hover:underline">
+              <div key={att.id} className="flex items-center justify-between gap-2 p-2.5 sm:p-3 bg-gray-50 rounded-lg border border-gray-100">
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <Paperclip size={14} className="text-gray-400 flex-shrink-0" />
+                  <a href={`/api/attachments/download/${att.id}`} target="_blank" rel="noreferrer" className="text-sm text-pdi-navy hover:underline truncate">
                     {att.file_name}
                   </a>
-                  <span className="text-xs text-gray-400">{formatFileSize(att.file_size_bytes)}</span>
+                  <span className="text-xs text-gray-400 flex-shrink-0 hidden sm:inline">{formatFileSize(att.file_size_bytes)}</span>
                 </div>
-                <button onClick={() => deleteFile.mutateAsync({ id: att.id, inspectionId: id })} className="text-xs text-red-400 hover:text-red-600">
+                <button
+                  onClick={() => deleteFile.mutateAsync({ id: att.id, inspectionId: id })}
+                  className="text-xs text-red-400 hover:text-red-600 px-2 py-1 min-h-[32px] flex-shrink-0"
+                >
                   Remove
                 </button>
               </div>

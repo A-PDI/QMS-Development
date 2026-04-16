@@ -42,15 +42,15 @@ function MetricCard({ label, value, icon: Icon, bg, fg, isActive, onClick }) {
         isActive ? 'border-pdi-navy ring-2 ring-pdi-navy/30' : 'border-gray-100'
       }`}
     >
-      <div className={`${bg} px-5 py-4 flex items-center justify-between`}>
-        <span className={`text-3xl font-bold ${fg}`}>{value ?? '—'}</span>
-        <div className="p-2 rounded-lg bg-white/20">
-          <Icon size={20} className={fg} />
+      <div className={`${bg} px-4 sm:px-5 py-3 sm:py-4 flex items-center justify-between`}>
+        <span className={`text-2xl sm:text-3xl font-bold ${fg}`}>{value ?? '—'}</span>
+        <div className="p-1.5 sm:p-2 rounded-lg bg-white/20">
+          <Icon size={18} className={fg} />
         </div>
       </div>
-      <div className="px-5 py-3 bg-white">
-        <span className="text-sm font-medium text-gray-600">{label}</span>
-        {isActive && <span className="ml-2 text-xs text-pdi-navy font-semibold">● filtered</span>}
+      <div className="px-4 sm:px-5 py-2.5 sm:py-3 bg-white">
+        <span className="text-xs sm:text-sm font-medium text-gray-600 leading-tight block">{label}</span>
+        {isActive && <span className="text-xs text-pdi-navy font-semibold">● filtered</span>}
       </div>
     </button>
   )
@@ -122,26 +122,29 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-full bg-gray-50/50">
-      <div className="bg-white border-b border-gray-200 px-6 py-5">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-pdi-navy">Dashboard</h1>
-            <p className="text-sm text-gray-500 mt-0.5 flex items-center gap-1.5">
-              <TrendingUp size={13} /> PDI Incoming Quality Inspection System
+      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 sm:py-5">
+        <div className="flex items-start sm:items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-bold text-pdi-navy">Dashboard</h1>
+            <p className="text-xs sm:text-sm text-gray-500 mt-0.5 flex items-center gap-1.5">
+              <TrendingUp size={13} className="flex-shrink-0" />
+              <span className="truncate">PDI Incoming Quality Inspection</span>
             </p>
           </div>
           <button
             onClick={() => navigate('/inspections/new')}
-            className="flex items-center gap-2 bg-pdi-navy text-white px-4 py-2.5 rounded-lg text-sm font-semibold hover:bg-pdi-navy-light shadow-sm transition-all"
+            className="flex items-center gap-2 bg-pdi-navy text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg text-sm font-semibold hover:bg-pdi-navy-light shadow-sm transition-all flex-shrink-0"
+            title="New Inspection"
           >
-            <PlusCircle size={16} /> New Inspection
+            <PlusCircle size={16} />
+            <span className="hidden sm:inline">New Inspection</span>
           </button>
         </div>
       </div>
 
-      <div className="p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
         {/* KPI Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           {METRIC_CONFIGS.map(({ key, label, icon, bg, fg, filter }) => (
             <MetricCard key={key} label={label} value={stats?.[key]} icon={icon} bg={bg} fg={fg}
               isActive={activeFilter === filter}
@@ -153,45 +156,85 @@ export default function Dashboard() {
         {/* Filtered inspection table */}
         {showInspections && (
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100">
-              <div className="flex items-center gap-2">
-                <div className="w-1 h-5 bg-pdi-navy rounded-full" />
-                <h2 className="text-base font-semibold text-gray-800">{activeConfig?.filterLabel}</h2>
-                <span className="text-xs text-gray-400">({tableInspections.length} shown)</span>
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-100 gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-1 h-5 bg-pdi-navy rounded-full flex-shrink-0" />
+                <h2 className="text-sm sm:text-base font-semibold text-gray-800 truncate">{activeConfig?.filterLabel}</h2>
+                <span className="text-xs text-gray-400 flex-shrink-0">({tableInspections.length})</span>
               </div>
-              <button onClick={() => navigate('/inspections')} className="text-xs text-pdi-navy hover:underline font-medium">View all →</button>
+              <button onClick={() => navigate('/inspections')} className="text-xs text-pdi-navy hover:underline font-medium flex-shrink-0">View all →</button>
             </div>
             {filteredLoading ? (
               <div className="text-center text-gray-400 text-sm py-10">Loading…</div>
             ) : tableInspections.length === 0 ? (
               <div className="text-center text-gray-400 text-sm py-10">No matching inspections</div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-100">
-                    <tr>
-                      {['Component', 'Part Number', 'PO Number', 'Inspector', 'Date Received', 'Status'].map(h => (
-                        <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {tableInspections.map(insp => (
-                      <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-blue-50/50 cursor-pointer">
-                        <td className="px-4 py-3">
-                          <div className="font-medium text-gray-800">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</div>
-                          <div className="text-xs text-gray-400 font-mono mt-0.5">{insp.form_no}</div>
-                        </td>
-                        <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
-                        <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.po_number || '—'}</td>
-                        <td className="px-4 py-3 text-sm text-gray-700">{insp.inspector_name || '—'}</td>
-                        <td className="px-4 py-3 text-sm text-gray-500">{formatDate(insp.date_received || insp.created_at)}</td>
-                        <td className="px-4 py-3"><StatusBadge status={insp.status} /></td>
+              <>
+                {/* Desktop table — hidden on mobile */}
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-100">
+                      <tr>
+                        {['Component', 'Part Number', 'PO Number', 'Inspector', 'Date Received', 'Status'].map(h => (
+                          <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {tableInspections.map(insp => (
+                        <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-blue-50/50 cursor-pointer">
+                          <td className="px-4 py-3">
+                            <div className="font-medium text-gray-800">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</div>
+                            <div className="text-xs text-gray-400 font-mono mt-0.5">{insp.form_no}</div>
+                          </td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.po_number || '—'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700">{insp.inspector_name || '—'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-500">{formatDate(insp.date_received || insp.created_at)}</td>
+                          <td className="px-4 py-3"><StatusBadge status={insp.status} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {/* Mobile card list — hidden on md and up */}
+                <div className="md:hidden divide-y divide-gray-100">
+                  {tableInspections.map(insp => (
+                    <button
+                      key={insp.id}
+                      type="button"
+                      onClick={() => navigate(`/inspections/${insp.id}`)}
+                      className="w-full text-left px-4 py-3 hover:bg-blue-50/50 active:bg-blue-50 transition-colors min-h-[44px]"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-gray-800 text-sm truncate">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</div>
+                          <div className="text-xs text-gray-400 font-mono mt-0.5 truncate">{insp.form_no}</div>
+                        </div>
+                        <div className="flex-shrink-0"><StatusBadge status={insp.status} /></div>
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                        <div className="min-w-0">
+                          <span className="text-gray-400">Part: </span>
+                          <span className="font-mono text-gray-700">{insp.part_number || '—'}</span>
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-gray-400">PO: </span>
+                          <span className="font-mono text-gray-700">{insp.po_number || '—'}</span>
+                        </div>
+                        <div className="min-w-0 truncate">
+                          <span className="text-gray-400">By: </span>
+                          <span className="text-gray-700">{insp.inspector_name || '—'}</span>
+                        </div>
+                        <div className="min-w-0 truncate">
+                          <span className="text-gray-400">On: </span>
+                          <span className="text-gray-500">{formatDate(insp.date_received || insp.created_at)}</span>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
             )}
           </div>
         )}
@@ -199,63 +242,93 @@ export default function Dashboard() {
         {/* Filtered NCR table */}
         {showNcrs && (
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100">
-              <div className="flex items-center gap-2">
-                <div className="w-1 h-5 bg-pdi-red rounded-full" />
-                <h2 className="text-base font-semibold text-gray-800">Open NCRs</h2>
-                <span className="text-xs text-gray-400">({tableNcrs.length} shown)</span>
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-100 gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-1 h-5 bg-pdi-red rounded-full flex-shrink-0" />
+                <h2 className="text-sm sm:text-base font-semibold text-gray-800 truncate">Open NCRs</h2>
+                <span className="text-xs text-gray-400 flex-shrink-0">({tableNcrs.length})</span>
               </div>
-              <button onClick={() => navigate('/ncrs')} className="text-xs text-pdi-navy hover:underline font-medium">View all →</button>
+              <button onClick={() => navigate('/ncrs')} className="text-xs text-pdi-navy hover:underline font-medium flex-shrink-0">View all →</button>
             </div>
             {ncrLoading ? (
               <div className="text-center text-gray-400 text-sm py-10">Loading…</div>
             ) : tableNcrs.length === 0 ? (
               <div className="text-center text-gray-400 text-sm py-10">No open NCRs</div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-100">
-                    <tr>
-                      {['NCR #', 'Part Number', 'Supplier', 'Description', 'Severity', 'Status', 'Created'].map(h => (
-                        <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {tableNcrs.map(ncr => (
-                      <tr key={ncr.id} onClick={() => navigate(`/ncrs/${ncr.id}`)} className="hover:bg-orange-50/40 cursor-pointer">
-                        <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{ncr.ncr_number}</td>
-                        <td className="px-4 py-3 font-mono text-xs">{ncr.part_number || '—'}</td>
-                        <td className="px-4 py-3 text-sm text-gray-700">{ncr.supplier || '—'}</td>
-                        <td className="px-4 py-3 text-sm max-w-xs truncate text-gray-700">{ncr.description_of_defect}</td>
-                        <td className="px-4 py-3">
-                          <NcrBadge value={ncr.severity} colorMap={NCR_SEVERITY_COLORS} labelMap={NCR_SEVERITY_LABELS} />
-                        </td>
-                        <td className="px-4 py-3">
-                          <NcrBadge value={ncr.status} colorMap={NCR_STATUS_COLORS} labelMap={NCR_STATUS_LABELS} />
-                        </td>
-                        <td className="px-4 py-3 text-xs text-gray-500">{formatDate(ncr.created_at)}</td>
+              <>
+                {/* Desktop table */}
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-100">
+                      <tr>
+                        {['NCR #', 'Part Number', 'Supplier', 'Description', 'Severity', 'Status', 'Created'].map(h => (
+                          <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {tableNcrs.map(ncr => (
+                        <tr key={ncr.id} onClick={() => navigate(`/ncrs/${ncr.id}`)} className="hover:bg-orange-50/40 cursor-pointer">
+                          <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{ncr.ncr_number}</td>
+                          <td className="px-4 py-3 font-mono text-xs">{ncr.part_number || '—'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700">{ncr.supplier || '—'}</td>
+                          <td className="px-4 py-3 text-sm max-w-xs truncate text-gray-700">{ncr.description_of_defect}</td>
+                          <td className="px-4 py-3">
+                            <NcrBadge value={ncr.severity} colorMap={NCR_SEVERITY_COLORS} labelMap={NCR_SEVERITY_LABELS} />
+                          </td>
+                          <td className="px-4 py-3">
+                            <NcrBadge value={ncr.status} colorMap={NCR_STATUS_COLORS} labelMap={NCR_STATUS_LABELS} />
+                          </td>
+                          <td className="px-4 py-3 text-xs text-gray-500">{formatDate(ncr.created_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {/* Mobile card list */}
+                <div className="md:hidden divide-y divide-gray-100">
+                  {tableNcrs.map(ncr => (
+                    <button
+                      key={ncr.id}
+                      type="button"
+                      onClick={() => navigate(`/ncrs/${ncr.id}`)}
+                      className="w-full text-left px-4 py-3 hover:bg-orange-50/40 active:bg-orange-50 transition-colors min-h-[44px]"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-mono text-xs font-bold text-pdi-navy">{ncr.ncr_number}</div>
+                          <div className="font-mono text-xs text-gray-500 mt-0.5 truncate">{ncr.part_number || '—'}</div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                          <NcrBadge value={ncr.severity} colorMap={NCR_SEVERITY_COLORS} labelMap={NCR_SEVERITY_LABELS} />
+                          <NcrBadge value={ncr.status} colorMap={NCR_STATUS_COLORS} labelMap={NCR_STATUS_LABELS} />
+                        </div>
+                      </div>
+                      <div className="mt-1.5 text-xs text-gray-700 line-clamp-2">{ncr.description_of_defect}</div>
+                      <div className="mt-1.5 flex items-center justify-between gap-2 text-xs">
+                        <span className="text-gray-500 truncate">{ncr.supplier || '—'}</span>
+                        <span className="text-gray-400 flex-shrink-0">{formatDate(ncr.created_at)}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
             )}
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
           {/* Line Chart — Inspections by Component over Time */}
-          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <div className="w-1 h-5 bg-pdi-navy rounded-full" />
-                <h2 className="text-base font-semibold text-gray-800">Inspections by Component</h2>
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 sm:p-5">
+            <div className="flex items-center justify-between mb-4 gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-1 h-5 bg-pdi-navy rounded-full flex-shrink-0" />
+                <h2 className="text-sm sm:text-base font-semibold text-gray-800 truncate">Inspections by Component</h2>
               </div>
               <select
                 value={chartPeriodIdx}
                 onChange={e => setChartPeriodIdx(Number(e.target.value))}
-                className="text-xs border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+                className="text-xs border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-pdi-navy flex-shrink-0"
               >
                 {PERIOD_OPTIONS.map((opt, idx) => (
                   <option key={idx} value={idx}>{opt.label}</option>
@@ -291,10 +364,10 @@ export default function Dashboard() {
           </div>
 
           {/* Recent Activity */}
-          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 sm:p-5">
             <div className="flex items-center gap-2 mb-4">
               <div className="w-1 h-5 bg-pdi-amber rounded-full" />
-              <h2 className="text-base font-semibold text-gray-800">Recent Activity</h2>
+              <h2 className="text-sm sm:text-base font-semibold text-gray-800">Recent Activity</h2>
             </div>
             {isLoading ? (
               <div className="text-gray-400 text-sm">Loading…</div>
@@ -307,19 +380,21 @@ export default function Dashboard() {
                   return (
                     <div key={`${item.id}-${item.action_type}-${idx}`}
                       onClick={() => navigate(`/inspections/${item.id}`)}
-                      className="flex items-start gap-3 py-2.5 px-1 hover:bg-pdi-frost rounded-lg cursor-pointer transition-colors"
+                      className="flex items-start gap-2 sm:gap-3 py-2.5 px-1 hover:bg-pdi-frost rounded-lg cursor-pointer transition-colors min-h-[44px]"
                     >
-                      <div className="w-24 flex-shrink-0">
+                      <div className="w-20 sm:w-24 flex-shrink-0">
                         <div className="text-xs font-semibold text-gray-800 truncate leading-tight">{item.actor_name || '—'}</div>
                       </div>
                       <div className="flex-1 min-w-0">
-                        <span className={`inline-block text-xs font-medium px-1.5 py-0.5 rounded mr-1 ${actionDef.color}`}>{actionDef.label}</span>
-                        <span className="text-xs font-semibold text-pdi-navy">{item.part_number || item.form_no || '—'}</span>
-                        <div className="text-xs text-gray-400 mt-0.5">{COMPONENT_TYPE_LABELS[item.component_type] || item.component_type || ''}</div>
+                        <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
+                          <span className={`inline-block text-xs font-medium px-1.5 py-0.5 rounded ${actionDef.color}`}>{actionDef.label}</span>
+                          <span className="text-xs font-semibold text-pdi-navy truncate">{item.part_number || item.form_no || '—'}</span>
+                        </div>
+                        <div className="text-xs text-gray-400 mt-0.5 truncate">{COMPONENT_TYPE_LABELS[item.component_type] || item.component_type || ''}</div>
                       </div>
                       <div className="flex-shrink-0 text-right">
                         <div className="text-xs text-gray-500">{formatDate(item.created_at)}</div>
-                        <div className="text-xs text-gray-400">{item.created_at ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</div>
+                        <div className="text-xs text-gray-400 hidden sm:block">{item.created_at ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</div>
                       </div>
                     </div>
                   )

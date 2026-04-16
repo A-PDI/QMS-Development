@@ -8,7 +8,8 @@ export default function SectionDimensional({ section, data = [], onChange, readO
 
   return (
     <div>
-      <div className="overflow-x-auto">
+      {/* Desktop table */}
+      <div className="hidden md:block overflow-x-auto">
         <table className="w-full text-sm border-collapse">
           <thead>
             <tr className="bg-gray-100">
@@ -30,7 +31,6 @@ export default function SectionDimensional({ section, data = [], onChange, readO
                   <td className="px-3 py-2 text-gray-500">{item.id}</td>
                   <td className="px-3 py-2 font-medium text-gray-700 text-xs">{item.measurement}</td>
                   <td className="px-3 py-2 text-gray-600 text-xs">{item.location}</td>
-                  {/* Spec / Limit — editable */}
                   <td className="px-3 py-2">
                     {readOnly ? (
                       <span className="font-mono text-xs">{row.spec || '—'}</span>
@@ -51,6 +51,7 @@ export default function SectionDimensional({ section, data = [], onChange, readO
                       ) : (
                         <input
                           type="text"
+                          inputMode="decimal"
                           className="w-full text-xs border border-gray-200 rounded px-2 py-1 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy"
                           value={row[field]}
                           onChange={e => update(item.id, field, e.target.value)}
@@ -73,7 +74,67 @@ export default function SectionDimensional({ section, data = [], onChange, readO
           </tbody>
         </table>
       </div>
-      <p className="text-xs text-gray-400 mt-2 px-3">
+
+      {/* Mobile card list */}
+      <div className="md:hidden space-y-3">
+        {section.items.map(item => {
+          const row = data.find(r => r.id === item.id) || { id: item.id, spec: item.spec || '', actual1: '', actual2: '', actual3: '', status: '' }
+          return (
+            <div key={item.id} className={`border rounded-lg p-3 ${row.status === 'F' ? 'bg-red-50 border-red-200' : 'bg-white border-gray-200'}`}>
+              <div className="flex items-baseline gap-1.5 mb-1">
+                <span className="text-xs text-gray-400 font-mono">#{item.id}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-sm text-gray-800">{item.measurement}</div>
+                  <div className="text-xs text-gray-500 leading-relaxed">{item.location}</div>
+                </div>
+              </div>
+              <div className="mt-2">
+                <label className="block text-xs text-gray-500 mb-1">Spec / Limit</label>
+                {readOnly ? (
+                  <span className="font-mono text-sm">{row.spec || '—'}</span>
+                ) : (
+                  <input
+                    type="text"
+                    className="w-full text-sm border border-gray-200 rounded px-2 py-2 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
+                    value={row.spec || ''}
+                    onChange={e => update(item.id, 'spec', e.target.value)}
+                    placeholder="e.g. 85.00±0.02"
+                  />
+                )}
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                {['actual1', 'actual2', 'actual3'].map((field, i) => (
+                  <div key={field}>
+                    <label className="block text-xs text-gray-500 mb-1">Actual {i + 1}</label>
+                    {readOnly ? (
+                      <span className="font-mono text-sm">{row[field] || '—'}</span>
+                    ) : (
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        className="w-full text-sm border border-gray-200 rounded px-2 py-2 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
+                        value={row[field]}
+                        onChange={e => update(item.id, field, e.target.value)}
+                        placeholder="0.000"
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <span className="text-xs text-gray-500">Status:</span>
+                <PFNToggle
+                  value={row.status}
+                  onChange={v => update(item.id, 'status', v)}
+                  readOnly={readOnly}
+                  options={['P', 'F']}
+                />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      <p className="text-xs text-gray-400 mt-2 px-1 sm:px-3">
         All measurements at 20°C (68°F) · Dimensions in mm unless noted
       </p>
     </div>

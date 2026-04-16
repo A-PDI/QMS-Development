@@ -51,15 +51,16 @@ export default function ItemAttachment({
             title={isFail ? 'Add image (required for failed items)' : 'Add image'}
             onClick={() => inputRef.current?.click()}
             disabled={isUploading}
-            className={`inline-flex items-center justify-center w-6 h-6 rounded transition-colors
+            aria-label={isFail ? 'Add image (required)' : 'Add image'}
+            className={`inline-flex items-center justify-center w-8 h-8 sm:w-7 sm:h-7 rounded transition-colors
               ${requiresImage
                 ? 'text-red-500 bg-red-50 hover:bg-red-100 ring-1 ring-red-400 animate-pulse'
-                : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100 bg-gray-50 sm:bg-transparent'
               }`}
           >
             {isUploading
-              ? <Loader2 size={12} className="animate-spin" />
-              : <Camera size={12} />
+              ? <Loader2 size={14} className="animate-spin" />
+              : <Camera size={14} />
             }
           </button>
           <input
@@ -96,9 +97,10 @@ export default function ItemAttachment({
               type="button"
               onClick={() => onDelete(att.id)}
               title="Remove image"
-              className="absolute -top-1.5 -right-1.5 hidden group-hover:flex bg-red-500 hover:bg-red-600 text-white rounded-full w-4 h-4 items-center justify-center transition-colors"
+              aria-label="Remove image"
+              className="absolute -top-1.5 -right-1.5 flex md:hidden group-hover:md:flex bg-red-500 hover:bg-red-600 text-white rounded-full w-5 h-5 items-center justify-center transition-colors"
             >
-              <X size={9} />
+              <X size={11} />
             </button>
           )}
         </div>

@@ -70,7 +70,7 @@ function EntraLogin() {
     <LoginShell error={error}>
       <button
         onClick={() => { setError(null); instance.loginRedirect(loginRequest) }}
-        className="w-full flex items-center justify-center gap-3 py-2.5 px-4 rounded-lg text-white text-sm font-semibold transition-opacity hover:opacity-90"
+        className="w-full flex items-center justify-center gap-3 py-3 px-4 rounded-lg text-white text-sm font-semibold transition-opacity hover:opacity-90 min-h-[44px]"
         style={{ backgroundColor: '#0078D4' }}
       >
         {/* Microsoft four-square logo */}
@@ -118,7 +118,9 @@ function LocalLogin() {
           <input
             type="email"
             required
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pdi-navy"
+            autoComplete="email"
+            inputMode="email"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-pdi-navy min-h-[44px]"
             value={form.email}
             onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
             placeholder="you@pdi.com"
@@ -129,7 +131,8 @@ function LocalLogin() {
           <input
             type="password"
             required
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pdi-navy"
+            autoComplete="current-password"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-pdi-navy min-h-[44px]"
             value={form.password}
             onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
             placeholder="••••••••"
@@ -138,7 +141,7 @@ function LocalLogin() {
         <button
           type="submit"
           disabled={loading}
-          className="w-full bg-pdi-navy text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-pdi-navy/90 disabled:opacity-50 transition-colors mt-2"
+          className="w-full bg-pdi-navy text-white py-3 rounded-lg text-sm font-semibold hover:bg-pdi-navy/90 disabled:opacity-50 transition-colors mt-2 min-h-[44px]"
         >
           {loading ? 'Signing in…' : 'Sign In'}
         </button>
@@ -151,7 +154,7 @@ function LocalLogin() {
 function LoginShell({ children, error }) {
   return (
     <div className="min-h-screen bg-pdi-navy flex items-center justify-center p-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-8">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6 sm:p-8">
         <div className="text-center mb-8">
           <div className="text-3xl font-bold text-pdi-navy">PDI</div>
           <div className="text-gray-500 text-sm mt-1">Inspection Management System</div>
