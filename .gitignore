@@ -1,0 +1,37 @@
+# ── Environment files (NEVER commit these) ───────────────────────────────────
+.env
+.env.local
+.env.production
+.env.development.local
+.env.test.local
+server/.env
+client/.env
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
+node_modules/
+server/node_modules/
+client/node_modules/
+
+# ── Build output ──────────────────────────────────────────────────────────────
+client/dist/
+client/dist-ssr/
+
+# ── Database files (production data — not for version control) ───────────────
+server/data/*.db
+server/data/*.db-shm
+server/data/*.db-wal
+
+# ── Uploaded files ────────────────────────────────────────────────────────────
+server/uploads/
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+
+# ── OS / Editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+*.suo
+*.user

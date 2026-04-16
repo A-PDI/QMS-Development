@@ -1,0 +1,208 @@
+PDI INSPECTION APP - API ENDPOINTS & SCHEMA
+============================================
+
+DATABASE SCHEMA
+===============
+
+users
+  id TEXT PRIMARY KEY
+  name TEXT NOT NULL
+  email TEXT UNIQUE NOT NULL
+  role TEXT NOT NULL DEFAULT 'inspector' (admin | qc_manager | inspector)
+  password_hash TEXT
+  active INTEGER NOT NULL DEFAULT 1
+  created_at TEXT
+
+inspection_templates
+  id TEXT PRIMARY KEY
+  component_type TEXT NOT NULL
+  form_no TEXT NOT NULL
+  revision TEXT NOT NULL DEFAULT ''
+  title TEXT NOT NULL
+  form_type TEXT NOT NULL (iqi_standard | checklist | cylinder_head_dimensional)
+  disposition_type TEXT NOT NULL (accept_reject_conditional | pass_fail)
+  header_schema TEXT NOT NULL (JSON array)
+  sections TEXT NOT NULL (JSON object)
+  active INTEGER NOT NULL DEFAULT 1
+  created_at TEXT
+
+inspections
+  id TEXT PRIMARY KEY
+  template_id TEXT NOT NULL REFERENCES inspection_templates(id)
+  component_type TEXT NOT NULL
+  form_no TEXT NOT NULL
+  part_number TEXT
+  supplier TEXT
+  po_number TEXT
+  description TEXT
+  date_received TEXT
+  inspector_name TEXT
+  lot_size TEXT
+  aql_level TEXT
+  sample_size TEXT
+  lot_serial_no TEXT
+  signature TEXT
+  disposition TEXT (ACCEPT | REJECT | CONDITIONAL | PASS | FAIL)
+  disposition_notes TEXT
+  section_data TEXT NOT NULL DEFAULT '{}' (JSON)
+  status TEXT NOT NULL DEFAULT 'draft' (draft | submitted | approved | rejected)
+  created_by TEXT REFERENCES users(id)
+  submitted_by TEXT REFERENCES users(id)
+  submitted_at TEXT
+  reviewed_by TEXT REFERENCES users(id)
+  reviewed_at TEXT
+  review_notes TEXT
+  created_at TEXT
+  updated_at TEXT
+
+inspection_attachments
+  id TEXT PRIMARY KEY
+  inspection_id TEXT NOT NULL REFERENCES inspections(id) ON DELETE CASCADE
+  uploaded_by TEXT REFERENCES users(id)
+  file_name TEXT NOT NULL
+  file_path TEXT NOT NULL
+  mime_type TEXT
+  file_size_bytes INTEGER
+  uploaded_at TEXT
+
+inspection_notes
+  id TEXT PRIMARY KEY
+  inspection_id TEXT NOT NULL REFERENCES inspections(id) ON DELETE CASCADE
+  user_id TEXT REFERENCES users(id)
+  note_type TEXT NOT NULL DEFAULT 'internal' (internal | system | review)
+  body TEXT NOT NULL
+  created_at TEXT
+
+
+API ROUTES
+==========
+
+PUBLIC (No Auth Required)
+--------------------------
+POST /api/auth/login
+  Request:  { email: string, password: string }
+  Response: { token: string, user: { id, name, email, role } }
+
+AUTHENTICATED (JWT Bearer Token Required)
+------------------------------------------
+
+USER & AUTH
+-----------
+GET /api/auth/me
+  Response: { user: { id, name, email, role } }
+
+GET /api/users
+  Response: { users: [{ id, name, email, role }] }
+
+TEMPLATES
+---------
+GET /api/templates
+  Response: { templates: [{ id, component_type, form_no, title, form_type, disposition_type }] }
+
+GET /api/templates/:id
+  Response: { template: { id, component_type, form_no, title, form_type, disposition_type, header_schema, sections } }
+
+INSPECTIONS (CRUD & WORKFLOW)
+-----------------------------
+GET /api/inspections?status=draft&component_type=piston&inspector_name=John&date_from=2026-01-01&date_to=2026-12-31&search=P123&page=1&limit=20
+  Response: { inspections: [...], total: number, page: 1, limit: 20 }
+
+POST /api/inspections
+  Request:  { template_id, part_number, supplier, po_number, description, date_received, inspector_name, lot_size, aql_level, sample_size, lot_serial_no, signature }
+  Response: { inspection: { id, template_id, ..., status: 'draft', section_data: {} } }
+
+GET /api/inspections/:id
+  Response: { inspection: { id, template_id, ..., section_data: {...} } }
+
+PATCH /api/inspections/:id
+  Request:  { part_number?, supplier?, ..., section_data?: {...}, disposition?: string, disposition_notes?: string }
+  Response: { inspection: updated_record }
+
+POST /api/inspections/:id/submit
+  Response: { inspection: { ..., status: 'submitted', submitted_by, submitted_at } }
+
+POST /api/inspections/:id/approve
+  Request:  { review_notes?: string }
+  Response: { inspection: { ..., status: 'approved', reviewed_by, reviewed_at, review_notes } }
+
+POST /api/inspections/:id/reject
+  Request:  { review_notes?: string }
+  Response: { inspection: { ..., status: 'rejected', reviewed_by, reviewed_at, review_notes } }
+
+GET /api/inspections/:id/pdf
+  Response: Binary PDF file (Content-Type: application/pdf)
+
+ATTACHMENTS
+-----------
+GET /api/attachments/:inspectionId
+  Response: { attachments: [{ id, file_name, file_size_bytes, uploaded_at }] }
+
+POST /api/attachments/:inspectionId
+  Request:  multipart/form-data with 'file' field
+  Response: { attachment: { id, inspection_id, uploaded_by, file_name, file_path, mime_type, file_size_bytes, uploaded_at } }
+
+GET /api/attachments/download/:id
+  Response: Binary file (streamed)
+
+DELETE /api/attachments/:id
+  Response: { message: 'Attachment deleted' }
+
+DASHBOARD
+---------
+GET /api/dashboard/stats
+  Response: {
+    total_inspections: number,
+    pending_review: number,
+    approved_this_month: number,
+    rejected_this_month: number,
+    by_component_type: [{ component_type, count }],
+    by_status: [{ status, count }],
+    recent_inspections: [{ id, form_no, part_number, inspector_name, status, submitted_at }]
+  }
+
+HEALTH CHECK
+------------
+GET /health
+  Response: { status: 'ok', timestamp: '2026-04-14T...' }
+
+
+ERROR RESPONSES
+===============
+All errors return JSON with structure: { error: string, code: string }
+
+Common codes:
+  UNAUTHORIZED - Missing/invalid auth token
+  INVALID_CREDENTIALS - Wrong email/password
+  VALIDATION_ERROR - Missing required fields
+  NOT_FOUND - Resource not found
+  FILE_TOO_LARGE - Upload exceeds 25MB limit
+  TOO_MANY_FILES - More than 20 files in one upload
+  INTERNAL_ERROR - Server error
+
+
+INSPECTION TEMPLATES (PRE-SEEDED)
+==================================
+
+PDI-IQI-001: Piston
+  Sections: A (Receiving Checklist), B (Visual Inspection), C (Dimensional)
+  Disposition: Accept/Reject/Conditional
+
+PDI-IQI-002: Cylinder Liner
+  Sections: A (Receiving Checklist), B (Visual Inspection), C (Dimensional)
+  Disposition: Accept/Reject/Conditional
+
+PDI-IQI-003: Piston Pin
+  Sections: A (Receiving Checklist), B (Visual Inspection), C (Dimensional)
+  Disposition: Accept/Reject/Conditional
+
+PDI-IQI-004: Piston Ring
+  Sections: A (Receiving Checklist), B (Visual Inspection), C (Dimensional)
+  Disposition: Accept/Reject/Conditional
+
+PDI-IQI-005: Cylinder Head (Visual)
+  Sections: A-E (Visual, Ports, Injector, Valvetrain, Packaging)
+  Disposition: Pass/Fail
+
+PDI-IQI-006: Cylinder Head (Dimensional)
+  Sections: General Measurements, Camshaft Bore, Fire Ring, Valve Recession, Vacuum Test
+  Disposition: Pass/Fail
