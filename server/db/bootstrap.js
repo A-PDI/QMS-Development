@@ -1,17 +1,22 @@
 'use strict';
 /**
- * Bootstrap the target SQLite database from a committed seed snapshot on
- * first boot. This is what lets a fresh Render deploy come up populated
- * with the inspection records you created locally rather than an empty
- * schema.
+ * Bootstrap the target SQLite database from a committed seed snapshot when
+ * the persistent disk is empty. This is what lets a fresh Render deploy
+ * come up populated with the inspection records you created locally
+ * rather than an empty schema.
  *
  * Rules:
- *   1. Only runs if the target SQLITE_PATH file does NOT yet exist.
- *      Once real production data exists on the Render persistent disk,
+ *   1. Runs if the target DB file is missing OR exists but has zero
+ *      inspections. The zero-inspections check matters because the first
+ *      Render deploy (before the seed was committed) already created an
+ *      empty inspection.db on the persistent disk with the schema in
+ *      place — checking "does the file exist" alone would incorrectly
+ *      skip the seed forever on that disk.
+ *   2. Once real inspection records exist on the Render persistent disk,
  *      subsequent deploys are no-ops — we never overwrite live data.
- *   2. Copies server/db/seed/uploads/* into UPLOAD_DIR so attachments
- *      resolve on disk.
- *   3. Rewrites inspection_attachments.file_path rows to absolute paths
+ *   3. Copies server/db/seed/uploads/* into UPLOAD_DIR so attachments
+ *      resolve on disk. Existing files in UPLOAD_DIR are preserved.
+ *   4. Rewrites inspection_attachments.file_path rows to absolute paths
  *      rooted at the current UPLOAD_DIR. The seed stores paths as they
  *      were on the local dev machine (Windows-style backslashes, relative
  *      to the old server root) and that won't resolve on Linux.
@@ -26,14 +31,30 @@ function bootstrapFromSeed(dbPath) {
   const seedDb = path.join(seedDir, 'inspection.db');
   const seedUploads = path.join(seedDir, 'uploads');
 
-  if (fs.existsSync(dbPath)) {
-    return { ran: false, reason: 'target database already exists' };
-  }
   if (!fs.existsSync(seedDb)) {
     return { ran: false, reason: 'no seed bundle committed' };
   }
 
-  console.log(`[bootstrap] Target DB missing — seeding from ${seedDb}`);
+  // Decide whether the target is "empty enough" to bootstrap over.
+  const targetState = inspectTargetDb(dbPath);
+  if (targetState.hasInspections) {
+    console.log('[bootstrap] Target DB already has ' + targetState.count + ' inspection(s) — skipping seed');
+    return { ran: false, reason: 'target already has inspections' };
+  }
+
+  if (targetState.exists) {
+    console.log('[bootstrap] Target DB exists but is empty — replacing with seed');
+    // Remove the empty target (and any stale sidecars) so the seed copy
+    // isn't fighting a stale WAL/SHM from the empty DB.
+    for (const suffix of ['', '-wal', '-shm', '-journal']) {
+      const p = dbPath + suffix;
+      try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch (err) {
+        console.warn('[bootstrap] Could not remove ' + p + ': ' + err.message);
+      }
+    }
+  } else {
+    console.log('[bootstrap] Target DB missing — seeding from ' + seedDb);
+  }
 
   // Make sure the target directory exists (Render persistent disk root).
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -54,10 +75,10 @@ function bootstrapFromSeed(dbPath) {
   if (fs.existsSync(seedUploads)) {
     fs.mkdirSync(uploadRoot, { recursive: true });
     copyDirectoryPreserveExisting(seedUploads, uploadRoot);
-    console.log(`[bootstrap] Uploads copied into ${uploadRoot}`);
+    console.log('[bootstrap] Uploads copied into ' + uploadRoot);
   }
 
-  // Rewrite file_path values in the attachment table.
+  // Rewrite file_path values in the attachment table to the live layout.
   let seededDb;
   try {
     seededDb = new DatabaseSync(dbPath);
@@ -75,7 +96,7 @@ function bootstrapFromSeed(dbPath) {
       update.run(newPath, row.id);
       rewritten++;
     }
-    console.log(`[bootstrap] Rewrote file_path for ${rewritten} attachment(s)`);
+    console.log('[bootstrap] Rewrote file_path for ' + rewritten + ' attachment(s)');
   } finally {
     if (seededDb) {
       try { seededDb.close(); } catch (_) {}
@@ -83,6 +104,39 @@ function bootstrapFromSeed(dbPath) {
   }
 
   return { ran: true };
+}
+
+/**
+ * Open the target DB (read-only) and report whether it contains any
+ * inspection records. Missing file / unreadable file are both treated as
+ * "empty" so the bootstrap proceeds.
+ */
+function inspectTargetDb(dbPath) {
+  if (!fs.existsSync(dbPath)) {
+    return { exists: false, hasInspections: false, count: 0 };
+  }
+  let probe;
+  try {
+    probe = new DatabaseSync(dbPath, { readOnly: true });
+    // Make sure the inspections table exists before querying it — a
+    // freshly-created empty file may not have gone through schema init.
+    const tbl = probe
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='inspections'")
+      .get();
+    if (!tbl) {
+      return { exists: true, hasInspections: false, count: 0 };
+    }
+    const row = probe.prepare('SELECT COUNT(*) AS c FROM inspections').get();
+    const count = row && row.c ? row.c : 0;
+    return { exists: true, hasInspections: count > 0, count: count };
+  } catch (err) {
+    console.warn('[bootstrap] Could not inspect target DB (' + err.message + ') — treating as empty');
+    return { exists: true, hasInspections: false, count: 0 };
+  } finally {
+    if (probe) {
+      try { probe.close(); } catch (_) {}
+    }
+  }
 }
 
 /**
@@ -95,7 +149,7 @@ function lastPathSegment(value) {
 }
 
 /**
- * Copy src → dst recursively. Existing files at dst are preserved
+ * Copy src to dst recursively. Existing files at dst are preserved
  * (we don't overwrite — the persistent disk wins).
  */
 function copyDirectoryPreserveExisting(src, dst) {
@@ -110,7 +164,7 @@ function copyDirectoryPreserveExisting(src, dst) {
       try {
         fs.copyFileSync(s, d);
       } catch (err) {
-        console.warn(`[bootstrap] Could not copy ${s}: ${err.message}`);
+        console.warn('[bootstrap] Could not copy ' + s + ': ' + err.message);
       }
     }
   }
