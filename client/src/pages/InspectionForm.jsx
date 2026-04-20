@@ -194,6 +194,12 @@ export default function InspectionForm() {
       return
     }
 
+    // Enforce disposition requirements for FAIL and ACCEPTED
+    if ((disposition === 'FAIL' || disposition === 'ACCEPTED') && (!dispositionNotes.trim() || generalAttachments.length === 0)) {
+      showToast('This result requires an explanation and at least one attachment', 'error')
+      return
+    }
+
     const sections = typeof template.sections === 'string' ? JSON.parse(template.sections) : template.sections
     const failErrors = []
     for (const [key, section] of Object.entries(sections)) {
@@ -250,9 +256,7 @@ export default function InspectionForm() {
     ? JSON.parse(template.sections)
     : template.sections
 
-  const dispositionOptions = template.disposition_type === 'accept_reject_conditional'
-    ? ['ACCEPT', 'REJECT', 'CONDITIONAL']
-    : ['PASS', 'FAIL']
+  const dispositionOptions = ['PASS', 'FAIL', 'ACCEPTED']
 
   const headerFields = typeof template.header_schema === 'string'
     ? JSON.parse(template.header_schema)
@@ -261,6 +265,8 @@ export default function InspectionForm() {
   // Count item-level attachments (non-general)
   const itemAttachmentCount = attachments.filter(a => a.section_key).length
   const generalAttachments = attachments.filter(a => !a.section_key)
+
+  const requiresDispositionAttention = disposition === 'FAIL' || disposition === 'ACCEPTED'
 
   return (
     <div className="flex flex-col h-full">
@@ -415,6 +421,14 @@ export default function InspectionForm() {
                   </button>
                 ))}
               </div>
+
+              {requiresDispositionAttention && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2">
+                  <AlertTriangle size={16} className="text-red-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-700">This result requires an explanation and at least one attachment.</p>
+                </div>
+              )}
+
               <textarea
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-pdi-navy"
                 rows={3}
@@ -422,6 +436,13 @@ export default function InspectionForm() {
                 value={dispositionNotes}
                 onChange={e => setDispositionNotes(e.target.value)}
               />
+
+              {disposition === 'ACCEPTED' && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2">
+                  <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-amber-700">Selecting Accepted will trigger a Quality Alert for review by management.</p>
+                </div>
+              )}
             </div>
           </CollapsibleSection>
 
@@ -436,20 +457,21 @@ export default function InspectionForm() {
                       <div className="flex items-center gap-2 min-w-0 flex-1">
                         <Paperclip size={14} className="text-gray-400 flex-shrink-0" />
                         <a
-                          href={`/api/attachments/download/${att.id}`}
+                          href={`${import.meta.env.VITE_API_URL || ''}/api/attachments/${att.id}/download`}
                           target="_blank"
                           rel="noreferrer"
                           className="text-sm text-pdi-navy hover:underline truncate"
                         >
                           {att.file_name}
                         </a>
-                        <span className="text-xs text-gray-400 flex-shrink-0 hidden sm:inline">{formatFileSize(att.file_size_bytes)}</span>
                       </div>
                       <button
+                        type="button"
                         onClick={() => handleDeleteFile(att.id)}
-                        className="text-xs text-red-400 hover:text-red-600 flex-shrink-0 px-2 py-1 min-h-[32px]"
+                        className="flex-shrink-0 p-1.5 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors min-h-[32px] min-w-[32px] flex items-center justify-center"
+                        aria-label="Delete attachment"
                       >
-                        Remove
+                        <X size={14} />
                       </button>
                     </div>
                   ))}

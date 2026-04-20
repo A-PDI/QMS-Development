@@ -11,10 +11,6 @@ if (!fs.existsSync(dir)) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-// First-boot seed: if the target .db file doesn't exist yet and a committed
-// seed bundle is present in server/db/seed/, copy it into place before any
-// connection is opened. On subsequent boots (persistent disk already has a
-// database) this is a no-op.
 try {
   bootstrapFromSeed(dbPath);
 } catch (err) {
@@ -128,6 +124,15 @@ function migrateSchema() {
     'ALTER TABLE inspection_attachments ADD COLUMN section_key TEXT',
     'ALTER TABLE inspection_attachments ADD COLUMN item_id TEXT',
     'ALTER TABLE inspections ADD COLUMN completed_at TEXT',
+    // Assignment & timing
+    'ALTER TABLE inspections ADD COLUMN assigned_to TEXT',
+    'ALTER TABLE inspections ADD COLUMN assigned_at TEXT',
+    'ALTER TABLE inspections ADD COLUMN assigned_by TEXT',
+    'ALTER TABLE inspections ADD COLUMN due_date TEXT',
+    'ALTER TABLE inspections ADD COLUMN started_at TEXT',
+    // Template versioning
+    'ALTER TABLE inspection_templates ADD COLUMN version INTEGER DEFAULT 1',
+    'ALTER TABLE inspection_templates ADD COLUMN parent_template_id TEXT',
   ];
   for (const sql of columnMigrations) {
     try { rawDb.exec(sql); } catch (_) {}
@@ -176,6 +181,45 @@ function migrateSchema() {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`,
     `CREATE INDEX IF NOT EXISTS idx_ncrs_status ON ncrs(status)`,
+    // Engineering drawings (per part number, versioned)
+    `CREATE TABLE IF NOT EXISTS engineering_drawings (
+      id TEXT PRIMARY KEY,
+      part_number TEXT NOT NULL,
+      version TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      mime_type TEXT,
+      file_size_bytes INTEGER,
+      notes TEXT,
+      uploaded_by TEXT REFERENCES users(id),
+      is_current INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_drawings_part ON engineering_drawings(part_number)`,
+    // Quality alerts — triggered by ACCEPTED disposition
+    `CREATE TABLE IF NOT EXISTS quality_alerts (
+      id TEXT PRIMARY KEY,
+      inspection_id TEXT REFERENCES inspections(id) ON DELETE SET NULL,
+      part_number TEXT,
+      supplier TEXT,
+      alert_type TEXT NOT NULL DEFAULT 'accepted_disposition',
+      triggered_by TEXT REFERENCES users(id),
+      acknowledged_by TEXT REFERENCES users(id),
+      acknowledged_at TEXT,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_quality_alerts_part ON quality_alerts(part_number)`,
+    `CREATE INDEX IF NOT EXISTS idx_quality_alerts_ack ON quality_alerts(acknowledged_at)`,
+    // Saved report configurations
+    `CREATE TABLE IF NOT EXISTS saved_reports (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_by TEXT REFERENCES users(id),
+      config_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
   ];
   for (const sql of tableMigrations) {
     try { rawDb.exec(sql); } catch (_) {}

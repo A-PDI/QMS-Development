@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Printer, Search, Save, X, ChevronDown, ChevronUp } from 'lucide-react'
+import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Printer, Search, Save, X, ChevronDown, ChevronUp, Users, FileImage, Download, AlertTriangle, Loader2 } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '../lib/api'
 import { useInspections, useDeleteInspection } from '../hooks/useInspections'
 import { usePartSpecs, useCreatePartSpec, useUpdatePartSpec, useDeletePartSpec } from '../hooks/usePartSpecs'
+import { useDrawings, useUploadDrawing, useSetCurrentDrawing, useDeleteDrawing } from '../hooks/useDrawings'
 import { useToast } from '../hooks/useToast'
 import { useTemplates } from '../hooks/useTemplates'
 import { formatDate } from '../lib/utils'
@@ -12,9 +13,11 @@ import { COMPONENT_TYPE_LABELS, STATUS_LABELS, STATUS_COLORS } from '../lib/cons
 import StatusBadge from '../components/StatusBadge'
 
 const TABS = [
-  { id: 'forms',   label: 'Inspection Forms', shortLabel: 'Forms', icon: FileText },
-  { id: 'specs',   label: 'Part Specifications', shortLabel: 'Specs', icon: Package },
-  { id: 'data',    label: 'Inspection Data', shortLabel: 'Data', icon: Database },
+  { id: 'forms',    label: 'Inspection Forms', shortLabel: 'Forms',    icon: FileText },
+  { id: 'specs',    label: 'Part Specifications', shortLabel: 'Specs',  icon: Package },
+  { id: 'users',    label: 'User Management',    shortLabel: 'Users',   icon: Users },
+  { id: 'drawings', label: 'Engineering Drawings', shortLabel: 'Drawings', icon: FileImage },
+  { id: 'data',     label: 'Inspection Data',    shortLabel: 'Data',    icon: Database },
 ]
 
 const SECTION_TYPES = [
@@ -591,258 +594,434 @@ function PartSpecsTab({ showToast }) {
   )
 }
 
-// ── Inspection Data Tab ───────────────────────────────────────────────────────
+// ── Users Tab ────────────────────────────────────────────────────────────────
 
-function InspectionDataTab({ showToast }) {
-  const navigate = useNavigate()
-  const [filters, setFilters] = useState({ page: 1, limit: 50 })
-  const [search, setSearch] = useState('')
-  const [filtersOpen, setFiltersOpen] = useState(false)
-  const deleteInspection = useDeleteInspection()
+function UsersTab({ showToast }) {
+  const qc = useQueryClient()
+  const [editingId, setEditingId] = useState(null)
+  const [editForm, setEditForm] = useState(null)
+  const [creating, setCreating] = useState(false)
 
-  const { data, isLoading } = useInspections(filters)
-  const inspections = data?.inspections || []
-  const total = data?.total || 0
-  const totalPages = Math.ceil(total / 50)
+  const { data: users = [], isLoading } = useQuery({
+    queryKey: ['admin-users'],
+    queryFn: async () => {
+      const { data } = await api.get('/admin/users?include_inactive=true')
+      return data.users || []
+    },
+  })
 
-  function setFilter(key, val) {
-    setFilters(f => ({ ...f, [key]: val || undefined, page: 1 }))
+  function startEdit(user) {
+    setEditingId(user.id)
+    setEditForm({
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      active: user.active,
+    })
   }
 
-  function applySearch(e) {
-    e.preventDefault()
-    setFilters(f => ({ ...f, search, page: 1 }))
+  function startCreate() {
+    setCreating(true)
+    setEditForm({
+      name: '',
+      email: '',
+      role: 'inspector',
+      password: '',
+      active: 1,
+    })
   }
 
-  async function handleDelete(insp) {
-    if (!window.confirm(`Delete inspection ${insp.form_no} for ${insp.part_number || 'unknown part'}? This cannot be undone.`)) return
+  async function handleSave() {
+    if (!editForm.name?.trim() || !editForm.email?.trim()) {
+      showToast('Name and email are required', 'error')
+      return
+    }
     try {
-      await deleteInspection.mutateAsync(insp.id)
-      showToast('Inspection deleted', 'success')
+      if (creating) {
+        if (!editForm.password?.trim()) {
+          showToast('Password is required for new users', 'error')
+          return
+        }
+        await api.post('/admin/users', editForm)
+        showToast('User created', 'success')
+      } else {
+        await api.patch(`/admin/users/${editingId}`, editForm)
+        showToast('User updated', 'success')
+      }
+      qc.invalidateQueries({ queryKey: ['admin-users'] })
+      setEditingId(null)
+      setCreating(false)
+      setEditForm(null)
     } catch (err) {
-      showToast(err?.response?.data?.error || 'Delete failed', 'error')
+      showToast(err?.response?.data?.error || 'Save failed', 'error')
     }
   }
 
-  async function handlePrint(insp) {
+  async function handleToggleActive(user) {
     try {
-      const response = await api.get(`/inspections/${insp.id}/pdf`, { responseType: 'blob' })
-      const url = URL.createObjectURL(response.data)
-      const a = document.createElement('a')
-      a.href = url
-      const po = insp.po_number ? insp.po_number.replace(/[^a-zA-Z0-9-]/g, '') : 'NO-PO'
-      const part = insp.part_number ? insp.part_number.replace(/[^a-zA-Z0-9-]/g, '') : 'NO-PART'
-      a.download = `QC-${po}-${part}.pdf`
-      document.body.appendChild(a); a.click(); document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-    } catch { showToast('Failed to generate PDF', 'error') }
+      await api.patch(`/admin/users/${user.id}`, { active: user.active ? 0 : 1 })
+      qc.invalidateQueries({ queryKey: ['admin-users'] })
+      showToast(user.active ? 'User deactivated' : 'User activated', 'success')
+    } catch (err) {
+      showToast('Toggle failed', 'error')
+    }
   }
-
-  const activeFilterCount = ['status', 'component_type', 'date_from', 'date_to'].filter(k => filters[k]).length
 
   return (
     <div className="space-y-3 sm:space-y-4">
-      <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-4">
-        {/* Search + filter toggle on mobile; inline on desktop */}
-        <div className="flex flex-wrap gap-2 sm:gap-3 items-center">
-          <form onSubmit={applySearch} className="flex gap-2 flex-1 sm:flex-none min-w-0">
-            <div className="relative flex-1 sm:flex-none">
-              <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input type="text" placeholder="Part #, PO, inspector, lot…"
-                className="w-full sm:w-56 pl-8 pr-3 py-2 sm:py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px] sm:min-h-0"
-                value={search} onChange={e => setSearch(e.target.value)} />
-            </div>
-            <button type="submit" className="px-3 py-2 sm:py-1.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[40px] sm:min-h-0">Search</button>
-          </form>
-          {/* Filter toggle for mobile */}
-          <button
-            type="button"
-            onClick={() => setFiltersOpen(o => !o)}
-            className="sm:hidden flex items-center gap-1 px-3 py-2 text-sm border border-gray-200 rounded-lg relative min-h-[40px]"
-          >
-            Filters
-            {activeFilterCount > 0 && (
-              <span className="ml-1 bg-pdi-amber text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center">
-                {activeFilterCount}
-              </span>
-            )}
-            {filtersOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          </button>
-          <span className="text-xs text-gray-500 sm:ml-auto sm:self-center">{total} records</span>
-        </div>
-        {/* Filters — collapsible on mobile, always-visible on desktop */}
-        <div className={`${filtersOpen ? 'flex' : 'hidden'} sm:flex flex-wrap gap-2 sm:gap-3 items-end mt-2 sm:mt-3`}>
-          <select className="w-full sm:w-auto px-3 py-2 sm:py-1.5 text-sm border border-gray-200 rounded-lg min-h-[40px] sm:min-h-0" value={filters.status || ''} onChange={e => setFilter('status', e.target.value)}>
-            <option value="">All Statuses</option>
-            <option value="draft">Open</option>
-            <option value="complete">Complete</option>
-          </select>
-          <select className="w-full sm:w-auto px-3 py-2 sm:py-1.5 text-sm border border-gray-200 rounded-lg min-h-[40px] sm:min-h-0" value={filters.component_type || ''} onChange={e => setFilter('component_type', e.target.value)}>
-            <option value="">All Components</option>
-            {Object.entries(COMPONENT_TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </select>
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <input type="date" className="flex-1 sm:flex-none px-3 py-2 sm:py-1.5 text-sm border border-gray-200 rounded-lg min-h-[40px] sm:min-h-0" value={filters.date_from || ''} onChange={e => setFilter('date_from', e.target.value)} />
-            <span className="text-gray-400 text-sm">to</span>
-            <input type="date" className="flex-1 sm:flex-none px-3 py-2 sm:py-1.5 text-sm border border-gray-200 rounded-lg min-h-[40px] sm:min-h-0" value={filters.date_to || ''} onChange={e => setFilter('date_to', e.target.value)} />
-          </div>
-        </div>
+      <div className="flex justify-end">
+        <button onClick={startCreate} className="flex items-center gap-1.5 px-3 sm:px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[40px]">
+          <Plus size={15} /> New User
+        </button>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        {/* Desktop table */}
-        <div className="hidden md:block overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                {['Form No', 'Component', 'Part Number', 'PO Number', 'Inspector', 'Lot/Serial', 'Status', 'Created', 'Completed', 'Actions'].map(h => (
-                  <th key={h} className="px-3 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {isLoading ? (
-                <tr><td colSpan={10} className="text-center text-gray-400 py-12">Loading…</td></tr>
-              ) : inspections.length === 0 ? (
-                <tr><td colSpan={10} className="text-center text-gray-400 py-12">No inspections found</td></tr>
-              ) : inspections.map(insp => (
-                <tr key={insp.id} className="hover:bg-gray-50">
-                  <td className="px-3 py-2.5 font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</td>
-                  <td className="px-3 py-2.5 text-xs">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</td>
-                  <td className="px-3 py-2.5 font-mono text-xs">{insp.part_number || '—'}</td>
-                  <td className="px-3 py-2.5 font-mono text-xs">{insp.po_number || '—'}</td>
-                  <td className="px-3 py-2.5 text-xs">{insp.inspector_name || '—'}</td>
-                  <td className="px-3 py-2.5 text-xs">{insp.lot_serial_no || '—'}</td>
-                  <td className="px-3 py-2.5"><StatusBadge status={insp.status} /></td>
-                  <td className="px-3 py-2.5 text-xs text-gray-500">{formatDate(insp.created_at)}</td>
-                  <td className="px-3 py-2.5 text-xs text-gray-500">{insp.completed_at ? formatDate(insp.completed_at) : '—'}</td>
-                  <td className="px-3 py-2.5">
-                    <div className="flex items-center gap-2">
-                      {insp.status === 'draft' && (
-                        <button
-                          onClick={() => navigate(`/inspections/${insp.id}/edit?returnTo=/admin`)}
-                          title="Edit"
-                          className="text-pdi-navy hover:bg-pdi-frost p-1 rounded"
-                        >
-                          <Edit2 size={14} />
-                        </button>
-                      )}
-                      <button onClick={() => handlePrint(insp)} title="Print PDF"
-                        className="text-purple-500 hover:bg-purple-50 p-1 rounded">
-                        <Printer size={14} />
-                      </button>
-                      <button onClick={() => handleDelete(insp)} title="Delete"
-                        className="text-red-400 hover:bg-red-50 p-1 rounded">
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {/* Mobile card list */}
-        <div className="md:hidden divide-y divide-gray-100">
-          {isLoading ? (
-            <div className="text-center text-gray-400 py-12 text-sm">Loading…</div>
-          ) : inspections.length === 0 ? (
-            <div className="text-center text-gray-400 py-12 text-sm">No inspections found</div>
-          ) : inspections.map(insp => (
-            <div key={insp.id} className="px-3 py-3">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</span>
-                    <StatusBadge status={insp.status} />
-                  </div>
-                  <div className="text-sm text-gray-800 mt-1 break-words">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</div>
-                </div>
-              </div>
-              <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs text-gray-500">
-                <div className="truncate"><span className="text-gray-400">Part:</span> <span className="font-mono">{insp.part_number || '—'}</span></div>
-                <div className="truncate"><span className="text-gray-400">PO:</span> <span className="font-mono">{insp.po_number || '—'}</span></div>
-                <div className="truncate"><span className="text-gray-400">Inspector:</span> {insp.inspector_name || '—'}</div>
-                <div className="truncate"><span className="text-gray-400">Lot:</span> {insp.lot_serial_no || '—'}</div>
-                <div className="truncate"><span className="text-gray-400">Created:</span> {formatDate(insp.created_at)}</div>
-                <div className="truncate"><span className="text-gray-400">Completed:</span> {insp.completed_at ? formatDate(insp.completed_at) : '—'}</div>
-              </div>
-              <div className="flex items-center gap-3 mt-2">
-                {insp.status === 'draft' && (
-                  <button
-                    onClick={() => navigate(`/inspections/${insp.id}/edit?returnTo=/admin`)}
-                    className="flex items-center gap-1 text-sm text-pdi-navy min-h-[36px]"
-                  >
-                    <Edit2 size={13} /> Edit
-                  </button>
-                )}
-                <button onClick={() => handlePrint(insp)} className="flex items-center gap-1 text-sm text-purple-600 min-h-[36px]">
-                  <Printer size={13} /> Print
-                </button>
-                <button onClick={() => handleDelete(insp)} className="flex items-center gap-1 text-sm text-red-500 min-h-[36px]">
-                  <Trash2 size={13} /> Delete
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between px-3 sm:px-4 py-3 border-t border-gray-200">
-            <span className="text-xs text-gray-500">Page {filters.page} of {totalPages}</span>
-            <div className="flex gap-2">
-              <button disabled={filters.page <= 1} onClick={() => setFilters(f => ({ ...f, page: f.page - 1 }))}
-                className="px-3 py-2 text-xs border border-gray-200 rounded disabled:opacity-40 hover:bg-gray-50 min-h-[36px]">Previous</button>
-              <button disabled={filters.page >= totalPages} onClick={() => setFilters(f => ({ ...f, page: f.page + 1 }))}
-                className="px-3 py-2 text-xs border border-gray-200 rounded disabled:opacity-40 hover:bg-gray-50 min-h-[36px]">Next</button>
-            </div>
+      {(editingId || creating) && (
+        <div className="bg-white rounded-xl border border-pdi-navy/30 p-3 sm:p-6 space-y-4 sm:space-y-5 shadow-sm">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm sm:text-base font-semibold text-pdi-navy">{creating ? 'Create User' : 'Edit User'}</h3>
+            <button onClick={() => { setEditingId(null); setCreating(false); setEditForm(null) }} className="text-gray-400 hover:text-gray-600 min-h-[40px] min-w-[40px] flex items-center justify-center"><X size={18} /></button>
           </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Name <span className="text-red-500">*</span></label>
+              <input value={editForm?.name || ''} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Email <span className="text-red-500">*</span></label>
+              <input type="email" value={editForm?.email || ''} onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Role</label>
+              <select value={editForm?.role || 'inspector'} onChange={e => setEditForm(f => ({ ...f, role: e.target.value }))}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none min-h-[40px]">
+                <option value="inspector">Inspector</option>
+                <option value="qc_manager">QC Manager</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+            {creating && (
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Password <span className="text-red-500">*</span></label>
+                <input type="password" value={editForm?.password || ''} onChange={e => setEditForm(f => ({ ...f, password: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+              </div>
+            )}
+          </div>
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3 pt-2 border-t border-gray-100">
+            <button onClick={() => { setEditingId(null); setCreating(false); setEditForm(null) }} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
+            <button onClick={handleSave} className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[40px]">
+              <Save size={14} /> Save
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        {isLoading ? (
+          <div className="text-center text-gray-400 py-12">Loading…</div>
+        ) : (
+          <>
+            {/* Desktop table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    {['Name', 'Email', 'Role', 'Active', 'Created', 'Actions'].map(h => (
+                      <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {users.map(user => (
+                    <tr key={user.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 font-medium text-gray-800">{user.name}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700">{user.email}</td>
+                      <td className="px-4 py-3 text-sm capitalize">{user.role?.replace('_', ' ')}</td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs font-medium ${user.active ? 'text-green-600' : 'text-gray-400'}`}>{user.active ? 'Yes' : 'No'}</span>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-gray-500">{formatDate(user.created_at)}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <button onClick={() => startEdit(user)} className="text-xs text-pdi-navy hover:underline"><Edit2 size={13} className="inline mr-1" /> Edit</button>
+                          <button onClick={() => handleToggleActive(user)} className="text-xs text-gray-400 hover:text-gray-600">{user.active ? 'Deactivate' : 'Activate'}</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {/* Mobile card list */}
+            <div className="md:hidden divide-y divide-gray-100">
+              {users.map(user => (
+                <div key={user.id} className="px-4 py-3">
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <div>
+                      <div className="font-medium text-gray-800">{user.name}</div>
+                      <div className="text-xs text-gray-600 mt-0.5">{user.email}</div>
+                    </div>
+                    <span className={`text-xs font-medium ${user.active ? 'text-green-600' : 'text-gray-400'}`}>{user.active ? 'Active' : 'Inactive'}</span>
+                  </div>
+                  <div className="text-xs text-gray-500 mb-2 capitalize">Role: {user.role?.replace('_', ' ')}</div>
+                  <div className="flex gap-3">
+                    <button onClick={() => startEdit(user)} className="text-sm text-pdi-navy min-h-[36px]"><Edit2 size={13} className="inline mr-1" /> Edit</button>
+                    <button onClick={() => handleToggleActive(user)} className="text-sm text-gray-600 min-h-[36px]">{user.active ? 'Deactivate' : 'Activate'}</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>
   )
 }
 
-// ── Main Admin Page ───────────────────────────────────────────────────────────
+// ── Drawings Tab ──────────────────────────────────────────────────────────────
+
+function DrawingsTab({ showToast }) {
+  const qc = useQueryClient()
+  const [partNumber, setPartNumber] = useState('')
+  const [uploadForm, setUploadForm] = useState({ version: '', notes: '' })
+  const [uploading, setUploading] = useState(false)
+
+  const { data: drawings = [] } = useDrawings(partNumber)
+  const uploadDrawing = useUploadDrawing()
+  const setCurrentDrawing = useSetCurrentDrawing()
+  const deleteDrawing = useDeleteDrawing()
+
+  async function handleUpload(e) {
+    const file = e.target.files?.[0]
+    if (!file || !partNumber.trim() || !uploadForm.version.trim()) {
+      showToast('Part number, version, and file are required', 'error')
+      return
+    }
+    setUploading(true)
+    try {
+      await uploadDrawing.mutateAsync({ partNumber, version: uploadForm.version, notes: uploadForm.notes, file })
+      showToast('Drawing uploaded', 'success')
+      setUploadForm({ version: '', notes: '' })
+      e.target.value = ''
+    } catch (err) {
+      showToast(err?.response?.data?.error || 'Upload failed', 'error')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  async function handleSetCurrent(id) {
+    try {
+      await setCurrentDrawing.mutateAsync({ id, partNumber })
+      showToast('Drawing set as current', 'success')
+    } catch (err) {
+      showToast('Failed to set current', 'error')
+    }
+  }
+
+  async function handleDelete(id) {
+    if (!window.confirm('Delete this drawing?')) return
+    try {
+      await deleteDrawing.mutateAsync({ id, partNumber })
+      showToast('Drawing deleted', 'success')
+    } catch (err) {
+      showToast('Delete failed', 'error')
+    }
+  }
+
+  const currentDrawing = drawings.find(d => d.is_current)
+
+  return (
+    <div className="space-y-3 sm:space-y-4">
+      {/* Part number search */}
+      <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-4">
+        <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">Part Number</label>
+        <input
+          type="text"
+          placeholder="Search or enter part number…"
+          value={partNumber}
+          onChange={e => setPartNumber(e.target.value)}
+          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
+        />
+      </div>
+
+      {partNumber && (
+        <>
+          {/* Current drawing */}
+          {currentDrawing && (
+            <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
+              <h3 className="text-sm font-semibold text-gray-800 mb-3">Current Drawing</h3>
+              <div className="flex items-center justify-between gap-3 p-3 bg-pdi-frost rounded-lg">
+                <div className="min-w-0 flex-1">
+                  <div className="font-mono text-xs font-bold text-pdi-navy">{currentDrawing.file_name}</div>
+                  <div className="text-xs text-gray-600 mt-1">v{currentDrawing.version} • {currentDrawing.uploaded_by_name} • {formatDate(currentDrawing.created_at)}</div>
+                </div>
+                <a
+                  href={`/api/drawings/download/${currentDrawing.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg hover:bg-gray-50 flex-shrink-0 min-h-[40px]"
+                >
+                  <Download size={14} /> Download
+                </a>
+              </div>
+            </div>
+          )}
+
+          {/* Upload form */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
+            <h3 className="text-sm font-semibold text-gray-800 mb-3">Upload New Version</h3>
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Version</label>
+                  <input
+                    type="text"
+                    value={uploadForm.version}
+                    onChange={e => setUploadForm(f => ({ ...f, version: e.target.value }))}
+                    placeholder="e.g., 1.0"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
+                  <input
+                    type="text"
+                    value={uploadForm.notes}
+                    onChange={e => setUploadForm(f => ({ ...f, notes: e.target.value }))}
+                    placeholder="Optional notes…"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">File (PDF or image)</label>
+                <input
+                  type="file"
+                  accept=".pdf,image/*"
+                  onChange={handleUploadDrawing}
+                  disabled={uploading || !uploadForm.version}
+                  className="w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-pdi-navy file:text-white hover:file:bg-pdi-navy-light disabled:opacity-50"
+                />
+                {!uploadForm.version && (
+                  <p className="text-xs text-amber-600 mt-1">Enter a version number before selecting a file.</p>
+                )}
+              </div>
+              {uploading && (
+                <div className="flex items-center gap-2 text-sm text-gray-500">
+                  <Loader2 size={14} className="animate-spin" />
+                  Uploading…
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* All versions */}
+          {drawings.length > 0 && (
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <div className="px-4 sm:px-5 py-3 border-b border-gray-200 bg-gray-50">
+                <h3 className="text-sm font-semibold text-gray-800">All Versions ({drawings.length})</h3>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {drawings.map(d => (
+                  <div key={d.id} className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono text-xs font-bold text-pdi-navy">{d.file_name}</span>
+                        {d.is_current ? (
+                          <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-semibold">Current</span>
+                        ) : null}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-0.5">v{d.version} • {d.notes || 'No notes'} • {formatDate(d.created_at)}</div>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {!d.is_current && (
+                        <button
+                          onClick={() => handleSetCurrent(d.id)}
+                          className="px-2.5 py-1.5 text-xs text-pdi-navy border border-pdi-navy/30 rounded-lg hover:bg-pdi-frost transition-colors min-h-[32px]"
+                        >
+                          Set Current
+                        </button>
+                      )}
+                      <a
+                        href={`/api/drawings/download/${d.id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-1.5 rounded-lg text-gray-400 hover:text-pdi-navy hover:bg-gray-100 transition-colors min-h-[32px] min-w-[32px] flex items-center justify-center"
+                        title="Download"
+                      >
+                        <Download size={14} />
+                      </a>
+                      <button
+                        onClick={() => handleDelete(d.id)}
+                        className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors min-h-[32px] min-w-[32px] flex items-center justify-center"
+                        title="Delete"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {drawings.length === 0 && !isLoadingDrawings && (
+            <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-400 text-sm">
+              No drawings found for this part number.
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── Main Admin page ───────────────────────────────────────────────────────────
 
 export default function Admin() {
   const [activeTab, setActiveTab] = useState('forms')
-  const { showToast } = useToast()
+  const navigate = useNavigate()
 
   return (
     <div className="min-h-full bg-gray-50/50">
-      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-3 sm:py-5">
-        <div className="flex items-center gap-2 sm:gap-3">
-          <Settings size={20} className="text-pdi-navy" />
-          <h1 className="text-lg sm:text-2xl font-bold text-pdi-navy">Admin</h1>
+      {/* Page header */}
+      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 sm:py-5">
+        <div className="flex items-center gap-3">
+          <Settings size={20} className="text-pdi-navy flex-shrink-0" />
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold text-pdi-navy">Admin</h1>
+            <p className="text-xs sm:text-sm text-gray-500 mt-0.5">Manage templates, users, and system data</p>
+          </div>
+        </div>
+        {/* Tab bar */}
+        <div className="mt-4 flex gap-1 overflow-x-auto pb-0.5">
+          {TABS.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors flex-shrink-0 min-h-[40px] ${
+                activeTab === tab.id
+                  ? 'bg-pdi-navy text-white'
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <tab.icon size={15} />
+              <span className="hidden sm:inline">{tab.label}</span>
+              <span className="sm:hidden">{tab.shortLabel}</span>
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Tab bar — horizontally scrollable on mobile */}
-      <div className="bg-white border-b border-gray-200 px-2 sm:px-6">
-        <div className="flex gap-1 overflow-x-auto">
-          {TABS.map(tab => {
-            const Icon = tab.icon
-            return (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-3 sm:px-5 py-3 sm:py-3.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex-shrink-0 min-h-[44px] ${
-                  activeTab === tab.id
-                    ? 'border-pdi-navy text-pdi-navy'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                <Icon size={15} />
-                <span className="hidden sm:inline">{tab.label}</span>
-                <span className="sm:hidden">{tab.shortLabel}</span>
-              </button>
-            )
-          })}
-        </div>
-      </div>
-
-      <div className="p-3 sm:p-6">
-        {activeTab === 'forms' && <InspectionFormsTab showToast={showToast} />}
-        {activeTab === 'specs' && <PartSpecsTab showToast={showToast} />}
-        {activeTab === 'data'  && <InspectionDataTab showToast={showToast} />}
+      <div className="p-4 sm:p-6">
+        {activeTab === 'forms' && <FormsTab />}
+        {activeTab === 'specs' && <SpecsTab />}
+        {activeTab === 'users' && <UsersTab />}
+        {activeTab === 'drawings' && <DrawingsTab />}
+        {activeTab === 'data' && <DataTab navigate={navigate} />}
       </div>
     </div>
   )

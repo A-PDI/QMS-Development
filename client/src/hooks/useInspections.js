@@ -90,3 +90,75 @@ export function useLogActivity() {
     },
   })
 }
+
+export function useAssignedInspections() {
+  return useQuery({
+    queryKey: ['inspections-assigned'],
+    queryFn: async () => {
+      const { data } = await api.get('/inspections/assigned')
+      return data.inspections || []
+    },
+  })
+}
+
+export function useAssignInspection() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, assigned_to, due_date }) => {
+      const { data } = await api.patch(`/inspections/${id}/assign`, { assigned_to, due_date })
+      return data
+    },
+    onSuccess: (_, { id }) => {
+      qc.invalidateQueries({ queryKey: ['inspection', id] })
+      qc.invalidateQueries({ queryKey: ['inspections'] })
+      qc.invalidateQueries({ queryKey: ['inspections-assigned'] })
+    },
+  })
+}
+
+export function useInspectionAlerts() {
+  return useQuery({
+    queryKey: ['inspection-alerts'],
+    queryFn: async () => {
+      const { data } = await api.get('/inspections/alerts')
+      return data
+    },
+  })
+}
+
+export function useAssignedInspections() {
+  return useQuery({
+    queryKey: ['inspections', 'assigned'],
+    queryFn: async () => {
+      const { data } = await api.get('/inspections/assigned')
+      return data.inspections
+    },
+  })
+}
+
+export function useAssignInspection() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, assigned_to, due_date }) => {
+      const { data } = await api.patch(`/inspections/${id}/assign`, { assigned_to, due_date })
+      return data
+    },
+    onSuccess: (_, { id }) => {
+      qc.invalidateQueries({ queryKey: ['inspection', id] })
+      qc.invalidateQueries({ queryKey: ['inspections'] })
+      qc.invalidateQueries({ queryKey: ['inspection-alerts'] })
+    },
+  })
+}
+
+export function useInspectionAlerts() {
+  return useQuery({
+    queryKey: ['inspection-alerts'],
+    queryFn: async () => {
+      const { data } = await api.get('/inspections/alerts')
+      return data
+    },
+  })
+}
+  })
+}

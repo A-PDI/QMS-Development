@@ -2,10 +2,12 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
-import { ClipboardList, CheckSquare, AlertTriangle, TrendingUp, PlusCircle } from 'lucide-react'
+import { ClipboardList, CheckSquare, AlertTriangle, TrendingUp, PlusCircle, Bell } from 'lucide-react'
 import api from '../lib/api'
-import { useInspections } from '../hooks/useInspections'
+import { useInspections, useInspectionAlerts } from '../hooks/useInspections'
 import { useNCRs } from '../hooks/useNCRs'
+import { useQualityAlertCount } from '../hooks/useQualityAlerts'
+import { getUser } from '../lib/auth'
 import StatusBadge from '../components/StatusBadge'
 import { formatDate } from '../lib/utils'
 import { COMPONENT_TYPE_LABELS, NCR_SEVERITY_COLORS, NCR_SEVERITY_LABELS, NCR_STATUS_COLORS, NCR_STATUS_LABELS } from '../lib/constants'
@@ -67,6 +69,7 @@ function NcrBadge({ value, colorMap, labelMap }) {
 
 export default function Dashboard() {
   const navigate = useNavigate()
+  const user = getUser()
   const [activeFilter, setActiveFilter] = useState(null)
   const [chartPeriodIdx, setChartPeriodIdx] = useState(1)
 
@@ -74,6 +77,9 @@ export default function Dashboard() {
     queryKey: ['dashboard'],
     queryFn: async () => { const { data } = await api.get('/dashboard/stats'); return data },
   })
+
+  const { data: qualityAlertCount = 0 } = useQualityAlertCount()
+  const { data: inspectionAlerts = {} } = useInspectionAlerts()
 
   const chartPeriod = PERIOD_OPTIONS[chartPeriodIdx]
   const { data: chartRaw } = useQuery({
@@ -143,6 +149,40 @@ export default function Dashboard() {
       </div>
 
       <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
+        {/* Quality Alerts Widget */}
+        {qualityAlertCount !== undefined && (
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+            {qualityAlertCount > 0 ? (
+              <div className="bg-amber-50 border-b border-amber-200 px-4 sm:px-5 py-3 sm:py-4">
+                <div className="flex items-start sm:items-center justify-between gap-3">
+                  <div className="flex items-start sm:items-center gap-2 min-w-0 flex-1">
+                    <AlertTriangle size={18} className="text-amber-600 flex-shrink-0 mt-0.5 sm:mt-0" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-amber-900">
+                        {qualityAlertCount} unacknowledged quality alert{qualityAlertCount !== 1 ? 's' : ''}
+                      </p>
+                      <p className="text-xs text-amber-700 mt-0.5">Review these alerts for product quality concerns</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => navigate('/quality-alerts')}
+                    className="flex-shrink-0 text-xs text-amber-700 hover:text-amber-900 font-semibold underline min-h-[32px] min-w-[60px] text-right"
+                  >
+                    View All →
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-green-50 border-b border-green-200 px-4 sm:px-5 py-3 sm:py-4">
+                <div className="flex items-center gap-2">
+                  <CheckSquare size={18} className="text-green-600" />
+                  <p className="text-sm font-medium text-green-700">No open quality alerts</p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* KPI Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           {METRIC_CONFIGS.map(({ key, label, icon, bg, fg, filter }) => (
@@ -317,92 +357,121 @@ export default function Dashboard() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-          {/* Line Chart — Inspections by Component over Time */}
-          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 sm:p-5">
-            <div className="flex items-center justify-between mb-4 gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <div className="w-1 h-5 bg-pdi-navy rounded-full flex-shrink-0" />
-                <h2 className="text-sm sm:text-base font-semibold text-gray-800 truncate">Inspections by Component</h2>
+        {/* Admin Alerts Section — only shown for admin/qc_manager */}
+        {user && (user.role === 'admin' || user.role === 'qc_manager') && inspectionAlerts && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+            {/* Past Due */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+              <div className="flex items-center gap-2 px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-200 bg-gray-50">
+                <div className="w-1 h-5 bg-red-500 rounded-full flex-shrink-0" />
+                <h3 className="text-sm sm:text-base font-semibold text-gray-800">Past Due Inspections</h3>
+                <span className="text-xs text-gray-400 flex-shrink-0">({(inspectionAlerts.past_due || []).length})</span>
               </div>
-              <select
-                value={chartPeriodIdx}
-                onChange={e => setChartPeriodIdx(Number(e.target.value))}
-                className="text-xs border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-pdi-navy flex-shrink-0"
-              >
-                {PERIOD_OPTIONS.map((opt, idx) => (
-                  <option key={idx} value={idx}>{opt.label}</option>
-                ))}
-              </select>
-            </div>
-            {isLoading || !chartData.length ? (
-              <div className="h-48 flex items-center justify-center text-gray-400 text-sm">
-                {isLoading ? 'Loading…' : 'No data for this period'}
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={chartData} margin={{ top: 4, right: 10, left: -10, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f4f8" />
-                  <XAxis dataKey="period" tick={{ fontSize: 10, fill: '#6b7280' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} axisLine={false} tickLine={false} allowDecimals={false} />
-                  <Tooltip contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb', fontSize: 11 }} />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  {componentTypes.map((ct, idx) => (
-                    <Line
-                      key={ct}
-                      type="monotone"
-                      dataKey={COMPONENT_TYPE_LABELS[ct] || ct}
-                      stroke={COMPONENT_COLORS[idx % COMPONENT_COLORS.length]}
-                      strokeWidth={2}
-                      dot={{ r: 3 }}
-                      activeDot={{ r: 5 }}
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-
-          {/* Recent Activity */}
-          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 sm:p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="w-1 h-5 bg-pdi-amber rounded-full" />
-              <h2 className="text-sm sm:text-base font-semibold text-gray-800">Recent Activity</h2>
-            </div>
-            {isLoading ? (
-              <div className="text-gray-400 text-sm">Loading…</div>
-            ) : !(stats?.recent_activity?.length) ? (
-              <div className="text-gray-400 text-sm text-center py-8">No recent activity</div>
-            ) : (
-              <div className="divide-y divide-gray-50">
-                {(stats.recent_activity || []).map((item, idx) => {
-                  const actionDef = ACTION_LABELS[item.action_type] || { label: item.action_type, color: 'bg-gray-100 text-gray-600' }
-                  return (
-                    <div key={`${item.id}-${item.action_type}-${idx}`}
-                      onClick={() => navigate(`/inspections/${item.id}`)}
-                      className="flex items-start gap-2 sm:gap-3 py-2.5 px-1 hover:bg-pdi-frost rounded-lg cursor-pointer transition-colors min-h-[44px]"
+              {(inspectionAlerts.past_due || []).length === 0 ? (
+                <div className="text-center text-gray-400 text-sm py-8 px-4">No past due inspections</div>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {(inspectionAlerts.past_due || []).slice(0, 5).map(insp => (
+                    <button
+                      key={insp.id}
+                      onClick={() => navigate(`/inspections/${insp.id}`)}
+                      className="w-full text-left px-4 sm:px-5 py-3 hover:bg-red-50/50 transition-colors min-h-[44px] flex items-start justify-between gap-2"
                     >
-                      <div className="w-20 sm:w-24 flex-shrink-0">
-                        <div className="text-xs font-semibold text-gray-800 truncate leading-tight">{item.actor_name || '—'}</div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</div>
+                        <div className="font-mono text-xs text-gray-600 mt-0.5">{insp.part_number || '—'}</div>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
-                          <span className={`inline-block text-xs font-medium px-1.5 py-0.5 rounded ${actionDef.color}`}>{actionDef.label}</span>
-                          <span className="text-xs font-semibold text-pdi-navy truncate">{item.part_number || item.form_no || '—'}</span>
-                        </div>
-                        <div className="text-xs text-gray-400 mt-0.5 truncate">{COMPONENT_TYPE_LABELS[item.component_type] || item.component_type || ''}</div>
+                      <div className="text-right flex-shrink-0">
+                        <div className="text-xs text-red-600 font-semibold">{formatDate(insp.due_date)}</div>
+                        <div className="text-xs text-gray-500 mt-0.5">{insp.assigned_to_name || '—'}</div>
                       </div>
-                      <div className="flex-shrink-0 text-right">
-                        <div className="text-xs text-gray-500">{formatDate(item.created_at)}</div>
-                        <div className="text-xs text-gray-400 hidden sm:block">{item.created_at ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</div>
-                      </div>
-                    </div>
-                  )
-                })}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Short Duration */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+              <div className="flex items-center gap-2 px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-200 bg-gray-50">
+                <div className="w-1 h-5 bg-orange-500 rounded-full flex-shrink-0" />
+                <h3 className="text-sm sm:text-base font-semibold text-gray-800">Short Duration Completions</h3>
+                <span className="text-xs text-gray-400 flex-shrink-0">({(inspectionAlerts.short_duration || []).length})</span>
               </div>
-            )}
+              {(inspectionAlerts.short_duration || []).length === 0 ? (
+                <div className="text-center text-gray-400 text-sm py-8 px-4">No short duration completions</div>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {(inspectionAlerts.short_duration || []).slice(0, 5).map(insp => (
+                    <button
+                      key={insp.id}
+                      onClick={() => navigate(`/inspections/${insp.id}`)}
+                      className="w-full text-left px-4 sm:px-5 py-3 hover:bg-orange-50/50 transition-colors min-h-[44px] flex items-start justify-between gap-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</div>
+                        <div className="font-mono text-xs text-gray-600 mt-0.5">{insp.part_number || '—'}</div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <div className="text-xs text-orange-600 font-semibold">{insp.assigned_to_name || '—'}</div>
+                        <div className="text-xs text-gray-400 mt-0.5">
+                          {insp.started_at && insp.completed_at
+                            ? `${Math.round((new Date(insp.completed_at) - new Date(insp.started_at)) / 60000)} min`
+                            : '—'}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
+
+        {/* Trend Chart */}
+        {chartData.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 sm:p-5">
+            <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+              <h2 className="text-sm sm:text-base font-semibold text-gray-800">Inspection Trend</h2>
+              <div className="flex gap-1">
+                {PERIOD_OPTIONS.map((opt, idx) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setChartPeriodIdx(idx)}
+                    className={`px-2.5 py-1 text-xs rounded-md font-medium transition-colors ${
+                      chartPeriodIdx === idx
+                        ? 'bg-pdi-navy text-white'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={chartData} margin={{ top: 4, right: 16, left: -16, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                <Tooltip />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                {componentTypes.map((ct, i) => (
+                  <Line
+                    key={ct}
+                    type="monotone"
+                    dataKey={COMPONENT_TYPE_LABELS[ct] || ct}
+                    stroke={COMPONENT_COLORS[i % COMPONENT_COLORS.length]}
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 4 }}
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
       </div>
     </div>
   )

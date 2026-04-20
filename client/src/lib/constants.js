@@ -9,7 +9,6 @@ export const COMPONENT_TYPE_LABELS = {
 export const STATUS_LABELS = {
   draft:    'Open',
   complete: 'Complete',
-  // legacy display compat
   submitted: 'Complete',
   approved:  'Complete',
   rejected:  'Complete',
@@ -29,6 +28,21 @@ export const DISPOSITION_COLORS = {
   REJECT:      'bg-pdi-red-light text-pdi-red border-red-400',
   FAIL:        'bg-pdi-red-light text-pdi-red border-red-400',
   CONDITIONAL: 'bg-pdi-amber-light text-pdi-amber border-pdi-amber',
+  ACCEPTED:    'bg-amber-100 text-amber-700 border-amber-400',
+}
+
+export const DISPOSITION_LABELS = {
+  PASS:        'Pass',
+  FAIL:        'Fail',
+  ACCEPTED:    'Accepted',
+  ACCEPT:      'Accept',
+  REJECT:      'Reject',
+  CONDITIONAL: 'Conditional',
+}
+
+export const ALERT_TYPE_LABELS = {
+  accepted_disposition: 'Accepted Disposition',
+  repeat_occurrence:    'Repeat Occurrence',
 }
 
 export const PFN_COLORS = {
@@ -60,15 +74,15 @@ export const NCR_SEVERITY_COLORS = {
 
 export const NCR_STATUS_LABELS = { open: 'Open', pending_supplier: 'Pending Supplier', closed: 'Closed' }
 export const NCR_STATUS_COLORS = {
-  open:             'bg-red-100 text-red-700 ring-1 ring-red-300',
-  pending_supplier: 'bg-amber-100 text-amber-700 ring-1 ring-amber-300',
-  closed:           'bg-gray-100 text-gray-500 ring-1 ring-gray-300',
+  open:             'bg-red-100 text-red-700 border-red-300',
+  pending_supplier: 'bg-yellow-100 text-yellow-700 border-yellow-300',
+  closed:           'bg-gray-100 text-gray-500 border-gray-300',
 }
 
 export const NCR_DISPOSITION_LABELS = {
-  pending:    'Pending',
-  return:     'Return to Supplier',
-  scrap:      'Scrap',
-  use_as_is:  'Use As-Is',
-  rework:     'Rework / Sort',
+  pending:              'Pending',
+  use_as_is:            'Use As-Is',
+  rework:               'Rework',
+  return_to_supplier:   'Return to Supplier',
+  scrap:                'Scrap',
 }

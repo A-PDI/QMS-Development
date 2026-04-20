@@ -35,3 +35,6 @@ Thumbs.db
 .vscode/
 *.suo
 *.user
+
+# Vite build temp files
+client/vite.config.js.timestamp-*

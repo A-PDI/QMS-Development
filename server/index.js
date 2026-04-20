@@ -42,6 +42,9 @@ const dashboardRoutes = require('./routes/dashboard');
 const ncrsRoutes      = require('./routes/ncrs');
 const partSpecsRoutes = require('./routes/part-specs');
 const adminRoutes     = require('./routes/admin');
+const drawingsRoutes = require('./routes/drawings');
+const qualityAlertsRoutes = require('./routes/quality-alerts');
+const reportsRoutes = require('./routes/reports');
 
 const app        = express();
 const PORT       = process.env.PORT || 3001;
@@ -124,6 +127,9 @@ app.use('/api/dashboard',   authMiddleware, dashboardRoutes);
 app.use('/api/ncrs',        authMiddleware, ncrsRoutes);
 app.use('/api/part-specs',  authMiddleware, partSpecsRoutes);
 app.use('/api/admin',       authMiddleware, adminRoutes);
+app.use('/api/drawings', authMiddleware, drawingsRoutes);
+app.use('/api/quality-alerts', authMiddleware, qualityAlertsRoutes);
+app.use('/api/reports', authMiddleware, reportsRoutes);
 
 // Users list
 app.get('/api/users', authMiddleware, (req, res, next) => {
@@ -180,13 +186,6 @@ app.use(errorHandler);
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`PDI Inspection server running on port ${PORT}`);
-  console.log(`Environment : ${process.env.NODE_ENV || 'development'}`);
-  console.log(`Auth        : Microsoft Entra ID`);
-  console.log(`DB adapter  : ${process.env.DB_ADAPTER || 'sqlite'}`);
-  if (IS_PROD) {
-    console.log(`Client URL  : ${CLIENT_URL}`);
-    console.log(`Entra tenant: ${process.env.ENTRA_TENANT_ID}`);
-  }
+  console.log(`[Startup] Mode: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`[Startup] Auth: ${process.env.ENTRA_TENANT_ID ? 'Entra (MSAL)' : 'local JWT'}`);
 });
-
-module.exports = app;

@@ -10,6 +10,9 @@ import InspectionForm from './pages/InspectionForm'
 import InspectionDetail from './pages/InspectionDetail'
 import NCRList from './pages/NCRList'
 import NCRDetail from './pages/NCRDetail'
+import MyInspections from './pages/MyInspections'
+import QualityAlerts from './pages/QualityAlerts'
+import Reports from './pages/Reports'
 import Admin from './pages/Admin'
 import NotFound from './pages/NotFound'
 
@@ -47,12 +50,15 @@ export default function App() {
           }
         >
           <Route index element={<Dashboard />} />
+          <Route path="my-inspections" element={<MyInspections />} />
           <Route path="inspections" element={<InspectionList />} />
           <Route path="inspections/new" element={<NewInspection />} />
           <Route path="inspections/:id" element={<InspectionDetail />} />
           <Route path="inspections/:id/edit" element={<InspectionForm />} />
           <Route path="ncrs" element={<NCRList />} />
           <Route path="ncrs/:id" element={<NCRDetail />} />
+          <Route path="quality-alerts" element={<QualityAlerts />} />
+          <Route path="reports" element={<Reports />} />
           <Route path="admin" element={<Admin />} />
         </Route>
         <Route path="*" element={<NotFound />} />
