@@ -981,9 +981,73 @@ function DrawingsTab({ showToast }) {
 
 // ── Main Admin page ───────────────────────────────────────────────────────────
 
+function DataTab({ navigate }) {
+  const { data, isLoading } = useInspections({ limit: 100, page: 1 })
+  const deleteInspection = useDeleteInspection()
+  const { showToast } = useToast()
+  const inspections = data?.inspections || []
+
+  async function handleDelete(id) {
+    if (!window.confirm('Permanently delete this inspection?')) return
+    try {
+      await deleteInspection.mutateAsync(id)
+      showToast('Inspection deleted', 'success')
+    } catch {
+      showToast('Delete failed', 'error')
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="px-4 sm:px-5 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-800">All Inspections ({inspections.length})</h3>
+          <button onClick={() => navigate('/inspections/new')} className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[36px]">
+            <Plus size={14} /> New
+          </button>
+        </div>
+        {isLoading ? (
+          <div className="text-center text-gray-400 text-sm py-10">Loading...</div>
+        ) : inspections.length === 0 ? (
+          <div className="text-center text-gray-400 text-sm py-10">No inspections found</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b border-gray-100">
+                <tr>
+                  {['Form', 'Part Number', 'Inspector', 'Status', 'Created', ''].map(h => (
+                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {inspections.map(insp => (
+                  <tr key={insp.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</td>
+                    <td className="px-4 py-3 font-mono text-xs">{insp.part_number || '-'}</td>
+                    <td className="px-4 py-3 text-sm">{insp.inspector_name || '-'}</td>
+                    <td className="px-4 py-3"><StatusBadge status={insp.status} /></td>
+                    <td className="px-4 py-3 text-xs text-gray-500">{formatDate(insp.created_at)}</td>
+                    <td className="px-4 py-3">
+                      <button onClick={() => handleDelete(insp.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors">
+                        <Trash2 size={14} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function Admin() {
   const [activeTab, setActiveTab] = useState('forms')
   const navigate = useNavigate()
+  const { showToast } = useToast()
 
   return (
     <div className="min-h-full bg-gray-50/50">
@@ -1017,10 +1081,10 @@ export default function Admin() {
       </div>
 
       <div className="p-4 sm:p-6">
-        {activeTab === 'forms' && <FormsTab />}
-        {activeTab === 'specs' && <SpecsTab />}
-        {activeTab === 'users' && <UsersTab />}
-        {activeTab === 'drawings' && <DrawingsTab />}
+        {activeTab === 'forms' && <InspectionFormsTab showToast={showToast} />}
+        {activeTab === 'specs' && <PartSpecsTab showToast={showToast} />}
+        {activeTab === 'users' && <UsersTab showToast={showToast} />}
+        {activeTab === 'drawings' && <DrawingsTab showToast={showToast} />}
         {activeTab === 'data' && <DataTab navigate={navigate} />}
       </div>
     </div>
