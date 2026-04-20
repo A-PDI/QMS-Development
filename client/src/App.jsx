@@ -14,6 +14,7 @@ import MyInspections from './pages/MyInspections'
 import QualityAlerts from './pages/QualityAlerts'
 import Reports from './pages/Reports'
 import Admin from './pages/Admin'
+import Drawings from './pages/Drawings'
 import NotFound from './pages/NotFound'
 
 // Guards protected routes: requires a valid app JWT (obtained after Entra sign-in).
@@ -58,6 +59,7 @@ export default function App() {
           <Route path="ncrs" element={<NCRList />} />
           <Route path="ncrs/:id" element={<NCRDetail />} />
           <Route path="quality-alerts" element={<QualityAlerts />} />
+          <Route path="drawings" element={<Drawings />} />
           <Route path="reports" element={<Reports />} />
           <Route path="admin" element={<Admin />} />
         </Route>

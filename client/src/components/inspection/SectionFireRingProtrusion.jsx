@@ -1,5 +1,18 @@
-export default function SectionFireRingProtrusion({ section, data = {}, onChange, readOnly = false }) {
-  const current = { spec: '', cylinders: Array(section.cylinder_count).fill(''), ...data }
+import PFNToggle from './PFNToggle'
+import ItemAttachment from './ItemAttachment'
+
+export default function SectionFireRingProtrusion({
+  section,
+  data = {},
+  onChange,
+  readOnly = false,
+  sectionKey,
+  attachments = [],
+  onUploadItem,
+  onDeleteItem,
+  uploadingKey,
+}) {
+  const current = { spec: '', cylinders: Array(section.cylinder_count).fill(''), result: '', notes: '', ...data }
 
   function set(field, value) { onChange({ ...current, [field]: value }) }
   function setCyl(i, value) {
@@ -8,13 +21,19 @@ export default function SectionFireRingProtrusion({ section, data = {}, onChange
     onChange({ ...current, cylinders })
   }
 
+  const showImages = !!sectionKey && !!onUploadItem
+  const isAccepted = current.result === 'A'
+  const isFail = current.result === 'F'
+  const needsNotes = isAccepted && !current.notes?.trim()
+  const SECTION_ITEM_ID = 0
+
   return (
     <div className="space-y-3">
-      {/* Spec row — stacks on mobile */}
+      {/* Spec row */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
         <label className="text-sm font-medium text-gray-700 sm:w-12">Spec:</label>
         {readOnly ? (
-          <span className="font-mono text-sm">{current.spec || '—'}</span>
+          <span className="font-mono text-sm">{current.spec || '\u2014'}</span>
         ) : (
           <input
             type="text"
@@ -43,7 +62,7 @@ export default function SectionFireRingProtrusion({ section, data = {}, onChange
               {Array.from({ length: section.cylinder_count }, (_, i) => (
                 <td key={i} className="px-2 py-2 border border-gray-200">
                   {readOnly ? (
-                    <span className="font-mono text-sm">{current.cylinders[i] || '—'}</span>
+                    <span className="font-mono text-sm">{current.cylinders[i] || '\u2014'}</span>
                   ) : (
                     <input
                       type="text"
@@ -61,13 +80,13 @@ export default function SectionFireRingProtrusion({ section, data = {}, onChange
         </table>
       </div>
 
-      {/* Mobile grid — 2 columns on narrow phones, 3 on larger */}
+      {/* Mobile grid */}
       <div className="md:hidden grid grid-cols-2 sm:grid-cols-3 gap-2">
         {Array.from({ length: section.cylinder_count }, (_, i) => (
           <div key={i} className="border border-gray-200 rounded bg-white p-2">
             <label className="block text-xs font-semibold text-gray-600 mb-1">Cyl {i + 1}</label>
             {readOnly ? (
-              <span className="font-mono text-sm">{current.cylinders[i] || '—'}</span>
+              <span className="font-mono text-sm">{current.cylinders[i] || '\u2014'}</span>
             ) : (
               <input
                 type="text"
@@ -81,6 +100,45 @@ export default function SectionFireRingProtrusion({ section, data = {}, onChange
           </div>
         ))}
       </div>
+
+      {/* Overall result row */}
+      <div className={`flex flex-wrap items-center gap-3 pt-2 border-t border-gray-100 ${isAccepted ? 'bg-amber-50 -mx-3 px-3 py-2 rounded' : isFail ? 'bg-red-50 -mx-3 px-3 py-2 rounded' : ''}`}>
+        <span className="text-sm font-medium text-gray-700">Overall Result:</span>
+        <PFNToggle
+          value={current.result}
+          onChange={v => set('result', v)}
+          readOnly={readOnly}
+        />
+        {showImages && (
+          <ItemAttachment
+            sectionKey={sectionKey}
+            itemId={SECTION_ITEM_ID}
+            isFail={isFail || isAccepted}
+            attachments={attachments}
+            onUpload={onUploadItem}
+            onDelete={onDeleteItem}
+            uploadingKey={uploadingKey}
+            readOnly={readOnly}
+          />
+        )}
+      </div>
+      {isAccepted && !readOnly && (
+        <div>
+          <input
+            type="text"
+            className={`w-full text-sm border rounded px-2 py-2 focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px] ${
+              needsNotes ? 'border-amber-400 bg-amber-50' : 'border-amber-200'
+            }`}
+            value={current.notes || ''}
+            onChange={e => set('notes', e.target.value)}
+            placeholder="Description required for Accepted\u2026"
+          />
+          {needsNotes && <span className="text-xs text-amber-600">Description required for Accepted items</span>}
+        </div>
+      )}
+      {readOnly && isAccepted && current.notes && (
+        <div className="text-sm text-gray-600 bg-amber-50 border border-amber-200 rounded p-2">{current.notes}</div>
+      )}
     </div>
   )
 }

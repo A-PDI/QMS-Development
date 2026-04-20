@@ -133,6 +133,8 @@ function migrateSchema() {
     // Template versioning
     'ALTER TABLE inspection_templates ADD COLUMN version INTEGER DEFAULT 1',
     'ALTER TABLE inspection_templates ADD COLUMN parent_template_id TEXT',
+    // Per-user page permissions
+    'ALTER TABLE users ADD COLUMN permissions TEXT',
   ];
   for (const sql of columnMigrations) {
     try { rawDb.exec(sql); } catch (_) {}

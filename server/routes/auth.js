@@ -95,7 +95,7 @@ router.post('/login', async (req, res, next) => {
 
     res.json({
       token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      user: { id: user.id, name: user.name, email: user.email, role: user.role, permissions: user.permissions || null },
     });
   } catch (err) {
     next(err);
@@ -162,7 +162,7 @@ router.post('/entra', async (req, res, next) => {
 
     res.json({
       token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      user: { id: user.id, name: user.name, email: user.email, role: user.role, permissions: user.permissions || null },
     });
   } catch (err) {
     next(err);
@@ -172,7 +172,9 @@ router.post('/entra', async (req, res, next) => {
 // ── GET /api/auth/me ──────────────────────────────────────────────────────────
 router.get('/me', authMiddleware, (req, res) => {
   const { id, name, email, role } = req.user;
-  res.json({ user: { id, name, email, role } });
+  // Re-fetch permissions from DB since they're not in the JWT payload
+  const fresh = db.get('SELECT permissions FROM users WHERE id = ?', [id]);
+  res.json({ user: { id, name, email, role, permissions: fresh?.permissions || null } });
 });
 
 module.exports = router;

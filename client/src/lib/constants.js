@@ -7,19 +7,21 @@ export const COMPONENT_TYPE_LABELS = {
 }
 
 export const STATUS_LABELS = {
-  draft:    'Open',
-  complete: 'Complete',
-  submitted: 'Complete',
-  approved:  'Complete',
-  rejected:  'Complete',
+  draft:          'Open',
+  complete:       'Complete',
+  submitted:      'Complete',
+  approved:       'Complete',
+  rejected:       'Complete',
+  pending_review: 'Pending Review',
 }
 
 export const STATUS_COLORS = {
-  draft:     'bg-blue-100 text-blue-700 ring-1 ring-blue-300',
-  complete:  'bg-pdi-green-light text-pdi-green ring-1 ring-green-300',
-  submitted: 'bg-pdi-green-light text-pdi-green ring-1 ring-green-300',
-  approved:  'bg-pdi-green-light text-pdi-green ring-1 ring-green-300',
-  rejected:  'bg-pdi-red-light text-pdi-red ring-1 ring-red-300',
+  draft:          'bg-blue-100 text-blue-700 ring-1 ring-blue-300',
+  complete:       'bg-pdi-green-light text-pdi-green ring-1 ring-green-300',
+  submitted:      'bg-pdi-green-light text-pdi-green ring-1 ring-green-300',
+  approved:       'bg-pdi-green-light text-pdi-green ring-1 ring-green-300',
+  rejected:       'bg-pdi-red-light text-pdi-red ring-1 ring-red-300',
+  pending_review: 'bg-amber-100 text-amber-700 ring-1 ring-amber-300',
 }
 
 export const DISPOSITION_COLORS = {
@@ -49,6 +51,7 @@ export const PFN_COLORS = {
   P: 'bg-green-100 text-green-700 border-green-300',
   F: 'bg-red-100 text-red-700 border-red-300',
   N: 'bg-gray-100 text-gray-500 border-gray-300',
+  A: 'bg-amber-100 text-amber-700 border-amber-300',
 }
 
 export const HEADER_FIELD_LABELS = {
@@ -86,3 +89,13 @@ export const NCR_DISPOSITION_LABELS = {
   return_to_supplier:   'Return to Supplier',
   scrap:                'Scrap',
 }
+
+export const PAGE_PERMISSION_KEYS = [
+  { key: 'dashboard',      label: 'Dashboard' },
+  { key: 'my_inspections', label: 'My Inspections' },
+  { key: 'inspections',    label: 'Inspections' },
+  { key: 'new_inspection', label: 'New Inspection' },
+  { key: 'ncrs',           label: 'NCRs' },
+  { key: 'quality_alerts', label: 'Quality Alerts' },
+  { key: 'drawings',       label: 'Engineering Drawings' },
+]

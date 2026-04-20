@@ -93,6 +93,17 @@ router.get('/alerts', (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+router.get('/pending-review', (req, res, next) => {
+  try {
+    if (!['admin', 'qc_manager'].includes(req.user && req.user.role)) return next(new AppError('Unauthorized', 403));
+    const inspections = db.all(
+      `SELECT i.id, i.form_no, i.component_type, i.part_number, i.po_number, i.supplier, i.status, i.disposition, i.created_at, i.updated_at, u.name as inspector_name FROM inspections i LEFT JOIN users u ON i.created_by = u.id WHERE i.status = 'pending_review' ORDER BY i.updated_at DESC`,
+      []
+    );
+    res.json({ inspections });
+  } catch (err) { next(err); }
+});
+
 router.get('/:id', (req, res, next) => {
   try {
     const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [req.params.id]);
@@ -128,6 +139,32 @@ router.patch('/:id', (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Helper: scan section_data for any item marked Accepted ('A')
+function hasAcceptedItems(sectionDataJson) {
+  try {
+    const sd = typeof sectionDataJson === 'string' ? JSON.parse(sectionDataJson) : (sectionDataJson || {});
+    for (const [key, data] of Object.entries(sd)) {
+      if (key.startsWith('__')) continue;
+      if (Array.isArray(data)) {
+        for (const row of data) {
+          if (row.status === 'A' || row.result === 'A') return true;
+        }
+      } else if (data && typeof data === 'object') {
+        if (data.result === 'A') return true;
+        if (Array.isArray(data.bores)) {
+          for (const b of data.bores) { if (b && b.result === 'A') return true; }
+        }
+        if (Array.isArray(data.cylinders)) {
+          for (const c of data.cylinders) {
+            if (c && (c.result === 'A' || c.overall === 'A')) return true;
+          }
+        }
+      }
+    }
+  } catch (_) {}
+  return false;
+}
+
 router.post('/:id/complete', (req, res, next) => {
   try {
     const { id } = req.params;
@@ -140,9 +177,17 @@ router.post('/:id/complete', (req, res, next) => {
     if ((disp === 'ACCEPTED' || disp === 'FAIL') && !(dispNotes && dispNotes.trim())) {
       return next(new AppError('An explanation is required for FAIL or ACCEPTED dispositions', 400, 'VALIDATION_ERROR'));
     }
-    db.run(`UPDATE inspections SET status = 'complete', completed_at = ?, updated_at = ? WHERE id = ?`, [now, now, id]);
-    logActivity(id, 'completed', req.user);
-    if (disp === 'ACCEPTED') {
+    const sectionDataForCheck = req.body.section_data || inspection.section_data;
+    const acceptedItems = hasAcceptedItems(sectionDataForCheck);
+    const isAdmin = ['admin', 'qc_manager'].includes(req.user && req.user.role);
+    const newStatus = (acceptedItems && !isAdmin) ? 'pending_review' : 'complete';
+    const completedAt = newStatus === 'complete' ? now : null;
+    db.run(
+      `UPDATE inspections SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?`,
+      [newStatus, completedAt, now, id]
+    );
+    logActivity(id, newStatus === 'complete' ? 'completed' : 'submitted', req.user);
+    if (newStatus === 'complete' && disp === 'ACCEPTED') {
       try {
         db.run(
           `INSERT INTO quality_alerts (id, inspection_id, part_number, supplier, alert_type, triggered_by, created_at) VALUES (?, ?, ?, ?, 'accepted_disposition', ?, ?)`,
@@ -152,9 +197,38 @@ router.post('/:id/complete', (req, res, next) => {
     }
     const updated = db.get('SELECT * FROM inspections WHERE id = ?', [id]);
     updated.section_data = JSON.parse(updated.section_data || '{}');
+    res.json({ inspection: updated, pending_review: newStatus === 'pending_review', has_accepted_items: acceptedItems });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/review', (req, res, next) => {
+  try {
+    if (!['admin', 'qc_manager'].includes(req.user && req.user.role)) return next(new AppError('Unauthorized', 403));
+    const { id } = req.params;
+    const { create_alert = false, alert_notes = '' } = req.body;
+    const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [id]);
+    if (!inspection) return next(new AppError('Inspection not found', 404, 'NOT_FOUND'));
+    if (inspection.status !== 'pending_review') return next(new AppError('Inspection is not pending review', 400));
+    const now = new Date().toISOString();
+    db.run(
+      `UPDATE inspections SET status = 'complete', completed_at = ?, updated_at = ? WHERE id = ?`,
+      [now, now, id]
+    );
+    logActivity(id, 'completed', req.user);
+    if (create_alert) {
+      try {
+        db.run(
+          `INSERT INTO quality_alerts (id, inspection_id, part_number, supplier, alert_type, triggered_by, notes, created_at) VALUES (?, ?, ?, ?, 'accepted_disposition', ?, ?, ?)`,
+          [uuidv4(), id, inspection.part_number || null, inspection.supplier || null, req.user.id, alert_notes || null, now]
+        );
+      } catch (_) {}
+    }
+    const updated = db.get('SELECT * FROM inspections WHERE id = ?', [id]);
+    updated.section_data = JSON.parse(updated.section_data || '{}');
     res.json({ inspection: updated });
   } catch (err) { next(err); }
 });
+
 
 router.patch('/:id/assign', (req, res, next) => {
   try {

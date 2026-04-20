@@ -1,6 +1,6 @@
 import { PFN_COLORS } from '../../lib/constants'
 
-export default function PFNToggle({ value, onChange, readOnly = false, options = ['P', 'F', 'N'] }) {
+export default function PFNToggle({ value, onChange, readOnly = false, options = ['P', 'F', 'A'] }) {
   return (
     <div className="flex gap-1">
       {options.map(opt => (
@@ -8,7 +8,7 @@ export default function PFNToggle({ value, onChange, readOnly = false, options =
           key={opt}
           type="button"
           disabled={readOnly}
-          onClick={() => !readOnly && onChange(opt)}
+          onClick={() => !readOnly && onChange(value === opt ? '' : opt)}
           className={`w-10 h-10 sm:w-9 sm:h-9 text-sm sm:text-xs font-bold rounded border transition-colors ${
             value === opt
               ? PFN_COLORS[opt] || 'bg-blue-100 text-blue-700 border-blue-300'

@@ -610,13 +610,34 @@ function UsersTab({ showToast }) {
     },
   })
 
+  function parsePerms(user) {
+    try {
+      const p = user.permissions ? (typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions) : null
+      return p?.tabs || null
+    } catch (_) { return null }
+  }
+
+  const ALL_PAGES = [
+    { key: 'dashboard',      label: 'Dashboard' },
+    { key: 'my_inspections', label: 'My Inspections' },
+    { key: 'inspections',    label: 'Inspections' },
+    { key: 'new_inspection', label: 'New Inspection' },
+    { key: 'ncrs',           label: 'NCRs' },
+    { key: 'quality_alerts', label: 'Quality Alerts' },
+    { key: 'drawings',       label: 'Drawings' },
+  ]
+
   function startEdit(user) {
     setEditingId(user.id)
+    const tabs = parsePerms(user)
     setEditForm({
       name: user.name,
       email: user.email,
       role: user.role,
       active: user.active,
+      // null = no restrictions; array = explicit list
+      permTabs: tabs,
+      usePermissions: tabs !== null,
     })
   }
 
@@ -628,6 +649,8 @@ function UsersTab({ showToast }) {
       role: 'inspector',
       password: '',
       active: 1,
+      permTabs: null,
+      usePermissions: false,
     })
   }
 
@@ -709,6 +732,53 @@ function UsersTab({ showToast }) {
               </div>
             )}
           </div>
+          {/* Page Permissions */}
+          {editForm && (editForm.role === 'inspector' || editForm.role === 'qc_manager') && (
+            <div className="pt-2 border-t border-gray-100 space-y-3">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="usePerms"
+                  checked={!!editForm.usePermissions}
+                  onChange={e => setEditForm(f => ({
+                    ...f,
+                    usePermissions: e.target.checked,
+                    permTabs: e.target.checked ? (f.permTabs || ALL_PAGES.map(p => p.key)) : null,
+                  }))}
+                  className="w-4 h-4 accent-pdi-navy"
+                />
+                <label htmlFor="usePerms" className="text-sm font-medium text-gray-700">Restrict page access</label>
+              </div>
+              {editForm.usePermissions && (
+                <div>
+                  <p className="text-xs text-gray-500 mb-2">Select which pages this user can see:</p>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {ALL_PAGES.map(page => {
+                      const checked = editForm.permTabs ? editForm.permTabs.includes(page.key) : true
+                      return (
+                        <label key={page.key} className="flex items-center gap-2 text-sm cursor-pointer hover:text-pdi-navy">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={e => {
+                              const current = editForm.permTabs || ALL_PAGES.map(p => p.key)
+                              const next = e.target.checked
+                                ? [...current, page.key]
+                                : current.filter(k => k !== page.key)
+                              setEditForm(f => ({ ...f, permTabs: next }))
+                            }}
+                            className="w-4 h-4 accent-pdi-navy"
+                          />
+                          {page.label}
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3 pt-2 border-t border-gray-100">
             <button onClick={() => { setEditingId(null); setCreating(false); setEditForm(null) }} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
             <button onClick={handleSave} className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[40px]">

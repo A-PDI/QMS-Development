@@ -1,11 +1,13 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Edit, Paperclip, Loader2, X, Printer, Mail, AlertTriangle } from 'lucide-react'
-import { useInspection } from '../hooks/useInspections'
+import { Edit, Paperclip, Loader2, X, Printer, Mail, AlertTriangle, Bell, CheckSquare, UserPlus } from 'lucide-react'
+import { useInspection, useAssignInspection } from '../hooks/useInspections'
 import { useTemplate } from '../hooks/useTemplates'
 import { useAttachments, useUploadAttachment, useDeleteAttachment } from '../hooks/useAttachments'
 import { useToast } from '../hooks/useToast'
 import { getUser } from '../lib/auth'
+import { useQueryClient } from '@tanstack/react-query'
+import api from '../lib/api'
 import StatusBadge from '../components/StatusBadge'
 import SectionReceiving from '../components/inspection/SectionReceiving'
 import SectionVisual from '../components/inspection/SectionVisual'
@@ -19,7 +21,6 @@ import SectionVacuumTest from '../components/inspection/SectionVacuumTest'
 import FileUploadZone from '../components/FileUploadZone'
 import { formatDate, formatDateTime, formatFileSize } from '../lib/utils'
 import { HEADER_FIELD_LABELS, DISPOSITION_COLORS } from '../lib/constants'
-import api from '../lib/api'
 
 const SECTION_COMPONENTS = {
   pfn_checklist: SectionReceiving,
@@ -46,6 +47,17 @@ export default function InspectionDetail() {
   const deleteFile = useDeleteAttachment()
 
   const [pdfLoading, setPdfLoading] = useState(false)
+  const [showReviewModal, setShowReviewModal] = useState(false)
+  const [reviewNotes, setReviewNotes] = useState('')
+  const [reviewSubmitting, setReviewSubmitting] = useState(false)
+  const qc = useQueryClient()
+  const isAdminRole = user && (user.role === 'admin' || user.role === 'qc_manager')
+  const assignInspection = useAssignInspection()
+  const [showAssignModal, setShowAssignModal] = useState(false)
+  const [assignUserId, setAssignUserId] = useState('')
+  const [assignDueDate, setAssignDueDate] = useState('')
+  const [assignSubmitting, setAssignSubmitting] = useState(false)
+  const [usersList, setUsersList] = useState([])
 
   function handleEmail() {
     const subject = encodeURIComponent(`PDI Inspection ${inspection.form_no} — ${inspection.part_number || 'No part #'}`)
@@ -96,8 +108,122 @@ export default function InspectionDetail() {
   const headerFields = typeof template.header_schema === 'string' ? JSON.parse(template.header_schema) : template.header_schema
   const canEdit = inspection.status === 'draft'
 
+  async function handleReview(createAlert) {
+    setReviewSubmitting(true)
+    try {
+      await api.post(`/inspections/${id}/review`, { create_alert: createAlert, alert_notes: reviewNotes })
+      qc.invalidateQueries({ queryKey: ['inspection', id] })
+      setShowReviewModal(false)
+      showToast(createAlert ? 'Inspection approved and Quality Alert created' : 'Inspection approved', 'success')
+    } catch (err) {
+      showToast(err?.response?.data?.error || 'Review failed', 'error')
+    } finally {
+      setReviewSubmitting(false)
+    }
+  }
+
   return (
     <div>
+      {/* Assign modal for admins */}
+      {showAssignModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="flex-shrink-0 w-10 h-10 bg-pdi-navy/10 rounded-full flex items-center justify-center">
+                <UserPlus size={18} className="text-pdi-navy" />
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">Assign Inspection</h3>
+                <p className="text-sm text-gray-500 mt-0.5">Assign this inspection to an inspector with an optional due date.</p>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Inspector</label>
+                <select
+                  value={assignUserId}
+                  onChange={e => setAssignUserId(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+                >
+                  <option value="">— Select inspector —</option>
+                  {usersList.filter(u => u.active).map(u => (
+                    <option key={u.id} value={u.id}>{u.name} ({u.role.replace('_', ' ')})</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Due Date (optional)</label>
+                <input
+                  type="date"
+                  value={assignDueDate}
+                  onChange={e => setAssignDueDate(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setShowAssignModal(false)}
+                className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]"
+              >Cancel</button>
+              <button
+                onClick={handleAssign}
+                disabled={!assignUserId || assignSubmitting}
+                className="px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[40px] disabled:opacity-50"
+              >{assignSubmitting ? 'Assigning…' : 'Assign'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Review modal for admins */}
+      {showReviewModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="flex-shrink-0 w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center">
+                <Bell size={18} className="text-amber-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">Review Inspection</h3>
+                <p className="text-sm text-gray-600 mt-1">
+                  This inspection has Accepted items. Approve it and optionally create a Quality Alert.
+                </p>
+              </div>
+            </div>
+            <textarea
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+              rows={3}
+              placeholder="Quality alert notes (optional)..."
+              value={reviewNotes}
+              onChange={e => setReviewNotes(e.target.value)}
+            />
+            <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
+              <button
+                onClick={() => setShowReviewModal(false)}
+                className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleReview(false)}
+                disabled={reviewSubmitting}
+                className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 min-h-[40px] disabled:opacity-50"
+              >
+                Approve (No Alert)
+              </button>
+              <button
+                onClick={() => handleReview(true)}
+                disabled={reviewSubmitting}
+                className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600 min-h-[40px] disabled:opacity-50"
+              >
+                <Bell size={14} /> Approve + Quality Alert
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header — stacks on mobile, single row on desktop */}
       <div className="sticky top-0 z-10 bg-white border-b border-gray-200 shadow-sm">
         {/* Title line */}
@@ -126,6 +252,26 @@ export default function InspectionDetail() {
               <span className="hidden sm:inline">Edit</span>
             </button>
           )}
+          {isAdminRole && canEdit && (
+            <button
+              onClick={() => { setAssignUserId(inspection.assigned_to || ''); setAssignDueDate(inspection.due_date || ''); setShowAssignModal(true) }}
+              title="Assign"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-slate-600 text-white rounded-lg hover:bg-slate-700 active:bg-slate-800 min-h-[40px] flex-shrink-0"
+            >
+              <UserPlus size={14} />
+              <span className="hidden sm:inline">Assign</span>
+            </button>
+          )}
+          {inspection.status === 'pending_review' && isAdminRole && (
+            <button
+              onClick={() => setShowReviewModal(true)}
+              title="Review"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600 active:bg-amber-700 min-h-[40px] flex-shrink-0"
+            >
+              <CheckSquare size={14} />
+              <span className="hidden sm:inline">Review</span>
+            </button>
+          )}
           <button
             onClick={() => navigate(`/ncrs/new?inspection_id=${id}`)}
             title="NCR"
@@ -134,23 +280,27 @@ export default function InspectionDetail() {
             <AlertTriangle size={14} />
             <span className="hidden sm:inline">NCR</span>
           </button>
-          <button
-            onClick={handleDownloadPdf}
-            disabled={pdfLoading}
-            title="Print / PDF"
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 active:bg-purple-800 disabled:opacity-50 min-h-[40px] flex-shrink-0"
-          >
-            {pdfLoading ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
-            <span className="hidden sm:inline">{pdfLoading ? 'Generating…' : 'Print'}</span>
-          </button>
-          <button
-            onClick={handleEmail}
-            title="Email"
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 active:bg-indigo-700 min-h-[40px] flex-shrink-0"
-          >
-            <Mail size={14} />
-            <span className="hidden sm:inline">Email</span>
-          </button>
+          {inspection.status !== 'pending_review' && (
+            <>
+              <button
+                onClick={handleDownloadPdf}
+                disabled={pdfLoading}
+                title="Print / PDF"
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 active:bg-purple-800 disabled:opacity-50 min-h-[40px] flex-shrink-0"
+              >
+                {pdfLoading ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
+                <span className="hidden sm:inline">{pdfLoading ? 'Generating…' : 'Print'}</span>
+              </button>
+              <button
+                onClick={handleEmail}
+                title="Email"
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 active:bg-indigo-700 min-h-[40px] flex-shrink-0"
+              >
+                <Mail size={14} />
+                <span className="hidden sm:inline">Email</span>
+              </button>
+            </>
+          )}
           <button
             onClick={() => navigate('/inspections')}
             title="Close"
@@ -163,6 +313,20 @@ export default function InspectionDetail() {
       </div>
 
       <div className="max-w-[1440px] mx-auto p-3 sm:p-6 space-y-3 sm:space-y-4">
+        {/* Pending review notice */}
+        {inspection.status === 'pending_review' && (
+          <div className={`rounded-xl border p-3 sm:p-4 flex items-start gap-3 ${isAdminRole ? 'bg-amber-50 border-amber-200' : 'bg-amber-50 border-amber-200'}`}>
+            <AlertTriangle size={18} className="text-amber-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <div className="text-sm font-semibold text-amber-800">Pending Admin Review</div>
+              <div className="text-xs text-amber-700 mt-0.5">
+                {isAdminRole
+                  ? 'This inspection has Accepted items and needs your review before it can be printed or shared. Click "Review" to approve.'
+                  : 'This inspection has been submitted and is awaiting admin review. Printing and sharing are locked until approved.'}
+              </div>
+            </div>
+          </div>
+        )}
         {/* Header details */}
         <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-5">
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-4 sm:gap-x-6 gap-y-2.5 sm:gap-y-3">

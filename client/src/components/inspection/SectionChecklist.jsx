@@ -1,4 +1,13 @@
+import PFNToggle from './PFNToggle'
 import ItemAttachment from './ItemAttachment'
+
+// Normalize old {pass:bool, fail:bool} format to new {result:'P'|'F'|'A'|''}
+function normalizeRow(row) {
+  if (row.result !== undefined) return row
+  if (row.pass === true) return { ...row, result: 'P' }
+  if (row.fail === true) return { ...row, result: 'F' }
+  return { ...row, result: '' }
+}
 
 export default function SectionChecklist({
   section,
@@ -12,16 +21,23 @@ export default function SectionChecklist({
   uploadingKey,
 }) {
   function update(id, field, value) {
-    let next = data.map(row => {
+    const next = data.map(row => {
       if (row.id !== id) return row
-      if (field === 'pass' && value) return { ...row, pass: true, fail: false }
-      if (field === 'fail' && value) return { ...row, pass: false, fail: true }
-      return { ...row, [field]: value }
+      const norm = normalizeRow(row)
+      return { ...norm, [field]: value }
     })
     onChange(next)
   }
 
   const showImages = !!sectionKey && !!onUploadItem
+
+  function rowBg(row) {
+    const r = normalizeRow(row)
+    if (r.result === 'F') return 'bg-red-50 border-red-200'
+    if (r.result === 'A') return 'bg-amber-50 border-amber-200'
+    if (r.result === 'P') return 'bg-green-50 border-green-200'
+    return 'bg-white border-gray-200'
+  }
 
   return (
     <>
@@ -32,8 +48,7 @@ export default function SectionChecklist({
             <tr className="bg-gray-100">
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-8">#</th>
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Inspection Item</th>
-              <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 w-14">Pass</th>
-              <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 w-14">Fail</th>
+              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-28">Result</th>
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-48">Notes</th>
               {showImages && (
                 <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 w-24">Image</th>
@@ -42,13 +57,16 @@ export default function SectionChecklist({
           </thead>
           <tbody>
             {section.items.map(item => {
-              const row = data.find(r => r.id === item.id) || { id: item.id, pass: false, fail: false, notes: '' }
-              const failNeedsNotes = row.fail && !row.notes?.trim()
+              const rawRow = data.find(r => r.id === item.id) || { id: item.id, notes: '' }
+              const row = normalizeRow(rawRow)
+              const isFail = row.result === 'F'
+              const isAccepted = row.result === 'A'
+              const needsNotes = (isFail || isAccepted) && !row.notes?.trim()
               return (
                 <tr
                   key={item.id}
                   className={`border-b border-gray-100 hover:bg-gray-50 ${
-                    row.fail ? 'bg-red-50' : row.pass ? 'bg-green-50' : ''
+                    isFail ? 'bg-red-50' : isAccepted ? 'bg-amber-50' : row.result === 'P' ? 'bg-green-50' : ''
                   }`}
                 >
                   <td className="px-3 py-2 text-gray-500 align-top pt-3">{item.id}</td>
@@ -64,40 +82,29 @@ export default function SectionChecklist({
                       <span>{item.description}</span>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-center align-top pt-3">
-                    <input
-                      type="checkbox"
-                      checked={!!row.pass}
-                      disabled={readOnly}
-                      onChange={e => update(item.id, 'pass', e.target.checked)}
-                      className="w-4 h-4 accent-green-600"
-                    />
-                  </td>
-                  <td className="px-3 py-2 text-center align-top pt-3">
-                    <input
-                      type="checkbox"
-                      checked={!!row.fail}
-                      disabled={readOnly}
-                      onChange={e => update(item.id, 'fail', e.target.checked)}
-                      className="w-4 h-4 accent-red-600"
+                  <td className="px-3 py-2 align-top pt-3">
+                    <PFNToggle
+                      value={row.result}
+                      onChange={v => update(item.id, 'result', v)}
+                      readOnly={readOnly}
                     />
                   </td>
                   <td className="px-3 py-2 align-top pt-3">
                     {readOnly ? (
-                      <span className="text-xs text-gray-600">{row.notes || '—'}</span>
+                      <span className="text-xs text-gray-600">{row.notes || '\u2014'}</span>
                     ) : (
                       <div>
                         <input
                           type="text"
                           className={`w-full text-xs border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-pdi-navy ${
-                            failNeedsNotes ? 'border-red-400 bg-red-50' : 'border-gray-200'
+                            needsNotes ? 'border-red-400 bg-red-50' : isAccepted ? 'border-amber-300' : 'border-gray-200'
                           }`}
-                          value={row.notes}
+                          value={row.notes || ''}
                           onChange={e => update(item.id, 'notes', e.target.value)}
-                          placeholder={row.fail ? 'Description required…' : 'Notes…'}
+                          placeholder={isFail ? 'Description required\u2026' : isAccepted ? 'Description required for Accepted\u2026' : 'Notes\u2026'}
                         />
-                        {failNeedsNotes && (
-                          <span className="text-xs text-red-500">Required for failed item</span>
+                        {needsNotes && (
+                          <span className="text-xs text-red-500">Description required</span>
                         )}
                       </div>
                     )}
@@ -107,7 +114,7 @@ export default function SectionChecklist({
                       <ItemAttachment
                         sectionKey={sectionKey}
                         itemId={item.id}
-                        isFail={!!row.fail}
+                        isFail={isFail || isAccepted}
                         attachments={attachments}
                         onUpload={onUploadItem}
                         onDelete={onDeleteItem}
@@ -126,15 +133,13 @@ export default function SectionChecklist({
       {/* Mobile card list */}
       <div className="md:hidden space-y-3">
         {section.items.map(item => {
-          const row = data.find(r => r.id === item.id) || { id: item.id, pass: false, fail: false, notes: '' }
-          const failNeedsNotes = row.fail && !row.notes?.trim()
+          const rawRow = data.find(r => r.id === item.id) || { id: item.id, notes: '' }
+          const row = normalizeRow(rawRow)
+          const isFail = row.result === 'F'
+          const isAccepted = row.result === 'A'
+          const needsNotes = (isFail || isAccepted) && !row.notes?.trim()
           return (
-            <div
-              key={item.id}
-              className={`border rounded-lg p-3 ${
-                row.fail ? 'bg-red-50 border-red-200' : row.pass ? 'bg-green-50 border-green-200' : 'bg-white border-gray-200'
-              }`}
-            >
+            <div key={item.id} className={`border rounded-lg p-3 ${rowBg(rawRow)}`}>
               <div className="flex items-baseline gap-1.5">
                 <span className="text-xs text-gray-400 font-mono">#{item.id}</span>
                 {item.name ? (
@@ -148,50 +153,19 @@ export default function SectionChecklist({
                   <span className="text-sm text-gray-800 min-w-0 flex-1">{item.description}</span>
                 )}
               </div>
-              {/* Pass/Fail toggle buttons — larger touch targets */}
               <div className="flex items-center gap-2 mt-3 flex-wrap">
-                <button
-                  type="button"
-                  disabled={readOnly}
-                  onClick={() => update(item.id, 'pass', !row.pass)}
-                  className={`flex items-center gap-1.5 px-3 py-2 text-sm font-semibold rounded border min-h-[40px] ${
-                    row.pass
-                      ? 'bg-green-100 text-green-700 border-green-300'
-                      : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'
-                  } ${readOnly ? 'cursor-default' : 'cursor-pointer'}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={!!row.pass}
-                    readOnly
-                    className="w-4 h-4 accent-green-600 pointer-events-none"
-                  />
-                  Pass
-                </button>
-                <button
-                  type="button"
-                  disabled={readOnly}
-                  onClick={() => update(item.id, 'fail', !row.fail)}
-                  className={`flex items-center gap-1.5 px-3 py-2 text-sm font-semibold rounded border min-h-[40px] ${
-                    row.fail
-                      ? 'bg-red-100 text-red-700 border-red-300'
-                      : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'
-                  } ${readOnly ? 'cursor-default' : 'cursor-pointer'}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={!!row.fail}
-                    readOnly
-                    className="w-4 h-4 accent-red-600 pointer-events-none"
-                  />
-                  Fail
-                </button>
+                <span className="text-xs text-gray-500">Result:</span>
+                <PFNToggle
+                  value={row.result}
+                  onChange={v => update(item.id, 'result', v)}
+                  readOnly={readOnly}
+                />
                 {showImages && (
                   <div className="ml-auto">
                     <ItemAttachment
                       sectionKey={sectionKey}
                       itemId={item.id}
-                      isFail={!!row.fail}
+                      isFail={isFail || isAccepted}
                       attachments={attachments}
                       onUpload={onUploadItem}
                       onDelete={onDeleteItem}
@@ -201,23 +175,22 @@ export default function SectionChecklist({
                   </div>
                 )}
               </div>
-              {/* Notes */}
               <div className="mt-2">
                 {readOnly ? (
-                  <div className="text-sm text-gray-700">{row.notes || '—'}</div>
+                  <div className="text-sm text-gray-700">{row.notes || '\u2014'}</div>
                 ) : (
                   <>
                     <input
                       type="text"
                       className={`w-full text-sm border rounded px-2 py-2 focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px] ${
-                        failNeedsNotes ? 'border-red-400 bg-red-50' : 'border-gray-200'
+                        needsNotes ? 'border-red-400 bg-red-50' : isAccepted ? 'border-amber-300' : 'border-gray-200'
                       }`}
-                      value={row.notes}
+                      value={row.notes || ''}
                       onChange={e => update(item.id, 'notes', e.target.value)}
-                      placeholder={row.fail ? 'Description required…' : 'Notes…'}
+                      placeholder={isFail ? 'Description required\u2026' : isAccepted ? 'Description required for Accepted\u2026' : 'Notes\u2026'}
                     />
-                    {failNeedsNotes && (
-                      <span className="text-xs text-red-500">Required for failed item</span>
+                    {needsNotes && (
+                      <span className="text-xs text-red-500">Description required</span>
                     )}
                   </>
                 )}

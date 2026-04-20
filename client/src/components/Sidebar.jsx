@@ -1,19 +1,20 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, ClipboardList, PlusCircle, LogOut, Shield, AlertTriangle, Settings, X, Bell, User, BarChart2 } from 'lucide-react'
+import { LayoutDashboard, ClipboardList, PlusCircle, LogOut, Shield, AlertTriangle, Settings, X, Bell, User, BarChart2, FileImage } from 'lucide-react'
 import { useMsal } from '@azure/msal-react'
 import { isEntraConfigured } from '../lib/msalConfig'
 import { getUser, clearAuth } from '../lib/auth'
 import { useQualityAlertCount } from '../hooks/useQualityAlerts'
 
 const nav = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
-  { to: '/my-inspections', icon: User, label: 'My Inspections' },
-  { to: '/inspections', icon: ClipboardList, label: 'Inspections' },
-  { to: '/inspections/new', icon: PlusCircle, label: 'New Inspection', accent: true },
-  { to: '/ncrs', icon: AlertTriangle, label: 'NCRs' },
-  { to: '/quality-alerts', icon: Bell, label: 'Quality Alerts', alertKey: 'qualityAlerts' },
-  { to: '/reports', icon: BarChart2, label: 'Reports', adminOnly: true },
-  { to: '/admin', icon: Settings, label: 'Admin', adminOnly: true },
+  { to: '/',                icon: LayoutDashboard, label: 'Dashboard',       end: true, permKey: 'dashboard' },
+  { to: '/my-inspections',  icon: User,            label: 'My Inspections',             permKey: 'my_inspections' },
+  { to: '/inspections',     icon: ClipboardList,   label: 'Inspections',                permKey: 'inspections' },
+  { to: '/inspections/new', icon: PlusCircle,      label: 'New Inspection', accent: true, permKey: 'new_inspection' },
+  { to: '/ncrs',            icon: AlertTriangle,   label: 'NCRs',                       permKey: 'ncrs' },
+  { to: '/quality-alerts',  icon: Bell,            label: 'Quality Alerts', alertKey: 'qualityAlerts', permKey: 'quality_alerts' },
+  { to: '/drawings',        icon: FileImage,       label: 'Drawings',                   permKey: 'drawings' },
+  { to: '/reports',         icon: BarChart2,       label: 'Reports',        adminOnly: true },
+  { to: '/admin',           icon: Settings,        label: 'Admin',          adminOnly: true },
 ]
 
 function EntraSignOutButton({ onAfter }) {
@@ -58,6 +59,21 @@ export default function Sidebar({ open = false, onClose }) {
 
   const isAdminRole = user && (user.role === 'admin' || user.role === 'qc_manager')
 
+  // Parse per-user page permissions (null = no restrictions = show all)
+  let allowedTabs = null
+  if (user?.permissions && !isAdminRole) {
+    try {
+      const perms = typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions
+      if (Array.isArray(perms?.tabs)) allowedTabs = perms.tabs
+    } catch (_) {}
+  }
+
+  function isNavVisible(item) {
+    if (item.adminOnly) return isAdminRole
+    if (allowedTabs && item.permKey && !allowedTabs.includes(item.permKey)) return false
+    return true
+  }
+
   return (
     <>
       {open && (
@@ -96,8 +112,8 @@ export default function Sidebar({ open = false, onClose }) {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-3 py-5 space-y-1">
-          {nav.map(({ to, icon: Icon, label, end, accent, adminOnly, alertKey }) => {
-            if (adminOnly && !isAdminRole) return null
+          {nav.map(({ to, icon: Icon, label, end, accent, adminOnly, alertKey, permKey }) => {
+            if (!isNavVisible({ adminOnly, permKey })) return null
             return (
               <NavLink
                 key={to}
