@@ -54,7 +54,7 @@ export default function Drawings() {
     setUploading(true)
     try {
       const fd = new FormData()
-      fd.append('file', uploadFile)
+      fd.append('drawing', uploadFile)
       fd.append('part_number', uploadForm.part_number)
       fd.append('version', uploadForm.version)
       fd.append('notes', uploadForm.notes)

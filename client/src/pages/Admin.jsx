@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Printer, Search, Save, X, ChevronDown, ChevronUp, Users, FileImage, Download, AlertTriangle, Loader2 } from 'lucide-react'
+import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Printer, Search, Save, X, ChevronDown, ChevronUp, Users, FileImage, Download, AlertTriangle, Loader2, ClipboardCheck, UserCheck } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '../lib/api'
 import { useInspections, useDeleteInspection } from '../hooks/useInspections'
@@ -17,6 +17,7 @@ const TABS = [
   { id: 'specs',    label: 'Part Specifications', shortLabel: 'Specs',  icon: Package },
   { id: 'users',    label: 'User Management',    shortLabel: 'Users',   icon: Users },
   { id: 'drawings', label: 'Engineering Drawings', shortLabel: 'Drawings', icon: FileImage },
+  { id: 'assign',   label: 'Assignments',         shortLabel: 'Assign',  icon: ClipboardCheck },
   { id: 'data',     label: 'Inspection Data',    shortLabel: 'Data',    icon: Database },
 ]
 
@@ -1051,6 +1052,213 @@ function DrawingsTab({ showToast }) {
 
 // ── Main Admin page ───────────────────────────────────────────────────────────
 
+
+// ── Assign Inspection Tab ─────────────────────────────────────────────────────
+function AssignTab({ showToast }) {
+  const { data: templates = [], isLoading: tplLoading } = useTemplates()
+  const createInspection = useCreateInspection()
+  const qc = useQueryClient()
+
+  const [users, setUsers] = useState([])
+  const [assignments, setAssignments] = useState([])
+  const [loadingData, setLoadingData] = useState(true)
+  const [showModal, setShowModal] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [form, setForm] = useState({
+    template_id: '', assigned_to: '', part_number: '', po_number: '', due_date: '', inspector_name: ''
+  })
+
+  useEffect(() => {
+    Promise.all([
+      api.get('/admin/users').then(r => r.data.users || []),
+      api.get('/inspections?status=draft&limit=100').then(r => r.data.inspections || []),
+    ]).then(([u, ins]) => {
+      setUsers(u.filter(x => x.active))
+      setAssignments(ins.filter(i => i.assigned_to))
+    }).catch(() => {}).finally(() => setLoadingData(false))
+  }, [])
+
+  function resetForm() {
+    setForm({ template_id: '', assigned_to: '', part_number: '', po_number: '', due_date: '', inspector_name: '' })
+  }
+
+  async function handleCreate(e) {
+    e.preventDefault()
+    if (!form.template_id || !form.assigned_to) {
+      showToast('Template and assignee are required', 'error'); return
+    }
+    setSubmitting(true)
+    try {
+      const assignee = users.find(u => u.id === form.assigned_to)
+      await createInspection.mutateAsync({
+        template_id: form.template_id,
+        assigned_to: form.assigned_to,
+        due_date: form.due_date || null,
+        part_number: form.part_number || null,
+        po_number: form.po_number || null,
+        inspector_name: form.inspector_name || assignee?.name || null,
+      })
+      // Refresh assignments list
+      const r = await api.get('/inspections?status=draft&limit=100')
+      const all = r.data.inspections || []
+      setAssignments(all.filter(i => i.assigned_to))
+      setShowModal(false)
+      resetForm()
+      showToast('Inspection assigned', 'success')
+    } catch (err) {
+      showToast(err?.response?.data?.error || 'Failed to assign inspection', 'error')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const getUserName = id => users.find(u => u.id === id)?.name || id
+
+  return (
+    <div className="space-y-4">
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="flex-shrink-0 w-10 h-10 bg-pdi-navy/10 rounded-full flex items-center justify-center">
+                <UserCheck size={18} className="text-pdi-navy" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-semibold text-gray-900">Assign Inspection</h3>
+                <p className="text-sm text-gray-500 mt-0.5">Create a new inspection and assign it to an inspector.</p>
+              </div>
+              <button onClick={() => { setShowModal(false); resetForm() }} className="p-1.5 text-gray-400 hover:text-gray-600 rounded">
+                <X size={16} />
+              </button>
+            </div>
+            <form onSubmit={handleCreate} className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Inspection Form / Template <span className="text-red-500">*</span></label>
+                <select
+                  value={form.template_id}
+                  onChange={e => setForm(f => ({ ...f, template_id: e.target.value }))}
+                  required
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+                >
+                  <option value="">— Select form —</option>
+                  {templates.map(t => (
+                    <option key={t.id} value={t.id}>{t.form_no} · {t.title.replace('PDI Incoming Quality Inspection — ', '')}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Assign To <span className="text-red-500">*</span></label>
+                <select
+                  value={form.assigned_to}
+                  onChange={e => {
+                    const u = users.find(x => x.id === e.target.value)
+                    setForm(f => ({ ...f, assigned_to: e.target.value, inspector_name: u?.name || f.inspector_name }))
+                  }}
+                  required
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+                >
+                  <option value="">— Select inspector —</option>
+                  {users.map(u => (
+                    <option key={u.id} value={u.id}>{u.name} ({u.role.replace('_', ' ')})</option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Part Number</label>
+                  <input
+                    type="text"
+                    value={form.part_number}
+                    onChange={e => setForm(f => ({ ...f, part_number: e.target.value }))}
+                    placeholder="e.g. 12345-A"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">PO Number</label>
+                  <input
+                    type="text"
+                    value={form.po_number}
+                    onChange={e => setForm(f => ({ ...f, po_number: e.target.value }))}
+                    placeholder="e.g. PO-12345"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Due Date</label>
+                <input
+                  type="date"
+                  value={form.due_date}
+                  onChange={e => setForm(f => ({ ...f, due_date: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+                <button type="button" onClick={() => { setShowModal(false); resetForm() }} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
+                <button type="submit" disabled={submitting || !form.template_id || !form.assigned_to} className="px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[40px] disabled:opacity-50">
+                  {submitting ? 'Assigning...' : 'Create Assignment'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="px-4 sm:px-5 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-800">Assigned Inspections ({assignments.length})</h3>
+          <button onClick={() => setShowModal(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[36px]">
+            <Plus size={14} /> Assign Inspection
+          </button>
+        </div>
+        {loadingData ? (
+          <div className="text-center text-gray-400 text-sm py-10">Loading...</div>
+        ) : assignments.length === 0 ? (
+          <div className="text-center py-12 px-4">
+            <ClipboardCheck size={32} className="mx-auto mb-3 text-gray-300" />
+            <p className="text-sm text-gray-500">No pending assignments.</p>
+            <p className="text-xs text-gray-400 mt-1">Click "Assign Inspection" to create one.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b border-gray-100">
+                <tr>
+                  {['Form', 'Part Number', 'PO', 'Assigned To', 'Due Date', 'Status'].map(h => (
+                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {assignments.map(insp => (
+                  <tr key={insp.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</td>
+                    <td className="px-4 py-3 font-mono text-xs">{insp.part_number || '—'}</td>
+                    <td className="px-4 py-3 text-xs">{insp.po_number || '—'}</td>
+                    <td className="px-4 py-3 text-sm">{getUserName(insp.assigned_to)}</td>
+                    <td className="px-4 py-3 text-xs text-gray-500">{insp.due_date ? formatDate(insp.due_date) : '—'}</td>
+                    <td className="px-4 py-3"><StatusBadge status={insp.status} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+        <div className="text-sm font-semibold text-blue-800 mb-1">How assignments work</div>
+        <div className="text-xs text-blue-700 space-y-1">
+          <p>• Assigned inspections appear in the inspector's <strong>My Inspections</strong> page.</p>
+          <p>• Inspectors without the <strong>New Inspection</strong> permission can only work on assigned inspections.</p>
+          <p>• You can set due dates and track completion from this panel.</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function DataTab({ navigate }) {
   const { data, isLoading } = useInspections({ limit: 100, page: 1 })
   const deleteInspection = useDeleteInspection()
@@ -1155,6 +1363,7 @@ export default function Admin() {
         {activeTab === 'specs' && <PartSpecsTab showToast={showToast} />}
         {activeTab === 'users' && <UsersTab showToast={showToast} />}
         {activeTab === 'drawings' && <DrawingsTab showToast={showToast} />}
+        {activeTab === 'assign' && <AssignTab showToast={showToast} />}
         {activeTab === 'data' && <DataTab navigate={navigate} />}
       </div>
     </div>

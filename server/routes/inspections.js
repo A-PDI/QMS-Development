@@ -49,17 +49,25 @@ router.get('/', (req, res, next) => {
 
 router.post('/', (req, res, next) => {
   try {
-    const { template_id, part_number, supplier, po_number, description, date_received, inspector_name, lot_size, aql_level, sample_size, lot_serial_no, signature } = req.body;
+    const { template_id, part_number, supplier, po_number, description, date_received, inspector_name, lot_size, aql_level, sample_size, lot_serial_no, signature, assigned_to, due_date } = req.body;
     if (!template_id) return next(new AppError('template_id is required', 400, 'VALIDATION_ERROR'));
     const template = db.get('SELECT * FROM inspection_templates WHERE id = ?', [template_id]);
     if (!template) return next(new AppError('Template not found', 404, 'NOT_FOUND'));
+    if (assigned_to) {
+      const assignee = db.get('SELECT id FROM users WHERE id = ? AND active = 1', [assigned_to]);
+      if (!assignee) return next(new AppError('Assigned user not found', 404, 'NOT_FOUND'));
+    }
     const inspectionId = uuidv4();
     const now = new Date().toISOString();
-    db.run(
-      `INSERT INTO inspections (id, template_id, component_type, form_no, part_number, supplier, po_number, description, date_received, inspector_name, lot_size, aql_level, sample_size, lot_serial_no, signature, status, created_by, created_at, updated_at, section_data, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)`,
-      [inspectionId, template_id, template.component_type, template.form_no, part_number || null, supplier || null, po_number || null, description || null, date_received || null, inspector_name || null, lot_size || null, aql_level || null, sample_size || null, lot_serial_no || null, signature || null, req.user.id, now, now, JSON.stringify({}), now]
+    db.run(`INSERT INTO inspections (id, template_id, component_type, form_no, part_number, supplier, po_number, description, date_received, inspector_name, lot_size, aql_level, sample_size, lot_serial_no, signature, status, created_by, assigned_to, assigned_at, assigned_by, due_date, created_at, updated_at, section_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [inspectionId, template_id, template.component_type, template.form_no,
+       part_number || null, supplier || null, po_number || null, description || null,
+       date_received || null, inspector_name || null, lot_size || null, aql_level || null,
+       sample_size || null, lot_serial_no || null, signature || null,
+       req.user.id, assigned_to || null, assigned_to ? now : null,
+       assigned_to ? req.user.id : null, due_date || null, now, now, JSON.stringify({})]
     );
-    logActivity(inspectionId, 'started', req.user);
+    logActivity(inspectionId, assigned_to ? 'assigned' : 'started', req.user);
     const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [inspectionId]);
     inspection.section_data = JSON.parse(inspection.section_data || '{}');
     res.status(201).json({ inspection });

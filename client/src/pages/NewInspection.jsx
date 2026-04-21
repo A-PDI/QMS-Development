@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Navigate } from 'react-router-dom'
 import { useTemplates } from '../hooks/useTemplates'
 import { useCreateInspection } from '../hooks/useInspections'
 import { useToast } from '../hooks/useToast'
@@ -22,6 +22,12 @@ export default function NewInspection() {
   const create = useCreateInspection()
 
   const currentUser = getUser()
+  // Check if user is allowed to create new inspections
+  const isAdminRole = currentUser && (currentUser.role === 'admin' || currentUser.role === 'qc_manager')
+  const userPerms = (() => {
+    try { return currentUser?.permissions ? JSON.parse(currentUser.permissions) : null } catch { return null }
+  })()
+  const canCreateNew = isAdminRole || !userPerms || (Array.isArray(userPerms?.tabs) && userPerms.tabs.includes('new_inspection'))
   const [templateId, setTemplateId] = useState('')
   const [form, setForm] = useState({ inspector_name: currentUser?.name || '' })
   const [submitting, setSubmitting] = useState(false)
@@ -50,6 +56,9 @@ export default function NewInspection() {
       setSubmitting(false)
     }
   }
+
+  // Redirect restricted users away before rendering
+  if (!canCreateNew) return <Navigate to='/my-inspections' replace />
 
   return (
     /* Full-screen backdrop */

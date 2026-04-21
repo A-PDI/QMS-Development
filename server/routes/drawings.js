@@ -56,20 +56,30 @@ const upload = multer({
 router.get('/', (req, res, next) => {
   try {
     const { part_number } = req.query;
-    if (!part_number) {
-      return next(new AppError('part_number query param is required', 400, 'VALIDATION_ERROR'));
-    }
 
-    const drawings = db.all(
-      `SELECT
-        d.id, d.part_number, d.version, d.file_name, d.mime_type, d.file_size_bytes,
-        d.notes, d.uploaded_by, u.name AS uploaded_by_name, d.is_current, d.created_at
-       FROM engineering_drawings d
-       LEFT JOIN users u ON d.uploaded_by = u.id
-       WHERE d.part_number = ?
-       ORDER BY d.created_at DESC`,
-      [part_number]
-    );
+    let drawings;
+    if (part_number) {
+      drawings = db.all(
+        `SELECT
+          d.id, d.part_number, d.version, d.file_name, d.mime_type, d.file_size_bytes,
+          d.notes, d.uploaded_by, u.name AS uploaded_by_name, d.is_current, d.created_at
+         FROM engineering_drawings d
+         LEFT JOIN users u ON d.uploaded_by = u.id
+         WHERE d.part_number = ?
+         ORDER BY d.created_at DESC`,
+        [part_number]
+      );
+    } else {
+      drawings = db.all(
+        `SELECT
+          d.id, d.part_number, d.version, d.file_name, d.mime_type, d.file_size_bytes,
+          d.notes, d.uploaded_by, u.name AS uploaded_by_name, d.is_current, d.created_at
+         FROM engineering_drawings d
+         LEFT JOIN users u ON d.uploaded_by = u.id
+         ORDER BY d.part_number ASC, d.created_at DESC`,
+        []
+      );
+    }
 
     res.json({ drawings });
   } catch (err) {
