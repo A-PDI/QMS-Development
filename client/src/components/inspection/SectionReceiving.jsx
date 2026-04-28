@@ -149,9 +149,9 @@ export default function SectionReceiving({
                 {readOnly ? (
                   <div className="text-sm text-gray-700">{row.finding || '\u2014'}</div>
                 ) : (
-                  <>
+                  <div>
                     <textarea
-                      className={`w-full text-sm border rounded px-2 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[60px] ${
+                      className={`w-full text-xs border rounded px-2 py-1 resize-none focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[60px] ${
                         needsFinding ? 'border-red-400 bg-red-50' : isAccepted ? 'border-amber-300' : 'border-gray-200'
                       }`}
                       rows={2}
@@ -159,10 +159,8 @@ export default function SectionReceiving({
                       onChange={e => update(item.id, 'finding', e.target.value)}
                       placeholder={isFail ? 'Description required\u2026' : isAccepted ? 'Description required for Accepted item\u2026' : 'Observation\u2026'}
                     />
-                    {needsFinding && (
-                      <span className="text-xs text-red-500">Description required</span>
-                    )}
-                  </>
+                    {needsFinding && <span className="text-xs text-red-500">Description required</span>}
+                  </div>
                 )}
               </div>
             </div>

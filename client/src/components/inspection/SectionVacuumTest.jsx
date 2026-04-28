@@ -80,13 +80,13 @@ export default function SectionVacuumTest({
                       onClick={() => !readOnly && setCylField(cylIdx, 'overall', cyl.overall === 'A' ? '' : 'A')}
                       className={`px-3 py-1.5 sm:px-2 sm:py-0.5 text-xs font-semibold rounded border min-h-[32px] sm:min-h-0 ${cyl.overall === 'A' ? 'bg-amber-100 text-amber-700 border-amber-300' : 'bg-white text-gray-400 border-gray-200 hover:border-gray-400'} ${readOnly ? 'cursor-default' : 'cursor-pointer'}`}
                     >
-                      Accepted
+                      Acc
                     </button>
                   </div>
                   {showImages && (
                     <ItemAttachment
                       sectionKey={sectionKey}
-                      itemId={cylIdx + 1}
+                      itemId={cylIdx}
                       isFail={isFail || isAccepted}
                       attachments={attachments}
                       onUpload={onUploadItem}
@@ -97,35 +97,28 @@ export default function SectionVacuumTest({
                   )}
                 </div>
               </div>
-              {isAccepted && !readOnly && (
-                <div className="mb-2">
-                  <input
-                    type="text"
-                    className={`w-full text-xs border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-pdi-navy ${
-                      needsNotes ? 'border-amber-400 bg-amber-50' : 'border-amber-200'
-                    }`}
-                    value={cyl.notes || ''}
-                    onChange={e => setCylField(cylIdx, 'notes', e.target.value)}
-                    placeholder="Description required for Accepted\u2026"
-                  />
-                  {needsNotes && <span className="text-xs text-amber-600">Description required</span>}
-                </div>
-              )}
-              {isFail && (
-                <div className="mt-2">
-                  <div className="text-xs text-gray-500 mb-1">Complete if Fail:</div>
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
-                    {[['int1','Int 1:'],['int2','Int 2:'],['exh1','Exh 1:'],['exh2','Exh 2:']].map(([field, label]) => (
-                      <div key={field} className="flex items-center gap-1">
-                        <span className="text-xs text-gray-500 w-10 flex-shrink-0">{label}</span>
-                        <div className="flex gap-1">
-                          <PFBtn value={cyl[field]} target="P" onChange={v => setCylField(cylIdx, field, v)} />
-                          <PFBtn value={cyl[field]} target="F" onChange={v => setCylField(cylIdx, field, v)} />
-                        </div>
+              <div className="grid grid-cols-2 gap-1.5 text-xs">
+                {[['int1','Int 1'],['int2','Int 2'],['exh1','Exh 1'],['exh2','Exh 2']].map(([f, label]) => (
+                  <div key={f}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-gray-500">{label}</span>
+                      <div className="flex gap-0.5">
+                        <PFBtn value={cyl[f]} target="P" onChange={v => setCylField(cylIdx, f, v)} />
+                        <PFBtn value={cyl[f]} target="F" onChange={v => setCylField(cylIdx, f, v)} />
                       </div>
-                    ))}
+                    </div>
                   </div>
-                </div>
+                ))}
+              </div>
+              {(isAccepted || needsNotes) && (
+                <input
+                  type="text"
+                  value={cyl.notes || ''}
+                  onChange={e => setCylField(cylIdx, 'notes', e.target.value)}
+                  readOnly={readOnly}
+                  placeholder={needsNotes ? 'Description required…' : 'Notes…'}
+                  className={`mt-2 w-full text-xs border rounded px-2 py-1.5 focus:outline-none min-h-[36px] ${needsNotes ? 'border-amber-400 bg-amber-50' : 'border-gray-200'}`}
+                />
               )}
             </div>
           )

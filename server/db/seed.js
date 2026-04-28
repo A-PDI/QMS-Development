@@ -552,19 +552,4 @@ async function seed() {
       }
     }
 
-    // Deactivate the old standalone IQI-006 (now merged into IQI-005)
-    const old006 = db.get("SELECT id FROM inspection_templates WHERE form_no = ?", ['PDI-IQI-006']);
-    if (old006) {
-      db.run("UPDATE inspection_templates SET active = 0 WHERE form_no = ?", ['PDI-IQI-006']);
-      console.log('[Seed] Deactivated legacy template: PDI-IQI-006 (merged into PDI-IQI-005)');
-    }
-
-    console.log('[Seed] Database seeding complete');
-    process.exit(0);
-  } catch (err) {
-    console.error('[Seed] Error:', err.message);
-    process.exit(1);
-  }
-}
-
-seed();
+    // Deac

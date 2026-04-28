@@ -411,12 +411,11 @@ export default function CustomInspectionBuilder() {
               <button
                 type="submit"
                 disabled={submitting}
-                className="px-5 py-2.5 text-sm font-semibold bg-pdi-teal text-white rounded-lg hover:bg-teal-700 disabled:opacity-50 transition-colors min-h-[44px]"
+                className="px-5 py-2.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-60 transition-colors font-semibold min-h-[44px]"
               >
-                {submitting ? 'Creating…' : 'Create Form & Start Inspection'}
+                {submitting ? 'Creating…' : 'Create Inspection'}
               </button>
             </div>
-
           </div>
         </form>
       </div>

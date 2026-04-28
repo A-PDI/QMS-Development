@@ -95,7 +95,7 @@ export default function SectionCamshaftBore({
               <input
                 type="text"
                 inputMode="decimal"
-                className="w-full text-sm border border-gray-200 rounded px-2 py-2 font-mono text-center focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
+                className="w-full text-sm border border-gray-200 rounded px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[36px]"
                 value={current.bores[i] || ''}
                 onChange={e => setBore(i, e.target.value)}
                 placeholder="0.000"
@@ -105,14 +105,34 @@ export default function SectionCamshaftBore({
         ))}
       </div>
 
-      {/* Overall result row */}
-      <div className={`flex flex-wrap items-center gap-3 pt-2 border-t border-gray-100 ${isAccepted ? 'bg-amber-50 -mx-3 px-3 py-2 rounded' : isFail ? 'bg-red-50 -mx-3 px-3 py-2 rounded' : ''}`}>
-        <span className="text-sm font-medium text-gray-700">Overall Result:</span>
-        <PFNToggle
-          value={current.result}
-          onChange={v => set('result', v)}
-          readOnly={readOnly}
-        />
+      {/* Result + Notes */}
+      <div className="flex flex-col sm:flex-row sm:items-start gap-3 pt-2 border-t border-gray-100">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-gray-700">Result:</span>
+          <PFNToggle
+            value={current.result}
+            onChange={v => set('result', v)}
+            readOnly={readOnly}
+          />
+        </div>
+        <div className="flex-1">
+          {readOnly ? (
+            <span className="text-sm text-gray-600">{current.notes || '\u2014'}</span>
+          ) : (
+            <div>
+              <input
+                type="text"
+                className={`w-full text-sm border rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[36px] ${
+                  needsNotes ? 'border-amber-400 bg-amber-50' : 'border-gray-200'
+                }`}
+                value={current.notes || ''}
+                onChange={e => set('notes', e.target.value)}
+                placeholder={isAccepted ? 'Description required\u2026' : 'Notes\u2026'}
+              />
+              {needsNotes && <span className="text-xs text-amber-600 mt-0.5 block">Description required</span>}
+            </div>
+          )}
+        </div>
         {showImages && (
           <ItemAttachment
             sectionKey={sectionKey}
@@ -126,23 +146,6 @@ export default function SectionCamshaftBore({
           />
         )}
       </div>
-      {isAccepted && !readOnly && (
-        <div>
-          <input
-            type="text"
-            className={`w-full text-sm border rounded px-2 py-2 focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px] ${
-              needsNotes ? 'border-amber-400 bg-amber-50' : 'border-amber-200'
-            }`}
-            value={current.notes || ''}
-            onChange={e => set('notes', e.target.value)}
-            placeholder="Description required for Accepted\u2026"
-          />
-          {needsNotes && <span className="text-xs text-amber-600">Description required for Accepted items</span>}
-        </div>
-      )}
-      {readOnly && isAccepted && current.notes && (
-        <div className="text-sm text-gray-600 bg-amber-50 border border-amber-200 rounded p-2">{current.notes}</div>
-      )}
     </div>
   )
 }

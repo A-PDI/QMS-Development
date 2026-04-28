@@ -80,28 +80,17 @@ export const NCR_SEVERITY_COLORS = {
   major:    'bg-orange-100 text-orange-700 border-orange-300',
   critical: 'bg-red-100 text-red-700 border-red-300',
 }
-
-export const NCR_STATUS_LABELS = { open: 'Open', pending_supplier: 'Pending Supplier', closed: 'Closed' }
-export const NCR_STATUS_COLORS = {
-  open:             'bg-red-100 text-red-700 border-red-300',
-  pending_supplier: 'bg-yellow-100 text-yellow-700 border-yellow-300',
-  closed:           'bg-gray-100 text-gray-500 border-gray-300',
-}
-
+export const NCR_STATUS_LABELS  = { open: 'Open', closed: 'Closed', in_progress: 'In Progress' }
 export const NCR_DISPOSITION_LABELS = {
-  pending:              'Pending',
-  use_as_is:            'Use As-Is',
-  rework:               'Rework',
-  return_to_supplier:   'Return to Supplier',
-  scrap:                'Scrap',
+  accepted_as_is: 'Accepted As-Is',
+  rework: 'Rework',
+  return_to_supplier: 'Return to Supplier',
+  scrap: 'Scrap',
+  use_as_is: 'Use As-Is',
+  other: 'Other',
 }
-
-export const PAGE_PERMISSION_KEYS = [
-  { key: 'dashboard',      label: 'Dashboard' },
-  { key: 'my_inspections', label: 'My Inspections' },
-  { key: 'inspections',    label: 'Inspections' },
-  { key: 'new_inspection', label: 'New Inspection' },
-  { key: 'ncrs',           label: 'NCRs' },
-  { key: 'quality_alerts', label: 'Quality Alerts' },
-  { key: 'drawings',       label: 'Engineering Drawings' },
-]
+export const NCR_STATUS_COLORS  = {
+  open:        'bg-blue-100 text-blue-700 ring-1 ring-blue-300',
+  in_progress: 'bg-amber-100 text-amber-700 ring-1 ring-amber-300',
+  closed:      'bg-gray-100 text-gray-500 ring-1 ring-gray-300',
+}

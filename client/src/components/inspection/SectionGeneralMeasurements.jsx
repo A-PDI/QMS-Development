@@ -1,5 +1,6 @@
 import PFNToggle from './PFNToggle'
 import ItemAttachment from './ItemAttachment'
+import { PFN_COLORS } from '../../lib/constants'
 
 const FIELD_LABELS = {
   specification: 'Specification',
@@ -81,31 +82,10 @@ export default function SectionGeneralMeasurements({
                           onChange={e => update(item.id, 'notes', e.target.value)}
                           placeholder={isAccepted ? 'Description required\u2026' : 'Notes\u2026'}
                         />
-                        {needsNotes && <span className="text-xs text-amber-600">Required for Accepted</span>}
+                        {needsNotes && <span className="text-xs text-amber-600 mt-0.5 block">Description required</span>}
                       </div>
                     )}
                   </td>
-                  <td className="px-3 py-2">
-                    <PFNToggle
-                      value={row.result || ''}
-                      onChange={v => update(item.id, 'result', v)}
-                      readOnly={readOnly}
-                    />
-                  </td>
-                  {showImages && (
-                    <td className="px-3 py-2">
-                      <ItemAttachment
-                        sectionKey={sectionKey}
-                        itemId={item.id}
-                        isFail={isFail || isAccepted}
-                        attachments={attachments}
-                        onUpload={onUploadItem}
-                        onDelete={onDeleteItem}
-                        uploadingKey={uploadingKey}
-                        readOnly={readOnly}
-                      />
-                    </td>
-                  )}
                 </tr>
               )
             })}
@@ -113,75 +93,41 @@ export default function SectionGeneralMeasurements({
         </table>
       </div>
 
-      {/* Mobile card list */}
+      {/* Mobile cards */}
       <div className="md:hidden space-y-3">
         {section.items.map(item => {
-          const row = data.find(r => r.id === item.id) || { id: item.id, specification: '', actual_value: '', notes: '', result: '' }
-          const isAccepted = row.result === 'A'
-          const isFail = row.result === 'F'
+          const row = data.find(r => r.id === item.id) || { id: item.id, actual: '', status: '', notes: '' }
+          const isAccepted = row.status === 'A'
           const needsNotes = isAccepted && !row.notes?.trim()
+          const isFail = row.status === 'F'
           return (
             <div key={item.id} className={`border rounded-lg p-3 ${isFail ? 'bg-red-50 border-red-200' : isAccepted ? 'bg-amber-50 border-amber-200' : 'bg-white border-gray-200'}`}>
-              <div className="flex items-baseline gap-1.5 mb-2">
-                <span className="text-xs text-gray-400 font-mono">#{item.id}</span>
-                <div className="font-medium text-sm text-gray-800 min-w-0 flex-1">{item.measurement}</div>
+              <div className="text-xs font-medium text-gray-700 mb-2">{item.measurement || `Item ${item.id}`}</div>
+              <div className="flex gap-2 mb-2">
+                {readOnly ? (
+                  <span className="text-xs font-mono">{row.actual || '—'}</span>
+                ) : (
+                  <input type="text" value={row.actual || ''} onChange={e => update(item.id, 'actual', e.target.value)}
+                    placeholder="Actual…"
+                    className="flex-1 text-xs border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[36px]" />
+                )}
               </div>
-              <div className="space-y-2">
-                {['specification', 'actual_value'].map(field => (
-                  <div key={field}>
-                    <label className="block text-xs text-gray-500 mb-1">{FIELD_LABELS[field]}</label>
-                    {readOnly ? (
-                      <span className="text-sm font-mono">{row[field] || '\u2014'}</span>
-                    ) : (
-                      <input
-                        type="text"
-                        className="w-full text-sm border border-gray-200 rounded px-2 py-2 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
-                        value={row[field] || ''}
-                        onChange={e => update(item.id, field, e.target.value)}
-                      />
-                    )}
-                  </div>
-                ))}
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Notes</label>
-                  {readOnly ? (
-                    <span className="text-sm">{row.notes || '\u2014'}</span>
-                  ) : (
-                    <input
-                      type="text"
-                      className={`w-full text-sm border rounded px-2 py-2 focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px] ${
-                        needsNotes ? 'border-amber-400 bg-amber-50' : 'border-gray-200'
-                      }`}
-                      value={row.notes || ''}
-                      onChange={e => update(item.id, 'notes', e.target.value)}
-                      placeholder={isAccepted ? 'Description required\u2026' : 'Notes\u2026'}
-                    />
-                  )}
-                  {needsNotes && <span className="text-xs text-amber-600">Required for Accepted</span>}
+              {!readOnly && (
+                <div className="flex gap-1.5 mb-1.5">
+                  {['P','F','A'].map(v => (
+                    <button key={v} type="button"
+                      onClick={() => update(item.id, 'status', row.status === v ? '' : v)}
+                      className={`px-2.5 py-1 text-xs font-semibold rounded border min-h-[32px] ${row.status === v ? PFN_COLORS[v] : 'bg-white text-gray-400 border-gray-200'}`}>
+                      {v === 'P' ? 'Pass' : v === 'F' ? 'Fail' : 'Acc'}
+                    </button>
+                  ))}
                 </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs text-gray-500">Result:</span>
-                  <PFNToggle
-                    value={row.result || ''}
-                    onChange={v => update(item.id, 'result', v)}
-                    readOnly={readOnly}
-                  />
-                  {showImages && (
-                    <div className="ml-auto">
-                      <ItemAttachment
-                        sectionKey={sectionKey}
-                        itemId={item.id}
-                        isFail={isFail || isAccepted}
-                        attachments={attachments}
-                        onUpload={onUploadItem}
-                        onDelete={onDeleteItem}
-                        uploadingKey={uploadingKey}
-                        readOnly={readOnly}
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
+              )}
+              {(isAccepted || isFail) && (
+                <input type="text" value={row.notes || ''} onChange={e => update(item.id, 'notes', e.target.value)}
+                  placeholder={needsNotes ? 'Description required…' : 'Notes…'}
+                  className={`w-full text-xs border rounded px-2 py-1.5 focus:outline-none min-h-[36px] ${needsNotes ? 'border-amber-400 bg-amber-50' : 'border-gray-200'}`} />
+              )}
             </div>
           )
         })}

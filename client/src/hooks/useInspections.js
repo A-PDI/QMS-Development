@@ -101,6 +101,17 @@ export function useAssignedInspections() {
   })
 }
 
+export function useInspectionAlerts() {
+  return useQuery({
+    queryKey: ['inspection-alerts'],
+    queryFn: async () => {
+      const { data } = await api.get('/dashboard/alerts')
+      return data
+    },
+    staleTime: 2 * 60 * 1000,
+  })
+}
+
 // Assign an inspection to a user (used by AssignModal)
 export function useAssignInspection() {
   const qc = useQueryClient()

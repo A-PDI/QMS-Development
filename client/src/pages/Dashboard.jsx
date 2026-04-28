@@ -413,12 +413,8 @@ export default function Dashboard() {
                         <div className="font-mono text-xs text-gray-600 mt-0.5">{insp.part_number || '—'}</div>
                       </div>
                       <div className="text-right flex-shrink-0">
-                        <div className="text-xs text-orange-600 font-semibold">{insp.assigned_to_name || '—'}</div>
-                        <div className="text-xs text-gray-400 mt-0.5">
-                          {insp.started_at && insp.completed_at
-                            ? `${Math.round((new Date(insp.completed_at) - new Date(insp.started_at)) / 60000)} min`
-                            : '—'}
-                        </div>
+                        <div className="text-xs text-orange-600 font-semibold">{insp.duration_minutes ? `${insp.duration_minutes}m` : '—'}</div>
+                        <div className="text-xs text-gray-500 mt-0.5">{insp.inspector_name || '—'}</div>
                       </div>
                     </button>
                   ))}
@@ -428,50 +424,28 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Trend Chart */}
-        {chartData.length > 0 && (
-          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 sm:p-5">
-            <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
-              <h2 className="text-sm sm:text-base font-semibold text-gray-800">Inspection Trend</h2>
-              <div className="flex gap-1">
-                {PERIOD_OPTIONS.map((opt, idx) => (
-                  <button
-                    key={opt.value}
-                    onClick={() => setChartPeriodIdx(idx)}
-                    className={`px-2.5 py-1 text-xs rounded-md font-medium transition-colors ${
-                      chartPeriodIdx === idx
-                        ? 'bg-pdi-navy text-white'
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
+        {/* Activity Log */}
+        {stats?.recent_activity && stats.recent_activity.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="flex items-center gap-2 px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-200 bg-gray-50">
+              <div className="w-1 h-5 bg-pdi-teal rounded-full flex-shrink-0" />
+              <h3 className="text-sm sm:text-base font-semibold text-gray-800">Recent Activity</h3>
             </div>
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={chartData} margin={{ top: 4, right: 16, left: -16, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="period" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                <Tooltip />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-                {componentTypes.map((ct, i) => (
-                  <Line
-                    key={ct}
-                    type="monotone"
-                    dataKey={COMPONENT_TYPE_LABELS[ct] || ct}
-                    stroke={COMPONENT_COLORS[i % COMPONENT_COLORS.length]}
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                  />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
+            <div className="divide-y divide-gray-100">
+              {stats.recent_activity.map((act, i) => {
+                const cfg = ACTION_LABELS[act.action] || { label: act.action, color: 'bg-gray-100 text-gray-600' }
+                return (
+                  <div key={i} className="px-4 sm:px-5 py-3 flex items-center gap-3 min-h-[44px]">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${cfg.color} flex-shrink-0`}>{cfg.label}</span>
+                    <span className="text-xs text-gray-600 font-mono flex-shrink-0">{act.form_no || act.inspection_id}</span>
+                    <span className="text-xs text-gray-500 truncate flex-1">{act.user_name}</span>
+                    <span className="text-xs text-gray-400 flex-shrink-0">{formatDate(act.created_at)}</span>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         )}
-
       </div>
     </div>
   )

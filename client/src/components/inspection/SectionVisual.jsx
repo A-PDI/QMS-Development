@@ -1,5 +1,6 @@
 import PFNToggle from './PFNToggle'
 import ItemAttachment from './ItemAttachment'
+import { PFN_COLORS } from '../../lib/constants'
 
 export default function SectionVisual({
   section,
@@ -106,61 +107,38 @@ export default function SectionVisual({
           const needsRemarks = isAccepted && !row.remarks?.trim()
           return (
             <div key={item.id} className={`border rounded-lg p-3 ${isFail ? 'bg-red-50 border-red-200' : isAccepted ? 'bg-amber-50 border-amber-200' : 'bg-white border-gray-200'}`}>
-              <div className="flex items-baseline gap-1.5 mb-2">
-                <span className="text-xs text-gray-400 font-mono">#{item.id}</span>
-                <div className="min-w-0 flex-1">
-                  <div className="text-xs font-semibold text-pdi-navy">{item.ctq_area}</div>
-                  <div className="text-sm font-medium text-gray-800">{item.failure_mode}</div>
+                <div className="text-xs font-semibold text-gray-700 mb-1">{item.ctq_area || item.failure_mode || `Item ${item.id}`}</div>
+                {item.criteria && <div className="text-xs text-gray-400 mb-2">{item.criteria}</div>}
+                <div className="flex gap-1.5 flex-wrap mb-2">
+                  {['P','F','A'].map(v => (
+                    <button key={v} type="button" disabled={readOnly}
+                      onClick={() => !readOnly && update(item.id, 'result', row.result === v ? '' : v)}
+                      className={`px-2.5 py-1 text-xs font-semibold rounded border min-h-[32px] ${row.result === v ? PFN_COLORS[v] : 'bg-white text-gray-400 border-gray-200'} ${readOnly ? 'cursor-default' : 'cursor-pointer'}`}>
+                      {v === 'P' ? 'Pass' : v === 'F' ? 'Fail' : 'Acc'}
+                    </button>
+                  ))}
                 </div>
-              </div>
-              <div className="text-xs text-gray-600 leading-relaxed mb-2">
-                <div><span className="text-gray-400">Criteria: </span>{item.criteria}</div>
-                <div className="mt-0.5"><span className="text-gray-400">Method: </span>{item.method}</div>
-              </div>
-              <div className="flex items-center gap-2 mt-2 flex-wrap">
-                <span className="text-xs text-gray-500">Result:</span>
-                <PFNToggle
-                  value={row.result}
-                  onChange={v => update(item.id, 'result', v)}
+                <input type="text" value={row.remarks || ''} onChange={e => update(item.id, 'remarks', e.target.value)}
                   readOnly={readOnly}
-                />
-                {showImages && (
-                  <div className="ml-auto">
+                  placeholder={needsRemarks ? 'Remarks required…' : 'Remarks…'}
+                  className={`w-full text-xs border rounded px-2 py-1.5 focus:outline-none min-h-[36px] ${needsRemarks ? 'border-amber-400 bg-amber-50' : 'border-gray-200'} ${readOnly ? 'bg-gray-50' : ''}`} />
+                {onUploadItem && (
+                  <div className="mt-2">
                     <ItemAttachment
                       sectionKey={sectionKey}
                       itemId={item.id}
-                      isFail={isFail || isAccepted}
                       attachments={attachments}
                       onUpload={onUploadItem}
                       onDelete={onDeleteItem}
-                      uploadingKey={uploadingKey}
+                      uploading={uploadingKey === `${sectionKey}_${item.id}`}
                       readOnly={readOnly}
                     />
                   </div>
                 )}
               </div>
-              <div className="mt-2">
-                {readOnly ? (
-                  <div className="text-sm text-gray-700">{row.remarks || '\u2014'}</div>
-                ) : (
-                  <>
-                    <textarea
-                      className={`w-full text-sm border rounded px-2 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[60px] ${
-                        needsRemarks ? 'border-amber-400 bg-amber-50' : 'border-gray-200'
-                      }`}
-                      rows={2}
-                      value={row.remarks}
-                      onChange={e => update(item.id, 'remarks', e.target.value)}
-                      placeholder={isAccepted ? 'Description required for Accepted\u2026' : 'Remarks\u2026'}
-                    />
-                    {needsRemarks && <span className="text-xs text-amber-600">Description required</span>}
-                  </>
-                )}
-              </div>
-            </div>
-          )
-        })}
-      </div>
-    </>
+            )
+          })}
+        </div>
+      </>
   )
 }

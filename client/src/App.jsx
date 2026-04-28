@@ -64,8 +64,8 @@ export default function App() {
           <Route path="drawings" element={<Drawings />} />
           <Route path="reports" element={<Reports />} />
           <Route path="admin" element={<Admin />} />
+          <Route path="*" element={<NotFound />} />
         </Route>
-        <Route path="*" element={<NotFound />} />
       </Routes>
     </BrowserRouter>
   )

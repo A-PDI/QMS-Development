@@ -169,12 +169,4 @@ router.post('/entra', async (req, res, next) => {
   }
 });
 
-// ── GET /api/auth/me ──────────────────────────────────────────────────────────
-router.get('/me', authMiddleware, (req, res) => {
-  const { id, name, email, role } = req.user;
-  // Re-fetch permissions from DB since they're not in the JWT payload
-  const fresh = db.get('SELECT permissions FROM users WHERE id = ?', [id]);
-  res.json({ user: { id, name, email, role, permissions: fresh?.permissions || null } });
-});
-
-module.exports = router;
+// ── GET /api/auth/me ─────────────────────────────────�

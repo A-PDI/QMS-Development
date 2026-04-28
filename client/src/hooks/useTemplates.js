@@ -42,6 +42,6 @@ export function useInspectionItems() {
       const { data } = await api.get('/admin/inspection-items')
       return data.items  // { [section_type]: [{id, name, ...}] }
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 10 * 60 * 1000,
   })
 }

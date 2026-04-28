@@ -59,6 +59,26 @@ export default function InspectionDetail() {
   const [assignSubmitting, setAssignSubmitting] = useState(false)
   const [usersList, setUsersList] = useState([])
 
+  useEffect(() => {
+    if (isAdminRole) {
+      api.get('/admin/users').then(r => setUsersList(r.data || [])).catch(() => {})
+    }
+  }, [isAdminRole])
+
+  async function handleAssign() {
+    if (!assignUserId) return
+    setAssignSubmitting(true)
+    try {
+      await assignInspection.mutateAsync({ id, assigned_to: Number(assignUserId), due_date: assignDueDate || null })
+      setShowAssignModal(false)
+      showToast('Inspection assigned', 'success')
+    } catch (err) {
+      showToast(err?.response?.data?.error || 'Failed to assign', 'error')
+    } finally {
+      setAssignSubmitting(false)
+    }
+  }
+
   function handleEmail() {
     const subject = encodeURIComponent(`PDI Inspection ${inspection.form_no} — ${inspection.part_number || 'No part #'}`)
     const body = encodeURIComponent(
@@ -254,169 +274,173 @@ export default function InspectionDetail() {
           )}
           {isAdminRole && canEdit && (
             <button
-              onClick={() => { setAssignUserId(inspection.assigned_to || ''); setAssignDueDate(inspection.due_date || ''); setShowAssignModal(true) }}
+              onClick={() => { setAssignUserId(inspection.assigned_to ? String(inspection.assigned_to) : ''); setAssignDueDate(inspection.due_date || ''); setShowAssignModal(true) }}
               title="Assign"
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-slate-600 text-white rounded-lg hover:bg-slate-700 active:bg-slate-800 min-h-[40px] flex-shrink-0"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 min-h-[40px] flex-shrink-0"
             >
               <UserPlus size={14} />
               <span className="hidden sm:inline">Assign</span>
             </button>
           )}
-          {inspection.status === 'pending_review' && isAdminRole && (
+          <button
+            onClick={handleDownloadPdf}
+            disabled={pdfLoading}
+            title="Print PDF"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 min-h-[40px] flex-shrink-0"
+          >
+            {pdfLoading ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
+            <span className="hidden sm:inline">PDF</span>
+          </button>
+          <button
+            onClick={handleEmail}
+            title="Email"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 min-h-[40px] flex-shrink-0"
+          >
+            <Mail size={14} />
+            <span className="hidden sm:inline">Email</span>
+          </button>
+          {isAdminRole && inspection.status === 'pending_review' && (
             <button
               onClick={() => setShowReviewModal(true)}
-              title="Review"
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600 active:bg-amber-700 min-h-[40px] flex-shrink-0"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600 min-h-[40px] flex-shrink-0"
             >
               <CheckSquare size={14} />
               <span className="hidden sm:inline">Review</span>
             </button>
           )}
-          <button
-            onClick={() => navigate(`/ncrs/new?inspection_id=${id}`)}
-            title="NCR"
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-orange-500 text-white rounded-lg hover:bg-orange-600 active:bg-orange-700 min-h-[40px] flex-shrink-0"
-          >
-            <AlertTriangle size={14} />
-            <span className="hidden sm:inline">NCR</span>
-          </button>
-          {inspection.status !== 'pending_review' && (
-            <>
-              <button
-                onClick={handleDownloadPdf}
-                disabled={pdfLoading}
-                title="Print / PDF"
-                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 active:bg-purple-800 disabled:opacity-50 min-h-[40px] flex-shrink-0"
-              >
-                {pdfLoading ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
-                <span className="hidden sm:inline">{pdfLoading ? 'Generating…' : 'Print'}</span>
-              </button>
-              <button
-                onClick={handleEmail}
-                title="Email"
-                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 active:bg-indigo-700 min-h-[40px] flex-shrink-0"
-              >
-                <Mail size={14} />
-                <span className="hidden sm:inline">Email</span>
-              </button>
-            </>
-          )}
-          <button
-            onClick={() => navigate('/inspections')}
-            title="Close"
-            className="ml-auto flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100 active:bg-gray-200 min-h-[40px] flex-shrink-0"
-          >
-            <X size={14} />
-            <span className="hidden sm:inline">Close</span>
-          </button>
         </div>
       </div>
 
-      <div className="max-w-[1440px] mx-auto p-3 sm:p-6 space-y-3 sm:space-y-4">
-        {/* Pending review notice */}
-        {inspection.status === 'pending_review' && (
-          <div className={`rounded-xl border p-3 sm:p-4 flex items-start gap-3 ${isAdminRole ? 'bg-amber-50 border-amber-200' : 'bg-amber-50 border-amber-200'}`}>
-            <AlertTriangle size={18} className="text-amber-600 flex-shrink-0 mt-0.5" />
-            <div>
-              <div className="text-sm font-semibold text-amber-800">Pending Admin Review</div>
-              <div className="text-xs text-amber-700 mt-0.5">
-                {isAdminRole
-                  ? 'This inspection has Accepted items and needs your review before it can be printed or shared. Click "Review" to approve.'
-                  : 'This inspection has been submitted and is awaiting admin review. Printing and sharing are locked until approved.'}
-              </div>
+      <div className="p-4 sm:p-6 space-y-6">
+        {/* Header info */}
+        {headerFields && headerFields.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="px-4 sm:px-5 py-3 border-b border-gray-100 bg-gray-50">
+              <h2 className="text-sm font-semibold text-gray-700">Inspection Details</h2>
             </div>
-          </div>
-        )}
-        {/* Header details */}
-        <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-5">
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-4 sm:gap-x-6 gap-y-2.5 sm:gap-y-3">
-            {headerFields.map(field => inspection[field] && (
-              <div key={field} className="min-w-0">
-                <div className="text-xs text-gray-400">{HEADER_FIELD_LABELS[field] || field}</div>
-                <div className="text-sm sm:text-base font-medium text-gray-800 break-words">{inspection[field]}</div>
-              </div>
-            ))}
-            <div className="min-w-0">
-              <div className="text-xs text-gray-400">Created</div>
-              <div className="text-sm sm:text-base text-gray-800">{formatDate(inspection.created_at)}</div>
-            </div>
-            {inspection.submitted_at && (
-              <div className="min-w-0">
-                <div className="text-xs text-gray-400">Submitted</div>
-                <div className="text-sm sm:text-base text-gray-800">{formatDateTime(inspection.submitted_at)}</div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Sections (read-only) */}
-        {Object.entries(sections).map(([key, section]) => {
-          if (key === '__dimensional_added') return null
-          // Skip optional sections unless the inspector added dimensional data
-          if (section.optional && !sectionData.__dimensional_added) return null
-          const Component = SECTION_COMPONENTS[section.section_type]
-          if (!Component) return null
-          return (
-            <div key={key} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              <div className="px-3 sm:px-5 py-3 sm:py-3.5 bg-pdi-frost">
-                <span className="text-sm sm:text-base font-semibold text-pdi-navy">{section.title}</span>
-              </div>
-              <div className="p-3 sm:p-4">
-                <Component section={section} data={sectionData[key]} readOnly />
-              </div>
-            </div>
-          )
-        })}
-
-        {/* Final Results */}
-        {inspection.disposition && (
-          <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-5">
-            <div className="text-sm font-semibold text-gray-700 mb-2 sm:mb-3">Final Results</div>
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
-              <span className={`px-4 sm:px-5 py-2 text-sm font-bold rounded-lg border-2 inline-block w-fit ${DISPOSITION_COLORS[inspection.disposition] || 'bg-gray-100 text-gray-700 border-gray-300'}`}>
-                {inspection.disposition}
-              </span>
-              {inspection.disposition_notes && (
-                <p className="text-sm text-gray-600">{inspection.disposition_notes}</p>
+            <div className="p-4 sm:p-5 grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
+              {headerFields.map(field => {
+                const key = typeof field === 'string' ? field : field.key
+                const label = HEADER_FIELD_LABELS[key] || key
+                const value = inspection[key]
+                return (
+                  <div key={key}>
+                    <div className="text-xs text-gray-500 mb-0.5">{label}</div>
+                    <div className="text-sm font-medium text-gray-800">{value || '—'}</div>
+                  </div>
+                )
+              })}
+              {inspection.assigned_to_name && (
+                <div>
+                  <div className="text-xs text-gray-500 mb-0.5">Assigned To</div>
+                  <div className="text-sm font-medium text-gray-800">{inspection.assigned_to_name}</div>
+                </div>
+              )}
+              {inspection.due_date && (
+                <div>
+                  <div className="text-xs text-gray-500 mb-0.5">Due Date</div>
+                  <div className="text-sm font-medium text-gray-800">{formatDate(inspection.due_date)}</div>
+                </div>
               )}
             </div>
           </div>
         )}
 
-        {/* Completed at */}
-        {inspection.completed_at && (
-          <div className="rounded-xl border border-green-200 bg-green-50 p-3 sm:p-4">
-            <div className="text-sm font-semibold text-green-700 mb-0.5">Completed</div>
-            <div className="text-xs text-gray-500">{formatDateTime(inspection.completed_at)}</div>
+        {/* Section data */}
+        {Object.entries(sections || {}).map(([key, section]) => {
+          const SectionComp = SECTION_COMPONENTS[section.type]
+          if (!SectionComp) return null
+          return (
+            <div key={key} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+              <div className="px-4 sm:px-5 py-3 border-b border-gray-100 bg-gray-50">
+                <h2 className="text-sm font-semibold text-gray-700">{section.title || key}</h2>
+              </div>
+              <div className="p-4 sm:p-5">
+                <SectionComp
+                  section={section}
+                  data={sectionData[key]}
+                  onChange={() => {}}
+                  readOnly={true}
+                  sectionKey={key}
+                  attachments={attachments}
+                />
+              </div>
+            </div>
+          )
+        })}
+
+        {/* Disposition */}
+        {inspection.disposition && (
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="px-4 sm:px-5 py-3 border-b border-gray-100 bg-gray-50">
+              <h2 className="text-sm font-semibold text-gray-700">Disposition</h2>
+            </div>
+            <div className="p-4 sm:p-5 space-y-2">
+              <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold border ${DISPOSITION_COLORS[inspection.disposition] || 'bg-gray-100 text-gray-700 border-gray-300'}`}>
+                {inspection.disposition}
+              </span>
+              {inspection.disposition_notes && (
+                <p className="text-sm text-gray-600 mt-2">{inspection.disposition_notes}</p>
+              )}
+            </div>
           </div>
         )}
 
         {/* Attachments */}
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="px-3 sm:px-5 py-3 sm:py-3.5 bg-pdi-frost">
-            <span className="text-sm font-semibold text-pdi-navy">Attachments ({attachments.length})</span>
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="px-4 sm:px-5 py-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+              <Paperclip size={14} />
+              Attachments ({attachments.filter(a => !a.section_key && !a.item_id).length})
+            </h2>
           </div>
-          <div className="p-3 sm:p-4 space-y-2 sm:space-y-3">
-            <FileUploadZone onUpload={handleUpload} />
-            {attachments.map(att => (
-              <div key={att.id} className="flex items-center justify-between gap-2 p-2.5 sm:p-3 bg-gray-50 rounded-lg border border-gray-100">
-                <div className="flex items-center gap-2 min-w-0 flex-1">
-                  <Paperclip size={14} className="text-gray-400 flex-shrink-0" />
-                  <a href={`/api/attachments/download/${att.id}`} target="_blank" rel="noreferrer" className="text-sm text-pdi-navy hover:underline truncate">
-                    {att.file_name}
-                  </a>
-                  <span className="text-xs text-gray-400 flex-shrink-0 hidden sm:inline">{formatFileSize(att.file_size_bytes)}</span>
-                </div>
-                <button
-                  onClick={() => deleteFile.mutateAsync({ id: att.id, inspectionId: id })}
-                  className="text-xs text-red-400 hover:text-red-600 px-2 py-1 min-h-[32px] flex-shrink-0"
-                >
-                  Remove
-                </button>
+          <div className="p-4 sm:p-5 space-y-3">
+            {canEdit && (
+              <FileUploadZone onFiles={handleUpload} uploading={uploadFile.isPending} />
+            )}
+            {attachments.filter(a => !a.section_key && !a.item_id).length === 0 ? (
+              <div className="text-sm text-gray-400">No attachments</div>
+            ) : (
+              <div className="space-y-2">
+                {attachments.filter(a => !a.section_key && !a.item_id).map(att => (
+                  <div key={att.id} className="flex items-center justify-between gap-2 p-2 rounded-lg border border-gray-100 hover:bg-gray-50">
+                    <div className="min-w-0 flex-1">
+                      <a href={att.url} target="_blank" rel="noopener noreferrer" className="text-sm text-pdi-navy hover:underline truncate block">{att.original_name || att.filename}</a>
+                      <div className="text-xs text-gray-400">{formatFileSize(att.file_size)} · {formatDateTime(att.created_at)}</div>
+                    </div>
+                    {canEdit && (
+                      <button
+                        onClick={() => deleteFile.mutate({ inspectionId: id, attachmentId: att.id })}
+                        className="p-1.5 text-gray-400 hover:text-red-500 rounded transition-colors flex-shrink-0"
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
         </div>
+
+        {/* Quality alerts */}
+        {inspection.quality_alerts && inspection.quality_alerts.length > 0 && (
+          <div className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden">
+            <div className="px-4 sm:px-5 py-3 border-b border-amber-100 bg-amber-50 flex items-center gap-2">
+              <AlertTriangle size={14} className="text-amber-600" />
+              <h2 className="text-sm font-semibold text-amber-700">Quality Alerts ({inspection.quality_alerts.length})</h2>
+            </div>
+            <div className="divide-y divide-amber-100">
+              {inspection.quality_alerts.map(alert => (
+                <div key={alert.id} className="px-4 sm:px-5 py-3">
+                  <div className="text-xs font-semibold text-amber-700">{alert.alert_type?.replace(/_/g, ' ')}</div>
+                  {alert.notes && <div className="text-sm text-gray-600 mt-1">{alert.notes}</div>}
+                  <div className="text-xs text-gray-400 mt-1">{formatDateTime(alert.created_at)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

@@ -79,14 +79,14 @@ export default function SectionValveRecession({
                 <span className="text-xs font-semibold text-gray-600">Cylinder {cylIdx + 1}</span>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <PFNToggle
-                    value={cyl.result || ''}
+                    value={cyl.result}
                     onChange={v => setCylField(cylIdx, 'result', v)}
                     readOnly={readOnly}
                   />
                   {showImages && (
                     <ItemAttachment
                       sectionKey={sectionKey}
-                      itemId={cylIdx + 1}
+                      itemId={cylIdx}
                       isFail={isFail || isAccepted}
                       attachments={attachments}
                       onUpload={onUploadItem}
@@ -97,28 +97,18 @@ export default function SectionValveRecession({
                   )}
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
-                {[['int1','Int 1:'],['int2','Int 2:'],['exh1','Exh 1:'],['exh2','Exh 2:']].map(([field, label]) => (
-                  <div key={field} className="flex items-center gap-1 min-w-0">
-                    <span className="text-gray-500 w-10 flex-shrink-0">{label}</span>
-                    <Input value={cyl[field]} onChange={v => setCylField(cylIdx, field, v)} placeholder="0.00" />
+              <div className="grid grid-cols-2 gap-1.5">
+                {[['int1','Int 1'],['int2','Int 2'],['exh1','Exh 1'],['exh2','Exh 2']].map(([f, label]) => (
+                  <div key={f} className="flex items-center gap-1.5">
+                    <span className="text-xs text-gray-500 w-10 shrink-0">{label}</span>
+                    <Input
+                      value={cyl[f] || ''}
+                      onChange={v => setCylField(cylIdx, f, v)}
+                      placeholder="0.00"
+                    />
                   </div>
                 ))}
               </div>
-              {isAccepted && !readOnly && (
-                <input
-                  type="text"
-                  className={`mt-2 w-full text-xs border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-pdi-navy ${
-                    !cyl.notes?.trim() ? 'border-amber-400 bg-amber-50' : 'border-amber-200'
-                  }`}
-                  value={cyl.notes || ''}
-                  onChange={e => setCylField(cylIdx, 'notes', e.target.value)}
-                  placeholder="Description required for Accepted\u2026"
-                />
-              )}
-              {readOnly && isAccepted && cyl.notes && (
-                <div className="mt-1 text-xs text-gray-600">{cyl.notes}</div>
-              )}
             </div>
           )
         })}
