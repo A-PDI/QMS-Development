@@ -21,7 +21,6 @@ import SectionVacuumTest from '../components/inspection/SectionVacuumTest'
 import FileUploadZone from '../components/FileUploadZone'
 import { initSectionData, mergeSectionData, formatFileSize } from '../lib/utils'
 import { DISPOSITION_COLORS, HEADER_FIELD_LABELS } from '../lib/constants'
-import { getUser } from '../lib/auth'
 
 const SECTION_COMPONENTS = {
   pfn_checklist: SectionReceiving,
@@ -180,11 +179,11 @@ export default function InspectionForm() {
   const [pdfLoading, setPdfLoading] = useState(false)
   const [showAlertModal, setShowAlertModal] = useState(false)
   const [completedInspectionId, setCompletedInspectionId] = useState(null)
+  const [completing, setCompleting] = useState(false)
   const saveTimer = useRef(null)
   const initialLoad = useRef(true)
 
   // Admin section-editing state
-  const currentUser = getUser()
   const isAdmin = ['admin', 'qc_manager'].includes(currentUser?.role)
   const [customSections, setCustomSections] = useState(null) // null = use template default
   const [addingItemKey, setAddingItemKey] = useState(null)   // section key where + is open
@@ -364,8 +363,7 @@ export default function InspectionForm() {
     }
 
     // Validate: Fail and Accepted items need description + image
-    const effectiveSections = typeof template.effectiveSections === 'string' ? JSON.parse(template.effectiveSections) : template.effectiveSections
-    const failErrors = []
+    const itemErrors = []
     for (const [key, section] of Object.entries(effectiveSections)) {
       const sectionArr = Array.isArray(sectionData[key]) ? sectionData[key] : []
       if (section.section_type === 'pass_fail_checklist' || section.section_type === 'pfn_checklist') {
@@ -388,10 +386,13 @@ export default function InspectionForm() {
       return
     }
 
+    setCompleting(true)
     clearTimeout(saveTimer.current)
     try {
       await update.mutateAsync({ id, section_data: sectionData, disposition, disposition_notes: dispositionNotes })
-      const hasAccepted = detectAcceptedItems(sectionData)
+      const hasAccepted = Object.entries(sectionData).some(([, rows]) =>
+        Array.isArray(rows) && rows.some(r => r.result === 'A' || r.status === 'A')
+      )
       const result = await complete.mutateAsync(id)
       const wasPendingReview = result?.pending_review === true
 
@@ -399,7 +400,6 @@ export default function InspectionForm() {
         showToast('Inspection submitted for review. An admin must approve before it can be printed or shared.', 'info')
         navigate(`/inspections/${id}`)
       } else if (hasAccepted && isAdminRole) {
-        // Admin completed with accepted items: prompt for quality alert
         setCompletedInspectionId(id)
         setShowAlertModal(true)
       } else {
@@ -408,6 +408,8 @@ export default function InspectionForm() {
       }
     } catch (err) {
       showToast(err?.response?.data?.error || err.message || 'Complete failed', 'error')
+    } finally {
+      setCompleting(false)
     }
   }
 
@@ -580,4 +582,93 @@ export default function InspectionForm() {
                     {/* Per-item delete buttons */}
                     {(section.items || []).map(item => (
                       <div key={item.id} className="flex items-center justify-between gap-2 px-2 py-1 rounded hover:bg-red-50 group">
-                        <span className="text-xs text-gray-500 truncate">{item.
+                        <span className="text-xs text-gray-500 truncate">{item.name || item.measurement || item.ctq_area || `Item ${item.id}`}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteItem(sKey, item.id)}
+                          className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-opacity p-0.5"
+                          title="Remove item"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ))}
+                    {/* Add item inline */}
+                    {addingItemKey === sKey ? (
+                      <div className="flex items-center gap-2 mt-1">
+                        <input
+                          autoFocus
+                          type="text"
+                          value={newItemName}
+                          onChange={e => setNewItemName(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddItem(sKey) } if (e.key === 'Escape') setAddingItemKey(null) }}
+                          placeholder="Item name…"
+                          className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+                        />
+                        <button type="button" onClick={() => handleAddItem(sKey)} className="text-xs text-pdi-navy hover:underline">Add</button>
+                        <button type="button" onClick={() => setAddingItemKey(null)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => { setAddingItemKey(sKey); setNewItemName('') }}
+                        className="flex items-center gap-1 text-xs text-pdi-navy hover:underline mt-1"
+                      >
+                        <PlusCircle size={12} /> Add item
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )
+    })}
+
+    {/* Disposition + Complete */}
+    {!isComplete && (
+      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 space-y-4">
+        <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Disposition</h3>
+        <div className="flex flex-wrap gap-2">
+          {dispositionOptions.map(opt => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setDisposition(opt.value)}
+              className={`px-4 py-2 text-sm rounded-lg border font-medium transition-colors min-h-[40px] ${
+                disposition === opt.value
+                  ? `${DISPOSITION_COLORS[opt.value] || 'bg-gray-200 border-gray-300'} text-white`
+                  : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        {disposition && (
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Notes (optional)</label>
+            <textarea
+              value={dispositionNotes}
+              onChange={e => setDispositionNotes(e.target.value)}
+              rows={2}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+              placeholder="Add any disposition notes…"
+            />
+          </div>
+        )}
+        <button
+          type="button"
+          disabled={!disposition || completing}
+          onClick={handleComplete}
+          className="flex items-center justify-center gap-2 w-full sm:w-auto px-6 py-2.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-40 font-medium min-h-[44px]"
+        >
+          {completing ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
+          {completing ? 'Completing…' : 'Complete Inspection'}
+        </button>
+      </div>
+    )}
+  </div>
+)
+}
