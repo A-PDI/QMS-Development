@@ -7,7 +7,7 @@ import { useQualityAlertCount } from '../hooks/useQualityAlerts'
 
 const nav = [
   { to: '/',                icon: LayoutDashboard, label: 'Dashboard',       end: true, permKey: 'dashboard' },
-  { to: '/my-inspections',  icon: User,            label: 'My Inspections',             permKey: 'my_inspections' },
+  { to: '/my-inspections',  icon: User,            label: 'My Inspections',             permKey: 'my_inspections', hideForAdmin: true },
   { to: '/inspections',     icon: ClipboardList,   label: 'Inspections',                permKey: 'inspections' },
   { to: '/inspections/new', icon: PlusCircle,      label: 'New Inspection', accent: true, permKey: 'new_inspection' },
   { to: '/ncrs',            icon: AlertTriangle,   label: 'NCRs',                       permKey: 'ncrs' },
@@ -70,6 +70,7 @@ export default function Sidebar({ open = false, onClose }) {
 
   function isNavVisible(item) {
     if (item.adminOnly) return isAdminRole
+    if (item.hideForAdmin && isAdminRole) return false
     if (allowedTabs && item.permKey && !allowedTabs.includes(item.permKey)) return false
     return true
   }

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PlusCircle, X, ChevronDown, ChevronUp, ArrowLeft } from 'lucide-react'
-import { useCreateTemplate, useInspectionItems } from '../hooks/useTemplates'
+import { useCreateTemplate, useInspectionItems, useTemplates } from '../hooks/useTemplates'
 import { useCreateInspection } from '../hooks/useInspections'
 import { useToast } from '../hooks/useToast'
 import { getUser } from '../lib/auth'
@@ -27,7 +27,7 @@ const SECTION_TYPE_LABELS = {
 }
 
 // Sections where item-level add/delete makes sense
-const ITEM_EDITABLE = new Set(['pfn_checklist', 'pass_fail_checklist'])
+const ITEM_EDITABLE = new Set(['pfn_checklist', 'pass_fail_checklist', 'dimensional'])
 
 const INITIAL_SECTIONS = [
   {
@@ -210,9 +210,20 @@ export default function CustomInspectionBuilder() {
   const { data: existingItems } = useInspectionItems()
 
   const currentUser = getUser()
+  const { data: allTemplates = [] } = useTemplates()
+
+  // Compute next PDI-IQI number from existing templates
+  function nextIqiFormNo() {
+    const nums = allTemplates
+      .map(t => t.form_no)
+      .filter(n => /^PDI-IQI-\d+$/i.test(n))
+      .map(n => parseInt(n.replace(/^PDI-IQI-/i, ''), 10))
+      .filter(n => !isNaN(n))
+    const max = nums.length > 0 ? Math.max(...nums) : 0
+    return `PDI-IQI-${String(max + 1).padStart(4, '0')}`
+  }
 
   const [productType, setProductType] = useState('')
-  const [headerForm, setHeaderForm] = useState({ inspector_name: currentUser?.name || '' })
   const [sections, setSections] = useState(INITIAL_SECTIONS.map(s => ({ ...s, items: s.items.map(i => ({ ...i })) })))
   const [submitting, setSubmitting] = useState(false)
 
@@ -244,11 +255,6 @@ export default function CustomInspectionBuilder() {
 
   async function handleSubmit(e) {
     e.preventDefault()
-    const missingFields = HEADER_FIELDS.filter(f => f.required && !headerForm[f.key]?.trim())
-    if (missingFields.length > 0) {
-      showToast(`Required: ${missingFields.map(f => f.label).join(', ')}`, 'error')
-      return
-    }
     if (!productType.trim()) {
       showToast('Product Type is required', 'error')
       return
@@ -261,20 +267,14 @@ export default function CustomInspectionBuilder() {
     setSubmitting(true)
     try {
       const slug = slugify(productType)
-      const formNo = `PDI-CUSTOM-${slug.toUpperCase().slice(0, 12)}-${Date.now().toString(36).toUpperCase()}`
+      const formNo = nextIqiFormNo()
       const title = `PDI Incoming Quality Inspection — ${productType.trim()}`
 
-      // Build sections object (keyed by section.key)
       const sectionsObj = {}
       for (const sec of sections) {
-        sectionsObj[sec.key] = {
-          title: sec.title,
-          section_type: sec.section_type,
-          items: sec.items,
-        }
+        sectionsObj[sec.key] = { title: sec.title, section_type: sec.section_type, items: sec.items }
       }
 
-      // 1. Create template
       const template = await createTemplate.mutateAsync({
         form_no: formNo,
         title,
@@ -284,13 +284,12 @@ export default function CustomInspectionBuilder() {
         sections: sectionsObj,
       })
 
-      // 2. Create inspection
       const inspection = await createInspection.mutateAsync({
         template_id: template.id,
-        ...headerForm,
+        inspector_name: currentUser?.name || '',
       })
 
-      showToast('Custom form created — starting inspection', 'success')
+      showToast(`Form ${formNo} created — starting inspection`, 'success')
       navigate(`/inspections/${inspection.id}/edit`)
     } catch (err) {
       showToast(err?.response?.data?.error || err.message || 'Failed to create custom form', 'error')
@@ -339,26 +338,6 @@ export default function CustomInspectionBuilder() {
               </p>
             </div>
 
-            {/* ── Inspection header fields ──────────────────────────────── */}
-            <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
-              <h2 className="text-sm font-semibold text-gray-700 mb-3">Inspection Details</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {HEADER_FIELDS.map(({ key, label, required, type, wide }) => (
-                  <div key={key} className={wide ? 'sm:col-span-2' : ''}>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">
-                      {label}{required && <span className="text-red-400 ml-0.5">*</span>}
-                    </label>
-                    <input
-                      type={type}
-                      value={headerForm[key] || ''}
-                      onChange={e => setHeaderForm(f => ({ ...f, [key]: e.target.value }))}
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pdi-navy min-h-[40px]"
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-
             {/* ── Section builder ───────────────────────────────────────── */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
@@ -383,20 +362,27 @@ export default function CustomInspectionBuilder() {
                 />
               ))}
 
-              {/* Add section buttons */}
-              <div className="flex flex-wrap gap-2 pt-1">
-                {Object.entries(SECTION_TYPE_LABELS).map(([type, label]) => (
-                  <button
-                    key={type}
-                    type="button"
-                    onClick={() => handleAddSection(type)}
-                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-2 border-dashed border-pdi-navy/30 text-pdi-navy/70 rounded-lg hover:border-pdi-navy hover:text-pdi-navy hover:bg-pdi-frost transition-all"
-                  >
-                    <PlusCircle size={13} />
-                    {label.split(' (')[0]}
-                  </button>
-                ))}
-              </div>
+              {/* Add section buttons — only show types not already present */}
+              {(() => {
+                const usedTypes = new Set(sections.map(s => s.section_type))
+                const missing = Object.entries(SECTION_TYPE_LABELS).filter(([type]) => !usedTypes.has(type))
+                if (missing.length === 0) return null
+                return (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {missing.map(([type, label]) => (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => handleAddSection(type)}
+                        className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-2 border-dashed border-pdi-navy/30 text-pdi-navy/70 rounded-lg hover:border-pdi-navy hover:text-pdi-navy hover:bg-pdi-frost transition-all"
+                      >
+                        <PlusCircle size={13} />
+                        + {label.split(' (')[0]}
+                      </button>
+                    ))}
+                  </div>
+                )
+              })()}
             </div>
 
             {/* ── Submit ────────────────────────────────────────────────── */}

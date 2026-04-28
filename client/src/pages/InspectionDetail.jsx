@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Edit, Paperclip, Loader2, X, Printer, Mail, AlertTriangle, Bell, CheckSquare, UserPlus } from 'lucide-react'
-import { useInspection, useAssignInspection } from '../hooks/useInspections'
+import { Edit, Paperclip, Loader2, X, Printer, Mail, AlertTriangle, Bell, CheckSquare, UserPlus, Trash2 } from 'lucide-react'
+import { useInspection, useAssignInspection, useDeleteInspection } from '../hooks/useInspections'
 import { useTemplate } from '../hooks/useTemplates'
 import { useAttachments, useUploadAttachment, useDeleteAttachment } from '../hooks/useAttachments'
 import { useToast } from '../hooks/useToast'
@@ -46,7 +46,10 @@ export default function InspectionDetail() {
   const uploadFile = useUploadAttachment()
   const deleteFile = useDeleteAttachment()
 
+  const deleteInspection = useDeleteInspection()
   const [pdfLoading, setPdfLoading] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [showReviewModal, setShowReviewModal] = useState(false)
   const [reviewNotes, setReviewNotes] = useState('')
   const [reviewSubmitting, setReviewSubmitting] = useState(false)
@@ -142,8 +145,37 @@ export default function InspectionDetail() {
     }
   }
 
+  async function handleDelete() {
+    setDeleting(true)
+    try {
+      await deleteInspection.mutateAsync(id)
+      navigate('/inspections')
+    } catch (err) {
+      showToast(err?.response?.data?.error || 'Delete failed', 'error')
+      setDeleting(false)
+      setShowDeleteConfirm(false)
+    }
+  }
+
   return (
     <div>
+      {/* Delete confirmation modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4">
+            <h3 className="text-base font-semibold text-gray-900">Delete Inspection?</h3>
+            <p className="text-sm text-gray-600">
+              Delete <span className="font-mono font-bold">{inspection.form_no}</span>? This cannot be undone.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setShowDeleteConfirm(false)} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
+              <button onClick={handleDelete} disabled={deleting} className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 min-h-[40px]">
+                {deleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Assign modal for admins */}
       {showAssignModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -306,6 +338,16 @@ export default function InspectionDetail() {
             >
               <CheckSquare size={14} />
               <span className="hidden sm:inline">Review</span>
+            </button>
+          )}
+          {isAdminRole && (
+            <button
+              onClick={() => setShowDeleteConfirm(true)}
+              title="Delete"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-white border border-red-200 text-red-500 rounded-lg hover:bg-red-50 min-h-[40px] flex-shrink-0 ml-auto"
+            >
+              <Trash2 size={14} />
+              <span className="hidden sm:inline">Delete</span>
             </button>
           )}
         </div>

@@ -295,8 +295,8 @@ export default function InspectionForm() {
   }
 
   // ── Admin section / item helpers ─────────────────────────────────────────
-  // Section types that support per-item add/delete
-  const ITEM_EDITABLE = new Set(['pfn_checklist', 'pass_fail_checklist'])
+  // Section types that support per-item add/delete (including dimensional for add)
+  const ITEM_EDITABLE = new Set(['pfn_checklist', 'pass_fail_checklist', 'dimensional'])
 
   function applyCustomSections(updater) {
     setCustomSections(prev => {
@@ -333,13 +333,33 @@ export default function InspectionForm() {
       const sec = secs[sectionKey] || {}
       const items = sec.items || []
       const maxId = items.reduce((m, it) => Math.max(m, Number(it.id) || 0), 0)
-      return {
-        ...secs,
-        [sectionKey]: { ...sec, items: [...items, { id: maxId + 1, name }] },
-      }
+      const isDimensional = sec.section_type === 'dimensional'
+      const newItem = isDimensional
+        ? { id: maxId + 1, measurement: name, location: '', spec: '' }
+        : { id: maxId + 1, name }
+      return { ...secs, [sectionKey]: { ...sec, items: [...items, newItem] } }
     })
     setNewItemName('')
     setAddingItemKey(null)
+  }
+
+  function handleEditItem(sectionKey, itemId, nameOrMeasurement, requirementOrLocation) {
+    applyCustomSections(secs => {
+      const sec = secs[sectionKey] || {}
+      const isDimensional = sec.section_type === 'dimensional'
+      return {
+        ...secs,
+        [sectionKey]: {
+          ...sec,
+          items: (sec.items || []).map(it => {
+            if (String(it.id) !== String(itemId)) return it
+            return isDimensional
+              ? { ...it, measurement: nameOrMeasurement, location: requirementOrLocation }
+              : { ...it, name: nameOrMeasurement, requirement: requirementOrLocation }
+          }),
+        },
+      }
+    })
   }
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -557,6 +577,10 @@ export default function InspectionForm() {
             if (!Component) return null
             const supportsImages = IMAGE_ENABLED_SECTIONS.has(section.section_type)
             const canEditItems = isAdmin && ITEM_EDITABLE.has(section.section_type)
+            const adminTools = isAdmin ? {
+              onDelete: (itemId) => handleDeleteItem(key, itemId),
+              onEdit: (itemId, a, b) => handleEditItem(key, itemId, a, b),
+            } : undefined
             return (
               <CollapsibleSection
                 key={key}
@@ -574,35 +598,21 @@ export default function InspectionForm() {
                     onDeleteItem: handleDeleteFile,
                     uploadingKey,
                   } : {})}
+                  adminItemTools={adminTools}
                 />
 
-                {/* Admin item controls */}
+                {/* Admin: Add item button in section footer */}
                 {canEditItems && (
-                  <div className="mt-3 border-t border-dashed border-gray-200 pt-3 space-y-1">
-                    {/* Per-item delete buttons */}
-                    {(section.items || []).map(item => (
-                      <div key={item.id} className="flex items-center justify-between gap-2 px-2 py-1 rounded hover:bg-red-50 group">
-                        <span className="text-xs text-gray-500 truncate">{item.name || item.measurement || item.ctq_area || `Item ${item.id}`}</span>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteItem(key, item.id)}
-                          className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-opacity p-0.5"
-                          title="Remove item"
-                        >
-                          <X size={12} />
-                        </button>
-                      </div>
-                    ))}
-                    {/* Add item inline */}
+                  <div className="mt-3 border-t border-dashed border-gray-200 pt-3">
                     {addingItemKey === key ? (
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="flex items-center gap-2">
                         <input
                           autoFocus
                           type="text"
                           value={newItemName}
                           onChange={e => setNewItemName(e.target.value)}
                           onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddItem(key) } if (e.key === 'Escape') setAddingItemKey(null) }}
-                          placeholder="Item name…"
+                          placeholder={section.section_type === 'dimensional' ? 'Measurement name…' : 'Item name…'}
                           className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-pdi-navy"
                         />
                         <button type="button" onClick={() => handleAddItem(key)} className="text-xs text-pdi-navy hover:underline">Add</button>
@@ -612,7 +622,7 @@ export default function InspectionForm() {
                       <button
                         type="button"
                         onClick={() => { setAddingItemKey(key); setNewItemName('') }}
-                        className="flex items-center gap-1 text-xs text-pdi-navy hover:underline mt-1"
+                        className="flex items-center gap-1 text-xs text-pdi-navy hover:underline"
                       >
                         <PlusCircle size={12} /> Add item
                       </button>
