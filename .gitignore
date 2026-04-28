@@ -32,9 +32,4 @@ npm-debug.log*
 # ── OS / Editor ───────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
-.vscode/
-*.suo
-*.user
-
-# Vite build temp files
-client/vite.config.js.timestamp-*
+.vscod
