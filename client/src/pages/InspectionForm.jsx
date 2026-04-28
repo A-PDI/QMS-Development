@@ -585,7 +585,7 @@ export default function InspectionForm() {
                         <span className="text-xs text-gray-500 truncate">{item.name || item.measurement || item.ctq_area || `Item ${item.id}`}</span>
                         <button
                           type="button"
-                          onClick={() => handleDeleteItem(sKey, item.id)}
+                          onClick={() => handleDeleteItem(key, item.id)}
                           className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-opacity p-0.5"
                           title="Remove item"
                         >
@@ -594,24 +594,24 @@ export default function InspectionForm() {
                       </div>
                     ))}
                     {/* Add item inline */}
-                    {addingItemKey === sKey ? (
+                    {addingItemKey === key ? (
                       <div className="flex items-center gap-2 mt-1">
                         <input
                           autoFocus
                           type="text"
                           value={newItemName}
                           onChange={e => setNewItemName(e.target.value)}
-                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddItem(sKey) } if (e.key === 'Escape') setAddingItemKey(null) }}
+                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddItem(key) } if (e.key === 'Escape') setAddingItemKey(null) }}
                           placeholder="Item name…"
                           className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-pdi-navy"
                         />
-                        <button type="button" onClick={() => handleAddItem(sKey)} className="text-xs text-pdi-navy hover:underline">Add</button>
+                        <button type="button" onClick={() => handleAddItem(key)} className="text-xs text-pdi-navy hover:underline">Add</button>
                         <button type="button" onClick={() => setAddingItemKey(null)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
                       </div>
                     ) : (
                       <button
                         type="button"
-                        onClick={() => { setAddingItemKey(sKey); setNewItemName('') }}
+                        onClick={() => { setAddingItemKey(key); setNewItemName('') }}
                         className="flex items-center gap-1 text-xs text-pdi-navy hover:underline mt-1"
                       >
                         <PlusCircle size={12} /> Add item
@@ -619,56 +619,56 @@ export default function InspectionForm() {
                     )}
                   </div>
                 )}
-              </div>
+              </CollapsibleSection>
             )
           })}
-        </div>
-      )
-    })}
 
-    {/* Disposition + Complete */}
-    {!isComplete && (
-      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 space-y-4">
-        <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Disposition</h3>
-        <div className="flex flex-wrap gap-2">
-          {dispositionOptions.map(opt => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => setDisposition(opt.value)}
-              className={`px-4 py-2 text-sm rounded-lg border font-medium transition-colors min-h-[40px] ${
-                disposition === opt.value
-                  ? `${DISPOSITION_COLORS[opt.value] || 'bg-gray-200 border-gray-300'} text-white`
-                  : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
+          {/* Disposition + Complete */}
+          {inspection.status === 'draft' && (
+            <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 space-y-4">
+              <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Disposition</h3>
+              <div className="flex flex-wrap gap-2">
+                {dispositionOptions.map(opt => (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => setDisposition(opt)}
+                    className={`px-4 py-2 text-sm rounded-lg border font-medium transition-colors min-h-[40px] ${
+                      disposition === opt
+                        ? `${DISPOSITION_COLORS[opt] || 'bg-gray-200 border-gray-300'} text-white`
+                        : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'
+                    }`}
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+              {disposition && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Notes (optional)</label>
+                  <textarea
+                    value={dispositionNotes}
+                    onChange={e => setDispositionNotes(e.target.value)}
+                    rows={2}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+                    placeholder="Add any disposition notes…"
+                  />
+                </div>
+              )}
+              <button
+                type="button"
+                disabled={!disposition || completing}
+                onClick={handleComplete}
+                className="flex items-center justify-center gap-2 w-full sm:w-auto px-6 py-2.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-40 font-medium min-h-[44px]"
+              >
+                {completing ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
+                {completing ? 'Completing…' : 'Complete Inspection'}
+              </button>
+            </div>
+          )}
+
         </div>
-        {disposition && (
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Notes (optional)</label>
-            <textarea
-              value={dispositionNotes}
-              onChange={e => setDispositionNotes(e.target.value)}
-              rows={2}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
-              placeholder="Add any disposition notes…"
-            />
-          </div>
-        )}
-        <button
-          type="button"
-          disabled={!disposition || completing}
-          onClick={handleComplete}
-          className="flex items-center justify-center gap-2 w-full sm:w-auto px-6 py-2.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-40 font-medium min-h-[44px]"
-        >
-          {completing ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
-          {completing ? 'Completing…' : 'Complete Inspection'}
-        </button>
       </div>
-    )}
-  </div>
-)
+    </div>
+  )
 }
