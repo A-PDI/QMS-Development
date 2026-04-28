@@ -169,4 +169,18 @@ router.post('/entra', async (req, res, next) => {
   }
 });
 
-// ── GET /api/auth/me ─────────────────────────────────�
+// ── GET /api/auth/me ─────────────────────────────────────────────────────────
+router.get('/me', authMiddleware, (req, res) => {
+  const u = req.user;
+  res.json({
+    user: {
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      role: u.role,
+      permissions: u.permissions || null,
+    },
+  });
+});
+
+module.exports = router;
