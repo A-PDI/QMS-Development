@@ -332,4 +332,74 @@ const NEW_TEMPLATES = [
       { id: 5, name: 'Electrical Connector',   requirement: 'Electrical connector body and pins, if applicable, are straight, clean, intact, and free from cracks or bent terminals.' },
       { id: 6, name: 'O-Rings & Seals',        requirement: 'O-rings, seals, or visible sealing elements are present, seated correctly, and free from cuts, twists, flattening, or contamination.' },
       { id: 7, name: 'Filter Screen / Inlet',  requirement: 'Filter screen or inlet area, where visible, is clean and free from metal chips, dirt, or obstruction.' },
-      { id: 8, name: 'External Surfaces',      requirement: 'External surfaces show no oil, grease, rust, preservative buildup, or foreign ma
+      { id: 8, name: 'External Surfaces',      requirement: 'External surfaces show no oil, grease, rust, preservative buildup, or foreign material that could affect installation or cleanliness.' },
+    ],
+  },
+];
+
+function _migrateNewTemplates() {
+  const crypto = require('crypto');
+  const checkStmt = rawDb.prepare('SELECT id FROM inspection_templates WHERE form_no = ?');
+  const insertStmt = rawDb.prepare(
+    `INSERT INTO inspection_templates
+       (id, component_type, form_no, revision, title, form_type, disposition_type, header_schema, sections, active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+
+  for (const tpl of NEW_TEMPLATES) {
+    const existing = checkStmt.get(tpl.form_no);
+    if (existing) continue;
+
+    const sections = {
+      receiving: {
+        title: 'A. RECEIVING & DOCUMENTATION VERIFICATION',
+        section_type: 'pfn_checklist',
+        items: JSON.parse(RECEIVING_ITEMS_JSON),
+      },
+      visual: {
+        title: 'B. VISUAL INSPECTION',
+        section_type: 'pass_fail_checklist',
+        items: tpl.visual_items,
+      },
+    };
+
+    try {
+      insertStmt.run(
+        crypto.randomUUID(),
+        tpl.component_type,
+        tpl.form_no,
+        '',
+        tpl.title,
+        'iqi_standard',
+        'pass_fail',
+        STANDARD_HEADER_FIELDS,
+        JSON.stringify(sections),
+        1
+      );
+      console.log(`[SQLite] Migrated template: ${tpl.form_no}`);
+    } catch (err) {
+      console.error(`[SQLite] Failed to migrate template ${tpl.form_no}:`, err.message);
+    }
+  }
+}
+
+module.exports = {
+  get(sql, params = []) {
+    return getDb().prepare(sql).get(...params);
+  },
+  all(sql, params = []) {
+    return getDb().prepare(sql).all(...params);
+  },
+  run(sql, params = []) {
+    return getDb().prepare(sql).run(...params);
+  },
+  exec(sql) {
+    return getDb().exec(sql);
+  },
+  prepare(sql) {
+    return getDb().prepare(sql);
+  },
+  close() {
+    if (rawDb) { rawDb.close(); rawDb = null; }
+  },
+};

@@ -552,4 +552,18 @@ async function seed() {
       }
     }
 
-    // Deac
+    console.log('[Seed] Completed successfully.');
+  } catch (err) {
+    console.error('[Seed] Fatal error:', err);
+    process.exit(1);
+  }
+}
+
+if (require.main === module) {
+  seed().catch(err => {
+    console.error('[Seed] Unhandled error:', err);
+    process.exit(1);
+  });
+}
+
+module.exports = { seed };
