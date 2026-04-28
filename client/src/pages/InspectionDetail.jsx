@@ -61,7 +61,7 @@ export default function InspectionDetail() {
 
   useEffect(() => {
     if (isAdminRole) {
-      api.get('/admin/users').then(r => setUsersList(r.data || [])).catch(() => {})
+      api.get('/admin/users').then(r => setUsersList(r.data?.users || [])).catch(() => {})
     }
   }, [isAdminRole])
 
@@ -69,7 +69,7 @@ export default function InspectionDetail() {
     if (!assignUserId) return
     setAssignSubmitting(true)
     try {
-      await assignInspection.mutateAsync({ id, assigned_to: Number(assignUserId), due_date: assignDueDate || null })
+      await assignInspection.mutateAsync({ id, assigned_to: assignUserId, due_date: assignDueDate || null })
       setShowAssignModal(false)
       showToast('Inspection assigned', 'success')
     } catch (err) {
@@ -348,7 +348,7 @@ export default function InspectionDetail() {
 
         {/* Section data */}
         {Object.entries(sections || {}).map(([key, section]) => {
-          const SectionComp = SECTION_COMPONENTS[section.type]
+          const SectionComp = SECTION_COMPONENTS[section.section_type]
           if (!SectionComp) return null
           return (
             <div key={key} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
@@ -405,12 +405,12 @@ export default function InspectionDetail() {
                 {attachments.filter(a => !a.section_key && !a.item_id).map(att => (
                   <div key={att.id} className="flex items-center justify-between gap-2 p-2 rounded-lg border border-gray-100 hover:bg-gray-50">
                     <div className="min-w-0 flex-1">
-                      <a href={att.url} target="_blank" rel="noopener noreferrer" className="text-sm text-pdi-navy hover:underline truncate block">{att.original_name || att.filename}</a>
-                      <div className="text-xs text-gray-400">{formatFileSize(att.file_size)} · {formatDateTime(att.created_at)}</div>
+                      <a href={`/api/attachments/download/${att.id}`} target="_blank" rel="noopener noreferrer" className="text-sm text-pdi-navy hover:underline truncate block">{att.file_name}</a>
+                      <div className="text-xs text-gray-400">{formatFileSize(att.file_size_bytes)} · {formatDateTime(att.uploaded_at)}</div>
                     </div>
                     {canEdit && (
                       <button
-                        onClick={() => deleteFile.mutate({ inspectionId: id, attachmentId: att.id })}
+                        onClick={() => deleteFile.mutate({ id: att.id, inspectionId: id })}
                         className="p-1.5 text-gray-400 hover:text-red-500 rounded transition-colors flex-shrink-0"
                       >
                         <X size={14} />

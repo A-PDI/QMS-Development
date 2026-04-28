@@ -95,4 +95,34 @@ router.get('/chart', (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/dashboard/alerts — past-due and short-duration inspections for admin panels
+router.get('/alerts', (req, res, next) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+
+    const past_due = db.all(
+      `SELECT i.id, i.form_no, i.part_number, i.due_date, u.name AS assigned_to_name
+       FROM inspections i
+       LEFT JOIN users u ON i.assigned_to = u.id
+       WHERE i.status NOT IN ('complete') AND i.due_date IS NOT NULL AND i.due_date < ?
+       ORDER BY i.due_date ASC
+       LIMIT 20`,
+      [today]
+    );
+
+    const short_duration = db.all(
+      `SELECT id, form_no, part_number, inspector_name,
+         CAST((julianday(completed_at) - julianday(created_at)) * 24 * 60 AS INTEGER) AS duration_minutes
+       FROM inspections
+       WHERE status = 'complete' AND completed_at IS NOT NULL
+         AND (julianday(completed_at) - julianday(created_at)) * 24 * 60 < 15
+       ORDER BY completed_at DESC
+       LIMIT 20`,
+      []
+    );
+
+    res.json({ past_due, short_duration });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;

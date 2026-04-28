@@ -1,6 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { useMsal } from '@azure/msal-react'
-import { getToken, clearAuth } from './lib/auth'
+import { getToken } from './lib/auth'
 import Layout from './components/Layout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'

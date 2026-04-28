@@ -16,8 +16,8 @@ services:
     branch: main
     rootDir: .
     buildCommand: |
-      cd server && npm install --omit=dev &&
-      cd ../client && npm install && npm run build
+      cd server && npm ci --omit=dev &&
+      cd ../client && npm ci && npm run build
     startCommand: cd server && npm start
     healthCheckPath: /health
     disk:

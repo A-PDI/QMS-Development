@@ -259,7 +259,11 @@ router.get('/:id/pdf', async (req, res, next) => {
       template.sections = JSON.parse(template.sections || '{}');
       template.header_schema = JSON.parse(template.header_schema || '[]');
     }
-    const pdfBuffer = await generateInspectionPdf({ inspection, template });
+    const attachments = db.all(
+      'SELECT id, file_name, mime_type, file_path, section_key, item_id, uploaded_at FROM inspection_attachments WHERE inspection_id = ? ORDER BY uploaded_at ASC',
+      [req.params.id]
+    );
+    const pdfBuffer = await generateInspectionPdf(inspection, template, attachments);
     const filename = `${inspection.form_no || 'inspection'}-${inspection.part_number || inspection.id}.pdf`
       .replace(/[^a-zA-Z0-9._-]/g, '_');
     res.setHeader('Content-Type', 'application/pdf');
