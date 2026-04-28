@@ -1,18 +1,18 @@
-'use strict';
-const express = require('express');
+"use strict";
+const express = require("express");
 const router = express.Router();
-const { v4: uuidv4 } = require('uuid');
-const db = require('../db/adapter');
-const { AppError } = require('../middleware/error');
-const { generateInspectionPdf } = require('../services/pdf');
+const { v4: uuidv4 } = require("uuid");
+const db = require("../db/adapter");
+const { AppError } = require("../middleware/error");
+const { generateInspectionPdf } = require("../services/pdf");
 
 function logActivity(inspectionId, actionType, user) {
   try {
-    if (actionType === 'edited') {
+    if (actionType === "edited") {
       const cutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString();
       const recent = db.get(
         `SELECT id FROM inspection_activity_log WHERE inspection_id = ? AND action_type = 'edited' AND created_at > ? LIMIT 1`,
-        [inspectionId, cutoff]
+        [inspectionId, cutoff],
       );
       if (recent) return;
     }
@@ -23,9 +23,19 @@ function logActivity(inspectionId, actionType, user) {
   } catch (_) {}
 }
 
+// GET /api/inspections — list with filters and pagination
 router.get('/', (req, res, next) => {
   try {
-    const { status, component_type, inspector_name, date_from, date_to, search, page = 1, limit = 20 } = req.query;
+    const {
+      status,
+      component_type,
+      inspector_name,
+      date_from,
+      date_to,
+      search,
+      page = 1,
+      limit = 20,
+    } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
     let sql = `SELECT id, template_id, component_type, form_no, part_number, po_number, supplier, lot_serial_no, date_received, inspector_name, lot_size, sample_size, disposition, status, created_at, completed_at, due_date, assigned_to, assigned_at FROM inspections WHERE 1=1`;
     const params = [];
@@ -35,7 +45,8 @@ router.get('/', (req, res, next) => {
     if (date_from) { sql += ' AND date_received >= ?'; params.push(date_from); }
     if (date_to) { sql += ' AND date_received <= ?'; params.push(date_to); }
     if (search) {
-      sql += ' AND (part_number LIKE ? OR po_number LIKE ? OR inspector_name LIKE ? OR lot_serial_no LIKE ?)';
+      sql +=
+        " AND (part_number LIKE ? OR po_number LIKE ? OR inspector_name LIKE ? OR lot_serial_no LIKE ?)";
       const s = `%${search}%`;
       params.push(s, s, s, s);
     }
@@ -47,6 +58,21 @@ router.get('/', (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/inspections/assigned — inspections assigned to the current user
+router.get('/assigned', (req, res, next) => {
+  try {
+    const inspections = db.all(
+      `SELECT id, template_id, component_type, form_no, part_number, po_number, supplier, lot_serial_no, date_received, inspector_name, lot_size, sample_size, disposition, status, created_at, completed_at, due_date, assigned_to, assigned_at
+       FROM inspections
+       WHERE assigned_to = ? AND status != 'complete'
+       ORDER BY due_date ASC, created_at DESC`,
+      [req.user.id]
+    );
+    res.json({ inspections });
+  } catch (err) { next(err); }
+});
+
+// POST /api/inspections — create new inspection
 router.post('/', (req, res, next) => {
   try {
     const { template_id, part_number, supplier, po_number, description, date_received, inspector_name, lot_size, aql_level, sample_size, lot_serial_no, signature, assigned_to, due_date } = req.body;
@@ -71,205 +97,103 @@ router.post('/', (req, res, next) => {
     const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [inspectionId]);
     inspection.section_data = JSON.parse(inspection.section_data || '{}');
     res.status(201).json({ inspection });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 });
 
-router.get('/assigned', (req, res, next) => {
-  try {
-    const inspections = db.all(
-      `SELECT id, form_no, component_type, part_number, po_number, supplier, status, disposition, due_date, assigned_at, started_at, completed_at FROM inspections WHERE assigned_to = ? AND status != 'complete' ORDER BY due_date ASC, created_at ASC`,
-      [req.user.id]
-    );
-    res.json({ inspections });
-  } catch (err) { next(err); }
-});
-
-router.get('/alerts', (req, res, next) => {
-  try {
-    if (!['admin', 'qc_manager'].includes(req.user?.role)) return next(new AppError('Unauthorized', 403));
-    const today = new Date().toISOString().split('T')[0];
-    const pastDue = db.all(
-      `SELECT i.id, i.form_no, i.component_type, i.part_number, i.status, i.due_date, i.started_at, i.completed_at, u.name as assigned_to_name FROM inspections i LEFT JOIN users u ON i.assigned_to = u.id WHERE i.due_date < ? AND i.status = 'draft' ORDER BY i.due_date ASC`,
-      [today]
-    );
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const shortDuration = db.all(
-      `SELECT i.id, i.form_no, i.component_type, i.part_number, i.status, i.due_date, i.started_at, i.completed_at, u.name as assigned_to_name FROM inspections i LEFT JOIN users u ON i.assigned_to = u.id WHERE i.completed_at IS NOT NULL AND julianday(i.completed_at) - julianday(i.started_at) < 0.0208 AND i.completed_at > ? ORDER BY i.completed_at DESC`,
-      [sevenDaysAgo]
-    );
-    res.json({ past_due: pastDue, short_duration: shortDuration });
-  } catch (err) { next(err); }
-});
-
-router.get('/pending-review', (req, res, next) => {
-  try {
-    if (!['admin', 'qc_manager'].includes(req.user && req.user.role)) return next(new AppError('Unauthorized', 403));
-    const inspections = db.all(
-      `SELECT i.id, i.form_no, i.component_type, i.part_number, i.po_number, i.supplier, i.status, i.disposition, i.created_at, i.updated_at, u.name as inspector_name FROM inspections i LEFT JOIN users u ON i.created_by = u.id WHERE i.status = 'pending_review' ORDER BY i.updated_at DESC`,
-      []
-    );
-    res.json({ inspections });
-  } catch (err) { next(err); }
-});
-
+// GET /api/inspections/:id — fetch single inspection with template
 router.get('/:id', (req, res, next) => {
   try {
     const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [req.params.id]);
     if (!inspection) return next(new AppError('Inspection not found', 404, 'NOT_FOUND'));
     inspection.section_data = JSON.parse(inspection.section_data || '{}');
+    const template = db.get('SELECT * FROM inspection_templates WHERE id = ?', [inspection.template_id]);
+    if (template) {
+      template.sections = JSON.parse(template.sections || '{}');
+      template.header_schema = JSON.parse(template.header_schema || '[]');
+    }
+    const attachments = db.all(
+      'SELECT id, file_name, mime_type, file_size_bytes, section_key, item_id, uploaded_at FROM inspection_attachments WHERE inspection_id = ? ORDER BY uploaded_at ASC',
+      [req.params.id]
+    );
+    const activity = db.all(
+      'SELECT id, action_type, actor_name, created_at FROM inspection_activity_log WHERE inspection_id = ? ORDER BY created_at DESC LIMIT 50',
+      [req.params.id]
+    );
+    // Fetch part specs for the part number + template
+    let partSpec = null;
+    if (inspection.part_number && inspection.template_id) {
+      const ps = db.get(
+        'SELECT * FROM part_specs WHERE template_id = ? AND part_number = ?',
+        [inspection.template_id, inspection.part_number]
+      );
+      if (ps) {
+        ps.spec_data = JSON.parse(ps.spec_data || '{}');
+        partSpec = ps;
+      }
+    }
+    res.json({ inspection, template, attachments, activity, partSpec });
+  } catch (err) { next(err); }
+});
+
+// PATCH /api/inspections/:id — update inspection fields + section data
+router.patch('/:id', (req, res, next) => {
+  try {
+    const existing = db.get('SELECT id, status FROM inspections WHERE id = ?', [req.params.id]);
+    if (!existing) return next(new AppError('Inspection not found', 404, 'NOT_FOUND'));
+
+    const updates = [];
+    const values = [];
+    const scalarFields = [
+      'part_number', 'supplier', 'po_number', 'description', 'date_received',
+      'inspector_name', 'lot_size', 'aql_level', 'sample_size', 'lot_serial_no',
+      'signature', 'disposition', 'status', 'due_date',
+    ];
+    for (const f of scalarFields) {
+      if (req.body[f] !== undefined) { updates.push(`${f} = ?`); values.push(req.body[f]); }
+    }
+    if (req.body.section_data !== undefined) {
+      updates.push('section_data = ?');
+      values.push(JSON.stringify(req.body.section_data));
+    }
+    // Assignment fields
+    if (req.body.assigned_to !== undefined) {
+      if (req.body.assigned_to) {
+        const assignee = db.get('SELECT id FROM users WHERE id = ? AND active = 1', [req.body.assigned_to]);
+        if (!assignee) return next(new AppError('Assigned user not found', 404, 'NOT_FOUND'));
+      }
+      const now = new Date().toISOString();
+      updates.push('assigned_to = ?', 'assigned_at = ?', 'assigned_by = ?');
+      values.push(
+        req.body.assigned_to || null,
+        req.body.assigned_to ? now : null,
+        req.body.assigned_to ? req.user.id : null
+      );
+    }
+    if (updates.length === 0) return res.json({ ok: true });
+    updates.push('updated_at = ?');
+    values.push(new Date().toISOString());
+    values.push(req.params.id);
+    db.run(`UPDATE inspections SET ${updates.join(', ')} WHERE id = ?`, values);
+
+    // Log activity
+    if (req.body.section_data !== undefined) {
+      logActivity(req.params.id, 'edited', req.user);
+    }
+    if (req.body.assigned_to !== undefined) {
+      logActivity(req.params.id, req.body.assigned_to ? 'assigned' : 'unassigned', req.user);
+    }
+
+    const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [req.params.id]);
+    inspection.section_data = JSON.parse(inspection.section_data || '{}');
     res.json({ inspection });
   } catch (err) { next(err); }
 });
 
-router.patch('/:id', (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [id]);
-    if (!inspection) return next(new AppError('Inspection not found', 404, 'NOT_FOUND'));
-    const now = new Date().toISOString();
-    const updates = [];
-    const values = [];
-    const headerFields = ['part_number', 'supplier', 'po_number', 'description', 'date_received', 'inspector_name', 'lot_size', 'aql_level', 'sample_size', 'lot_serial_no', 'signature'];
-    for (const field of headerFields) {
-      if (req.body[field] !== undefined) { updates.push(`${field} = ?`); values.push(req.body[field]); }
-    }
-    if (req.body.section_data !== undefined) { updates.push('section_data = ?'); values.push(JSON.stringify(req.body.section_data)); }
-    if (req.body.disposition !== undefined) { updates.push('disposition = ?'); values.push(req.body.disposition); }
-    if (req.body.disposition_notes !== undefined) { updates.push('disposition_notes = ?'); values.push(req.body.disposition_notes); }
-    if (updates.length > 0 && !inspection.started_at) { updates.push('started_at = ?'); values.push(now); }
-    if (updates.length === 0) { inspection.section_data = JSON.parse(inspection.section_data || '{}'); return res.json({ inspection }); }
-    updates.push('updated_at = ?'); values.push(now); values.push(id);
-    db.run(`UPDATE inspections SET ${updates.join(', ')} WHERE id = ?`, values);
-    logActivity(id, 'edited', req.user);
-    const updated = db.get('SELECT * FROM inspections WHERE id = ?', [id]);
-    updated.section_data = JSON.parse(updated.section_data || '{}');
-    res.json({ inspection: updated });
-  } catch (err) { next(err); }
-});
-
-// Helper: scan section_data for any item marked Accepted ('A')
-function hasAcceptedItems(sectionDataJson) {
-  try {
-    const sd = typeof sectionDataJson === 'string' ? JSON.parse(sectionDataJson) : (sectionDataJson || {});
-    for (const [key, data] of Object.entries(sd)) {
-      if (key.startsWith('__')) continue;
-      if (Array.isArray(data)) {
-        for (const row of data) {
-          if (row.status === 'A' || row.result === 'A') return true;
-        }
-      } else if (data && typeof data === 'object') {
-        if (data.result === 'A') return true;
-        if (Array.isArray(data.bores)) {
-          for (const b of data.bores) { if (b && b.result === 'A') return true; }
-        }
-        if (Array.isArray(data.cylinders)) {
-          for (const c of data.cylinders) {
-            if (c && (c.result === 'A' || c.overall === 'A')) return true;
-          }
-        }
-      }
-    }
-  } catch (_) {}
-  return false;
-}
-
-router.post('/:id/complete', (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [id]);
-    if (!inspection) return next(new AppError('Inspection not found', 404, 'NOT_FOUND'));
-    if (inspection.status === 'complete') return next(new AppError('Already completed', 400));
-    const now = new Date().toISOString();
-    const disp = req.body.disposition || inspection.disposition;
-    const dispNotes = req.body.disposition_notes || inspection.disposition_notes;
-    if ((disp === 'ACCEPTED' || disp === 'FAIL') && !(dispNotes && dispNotes.trim())) {
-      return next(new AppError('An explanation is required for FAIL or ACCEPTED dispositions', 400, 'VALIDATION_ERROR'));
-    }
-    const sectionDataForCheck = req.body.section_data || inspection.section_data;
-    const acceptedItems = hasAcceptedItems(sectionDataForCheck);
-    const isAdmin = ['admin', 'qc_manager'].includes(req.user && req.user.role);
-    const newStatus = (acceptedItems && !isAdmin) ? 'pending_review' : 'complete';
-    const completedAt = newStatus === 'complete' ? now : null;
-    db.run(
-      `UPDATE inspections SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?`,
-      [newStatus, completedAt, now, id]
-    );
-    logActivity(id, newStatus === 'complete' ? 'completed' : 'submitted', req.user);
-    if (newStatus === 'complete' && disp === 'ACCEPTED') {
-      try {
-        db.run(
-          `INSERT INTO quality_alerts (id, inspection_id, part_number, supplier, alert_type, triggered_by, created_at) VALUES (?, ?, ?, ?, 'accepted_disposition', ?, ?)`,
-          [uuidv4(), id, inspection.part_number || null, inspection.supplier || null, req.user.id, now]
-        );
-      } catch (_) {}
-    }
-    const updated = db.get('SELECT * FROM inspections WHERE id = ?', [id]);
-    updated.section_data = JSON.parse(updated.section_data || '{}');
-    res.json({ inspection: updated, pending_review: newStatus === 'pending_review', has_accepted_items: acceptedItems });
-  } catch (err) { next(err); }
-});
-
-router.post('/:id/review', (req, res, next) => {
-  try {
-    if (!['admin', 'qc_manager'].includes(req.user && req.user.role)) return next(new AppError('Unauthorized', 403));
-    const { id } = req.params;
-    const { create_alert = false, alert_notes = '' } = req.body;
-    const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [id]);
-    if (!inspection) return next(new AppError('Inspection not found', 404, 'NOT_FOUND'));
-    if (inspection.status !== 'pending_review') return next(new AppError('Inspection is not pending review', 400));
-    const now = new Date().toISOString();
-    db.run(
-      `UPDATE inspections SET status = 'complete', completed_at = ?, updated_at = ? WHERE id = ?`,
-      [now, now, id]
-    );
-    logActivity(id, 'completed', req.user);
-    if (create_alert) {
-      try {
-        db.run(
-          `INSERT INTO quality_alerts (id, inspection_id, part_number, supplier, alert_type, triggered_by, notes, created_at) VALUES (?, ?, ?, ?, 'accepted_disposition', ?, ?, ?)`,
-          [uuidv4(), id, inspection.part_number || null, inspection.supplier || null, req.user.id, alert_notes || null, now]
-        );
-      } catch (_) {}
-    }
-    const updated = db.get('SELECT * FROM inspections WHERE id = ?', [id]);
-    updated.section_data = JSON.parse(updated.section_data || '{}');
-    res.json({ inspection: updated });
-  } catch (err) { next(err); }
-});
-
-
-router.patch('/:id/assign', (req, res, next) => {
-  try {
-    if (!['admin', 'qc_manager'].includes(req.user?.role)) return next(new AppError('Unauthorized', 403));
-    const { id } = req.params;
-    const { assigned_to, due_date } = req.body;
-    if (!assigned_to) return next(new AppError('assigned_to is required', 400, 'VALIDATION_ERROR'));
-    const inspection = db.get('SELECT id FROM inspections WHERE id = ?', [id]);
-    if (!inspection) return next(new AppError('Inspection not found', 404, 'NOT_FOUND'));
-    const user = db.get('SELECT id FROM users WHERE id = ?', [assigned_to]);
-    if (!user) return next(new AppError('User not found', 404, 'NOT_FOUND'));
-    const now = new Date().toISOString();
-    db.run(`UPDATE inspections SET assigned_to = ?, assigned_at = ?, assigned_by = ?, due_date = ?, updated_at = ? WHERE id = ?`, [assigned_to, now, req.user.id, due_date || null, now, id]);
-    logActivity(id, 'assigned', req.user);
-    const updated = db.get('SELECT * FROM inspections WHERE id = ?', [id]);
-    updated.section_data = JSON.parse(updated.section_data || '{}');
-    res.json({ inspection: updated });
-  } catch (err) { next(err); }
-});
-
-router.post('/:id/log-activity', (req, res, next) => {
-  try {
-    const { action_type } = req.body;
-    const allowed = ['emailed', 'printed', 'edited', 'viewed'];
-    if (!allowed.includes(action_type)) return next(new AppError('Invalid action_type', 400));
-    logActivity(req.params.id, action_type, req.user);
-    res.json({ ok: true });
-  } catch (err) { next(err); }
-});
-
+// DELETE /api/inspections/:id
 router.delete('/:id', (req, res, next) => {
   try {
-    if (!['admin', 'qc_manager'].includes(req.user?.role)) return next(new AppError('Unauthorized', 403));
     const inspection = db.get('SELECT id FROM inspections WHERE id = ?', [req.params.id]);
     if (!inspection) return next(new AppError('Inspection not found', 404, 'NOT_FOUND'));
     db.run('DELETE FROM inspections WHERE id = ?', [req.params.id]);
@@ -277,22 +201,82 @@ router.delete('/:id', (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /api/inspections/:id/complete — mark inspection complete + trigger quality alerts
+router.post('/:id/complete', (req, res, next) => {
+  try {
+    const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [req.params.id]);
+    if (!inspection) return next(new AppError('Inspection not found', 404, 'NOT_FOUND'));
+    if (inspection.status === 'complete') return next(new AppError('Inspection already complete', 400, 'VALIDATION_ERROR'));
+
+    const now = new Date().toISOString();
+    const { disposition } = req.body;
+    db.run(
+      `UPDATE inspections SET status = 'complete', completed_at = ?, updated_at = ?${disposition ? ', disposition = ?' : ''} WHERE id = ?`,
+      disposition ? [now, now, disposition, req.params.id] : [now, now, req.params.id]
+    );
+    logActivity(req.params.id, 'completed', req.user);
+
+    // Trigger quality alert if disposition is fail/reject
+    const finalDisposition = disposition || inspection.disposition;
+    if (finalDisposition && (finalDisposition.includes('fail') || finalDisposition.includes('reject'))) {
+      try {
+        db.run(
+          `INSERT INTO quality_alerts (id, inspection_id, part_number, supplier, alert_type, triggered_by, created_at)
+           VALUES (?, ?, ?, ?, 'inspection_failure', ?, ?)`,
+          [uuidv4(), req.params.id, inspection.part_number, inspection.supplier, req.user.id, now]
+        );
+      } catch (_) {}
+    }
+
+    const updated = db.get('SELECT * FROM inspections WHERE id = ?', [req.params.id]);
+    updated.section_data = JSON.parse(updated.section_data || '{}');
+    res.json({ inspection: updated });
+  } catch (err) { next(err); }
+});
+
+// POST /api/inspections/:id/review — submit for review (alias for complete with review status)
+router.post('/:id/review', (req, res, next) => {
+  try {
+    const inspection = db.get('SELECT id FROM inspections WHERE id = ?', [req.params.id]);
+    if (!inspection) return next(new AppError('Inspection not found', 404, 'NOT_FOUND'));
+    const now = new Date().toISOString();
+    db.run(`UPDATE inspections SET status = 'review', updated_at = ? WHERE id = ?`, [now, req.params.id]);
+    logActivity(req.params.id, 'submitted_for_review', req.user);
+    const updated = db.get('SELECT * FROM inspections WHERE id = ?', [req.params.id]);
+    updated.section_data = JSON.parse(updated.section_data || '{}');
+    res.json({ inspection: updated });
+  } catch (err) { next(err); }
+});
+
+// GET /api/inspections/:id/pdf — generate and stream PDF
 router.get('/:id/pdf', async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [id]);
+    const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [req.params.id]);
     if (!inspection) return next(new AppError('Inspection not found', 404, 'NOT_FOUND'));
-    const template = db.get('SELECT * FROM inspection_templates WHERE id = ?', [inspection.template_id]);
-    if (!template) return next(new AppError('Template not found', 404, 'NOT_FOUND'));
     inspection.section_data = JSON.parse(inspection.section_data || '{}');
-    template.header_schema = JSON.parse(template.header_schema || '[]');
-    template.sections = JSON.parse(template.sections || '{}');
-    const attachments = db.all('SELECT id, file_name, file_path, mime_type, section_key, item_id FROM inspection_attachments WHERE inspection_id = ? ORDER BY uploaded_at ASC', [id]);
-    const pdfBuffer = await generateInspectionPdf(inspection, template, attachments);
-    logActivity(id, 'printed', req.user);
+    const template = db.get('SELECT * FROM inspection_templates WHERE id = ?', [inspection.template_id]);
+    if (template) {
+      template.sections = JSON.parse(template.sections || '{}');
+      template.header_schema = JSON.parse(template.header_schema || '[]');
+    }
+    const pdfBuffer = await generateInspectionPdf({ inspection, template });
+    const filename = `${inspection.form_no || 'inspection'}-${inspection.part_number || inspection.id}.pdf`
+      .replace(/[^a-zA-Z0-9._-]/g, '_');
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="inspection-${id}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(pdfBuffer);
+  } catch (err) { next(err); }
+});
+
+// POST /api/inspections/:id/log-activity — manual activity log entry
+router.post('/:id/log-activity', (req, res, next) => {
+  try {
+    const { action_type } = req.body;
+    if (!action_type) return next(new AppError('action_type is required', 400, 'VALIDATION_ERROR'));
+    const inspection = db.get('SELECT id FROM inspections WHERE id = ?', [req.params.id]);
+    if (!inspection) return next(new AppError('Inspection not found', 404, 'NOT_FOUND'));
+    logActivity(req.params.id, action_type, req.user);
+    res.json({ ok: true });
   } catch (err) { next(err); }
 });
 

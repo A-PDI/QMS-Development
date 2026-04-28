@@ -147,8 +147,15 @@ router.put('/templates/:id/part-specs/:partNumber', requireAdmin, (req, res, nex
         [uuidv4(), req.params.id, req.params.partNumber, description || null, JSON.stringify(spec_data || {}), now, now]);
     }
     const spec = db.get('SELECT * FROM part_specs WHERE template_id = ? AND part_number = ?', [req.params.id, req.params.partNumber]);
-    spec.spec_data = JSON.parse(spec.spec_data || '{}');
+    if (spec) spec.spec_data = JSON.parse(spec.spec_data || '{}');
     res.json({ spec });
+  } catch (err) { next(err); }
+});
+
+router.delete('/templates/:id/part-specs/:partNumber', requireAdmin, (req, res, next) => {
+  try {
+    db.run('DELETE FROM part_specs WHERE template_id = ? AND part_number = ?', [req.params.id, req.params.partNumber]);
+    res.json({ ok: true });
   } catch (err) { next(err); }
 });
 
@@ -156,84 +163,64 @@ router.put('/templates/:id/part-specs/:partNumber', requireAdmin, (req, res, nex
 
 router.get('/users', requireAdmin, (req, res, next) => {
   try {
-    const users = db.all('SELECT id, name, email, role, active, permissions, created_at FROM users ORDER BY name', []);
+    const { include_inactive } = req.query;
+    let sql = 'SELECT id, name, email, role, active, permissions, created_at FROM users';
+    if (!include_inactive) sql += ' WHERE active = 1';
+    sql += ' ORDER BY name';
+    const users = db.all(sql, []);
     res.json({ users });
   } catch (err) { next(err); }
 });
 
-router.post('/users', requireAdminOnly, (req, res, next) => {
+router.post('/users', requireAdmin, async (req, res, next) => {
   try {
-    const { name, email, role, password, permissions } = req.body;
+    const { name, email, role, password, active, permTabs, usePermissions } = req.body;
     if (!name || !email || !password) return next(new AppError('name, email, and password are required', 400));
-    const validRoles = ['inspector', 'qc_manager', 'admin'];
-    if (role && !validRoles.includes(role)) return next(new AppError('Invalid role', 400));
     const existing = db.get('SELECT id FROM users WHERE email = ?', [email]);
-    if (existing) return next(new AppError('A user with that email already exists', 409));
+    if (existing) return next(new AppError('Email already in use', 409));
+    const hash = await bcrypt.hash(password, 10);
     const id = uuidv4();
-    const hash = bcrypt.hashSync(password, 10);
     const now = new Date().toISOString();
-    const permJson = permissions ? JSON.stringify(permissions) : null;
+    const permissions = usePermissions && Array.isArray(permTabs)
+      ? JSON.stringify({ tabs: permTabs })
+      : null;
     db.run(
-      `INSERT INTO users (id, name, email, role, password_hash, active, permissions, created_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
-      [id, name.trim(), email.trim().toLowerCase(), role || 'inspector', hash, permJson, now]
+      `INSERT INTO users (id, name, email, role, password_hash, active, permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, name, email, role || 'inspector', hash, active ?? 1, permissions, now]
     );
     const user = db.get('SELECT id, name, email, role, active, permissions, created_at FROM users WHERE id = ?', [id]);
     res.status(201).json({ user });
   } catch (err) { next(err); }
 });
 
-router.patch('/users/:id', requireAdminOnly, (req, res, next) => {
+router.patch('/users/:id', requireAdmin, async (req, res, next) => {
   try {
-    const { name, email, role, password, active, permissions } = req.body;
-    const user = db.get('SELECT id FROM users WHERE id = ?', [req.params.id]);
-    if (!user) return next(new AppError('User not found', 404));
+    const existing = db.get('SELECT id FROM users WHERE id = ?', [req.params.id]);
+    if (!existing) return next(new AppError('User not found', 404));
     const updates = [];
     const values = [];
-    if (name !== undefined) { updates.push('name = ?'); values.push(name.trim()); }
-    if (email !== undefined) { updates.push('email = ?'); values.push(email.trim().toLowerCase()); }
-    if (role !== undefined) {
-      const validRoles = ['inspector', 'qc_manager', 'admin'];
-      if (!validRoles.includes(role)) return next(new AppError('Invalid role', 400));
-      updates.push('role = ?'); values.push(role);
-    }
-    if (active !== undefined) { updates.push('active = ?'); values.push(active ? 1 : 0); }
+    const { name, email, role, password, active, permTabs, usePermissions } = req.body;
+    if (name !== undefined) { updates.push('name = ?'); values.push(name); }
+    if (email !== undefined) { updates.push('email = ?'); values.push(email); }
+    if (role !== undefined) { updates.push('role = ?'); values.push(role); }
+    if (active !== undefined) { updates.push('active = ?'); values.push(active); }
     if (password) {
+      const hash = await bcrypt.hash(password, 10);
       updates.push('password_hash = ?');
-      values.push(bcrypt.hashSync(password, 10));
+      values.push(hash);
     }
-    if (permissions !== undefined) {
+    if (usePermissions !== undefined) {
+      const permissions = usePermissions && Array.isArray(permTabs)
+        ? JSON.stringify({ tabs: permTabs })
+        : null;
       updates.push('permissions = ?');
-      values.push(permissions ? JSON.stringify(permissions) : null);
+      values.push(permissions);
     }
     if (updates.length === 0) return res.json({ ok: true });
     values.push(req.params.id);
     db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, values);
-    const updated = db.get('SELECT id, name, email, role, active, permissions, created_at FROM users WHERE id = ?', [req.params.id]);
-    res.json({ user: updated });
-  } catch (err) { next(err); }
-});
-
-router.delete('/users/:id', requireAdminOnly, (req, res, next) => {
-  try {
-    // Soft-delete: deactivate rather than remove
-    const user = db.get('SELECT id FROM users WHERE id = ?', [req.params.id]);
-    if (!user) return next(new AppError('User not found', 404));
-    if (req.params.id === req.user.id) return next(new AppError('Cannot deactivate your own account', 400));
-    db.run('UPDATE users SET active = 0 WHERE id = ?', [req.params.id]);
-    res.json({ ok: true });
-  } catch (err) { next(err); }
-});
-
-// ── Stats ─────────────────────────────────────────────────────────────────────
-
-router.get('/stats', requireAdmin, (req, res, next) => {
-  try {
-    const total = db.get('SELECT COUNT(*) as count FROM inspections', []).count;
-    const open = db.get("SELECT COUNT(*) as count FROM inspections WHERE status = 'draft'", []).count;
-    const complete = db.get("SELECT COUNT(*) as count FROM inspections WHERE status = 'complete'", []).count;
-    const templates = db.get('SELECT COUNT(*) as count FROM inspection_templates WHERE active = 1', []).count;
-    const users = db.get('SELECT COUNT(*) as count FROM users WHERE active = 1', []).count;
-    res.json({ total_inspections: total, open_inspections: open, completed_inspections: complete, active_templates: templates, active_users: users });
+    const user = db.get('SELECT id, name, email, role, active, permissions, created_at FROM users WHERE id = ?', [req.params.id]);
+    res.json({ user });
   } catch (err) { next(err); }
 });
 

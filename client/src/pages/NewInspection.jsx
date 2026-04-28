@@ -4,7 +4,7 @@ import { useTemplates } from '../hooks/useTemplates'
 import { useCreateInspection } from '../hooks/useInspections'
 import { useToast } from '../hooks/useToast'
 import { getUser } from '../lib/auth'
-import { X } from 'lucide-react'
+import { X, Wrench } from 'lucide-react'
 
 const FIELD_CONFIG = [
   { key: 'po_number',      label: 'PO Number',         required: true,  type: 'text' },
@@ -111,6 +111,21 @@ export default function NewInspection() {
             )}
           </div>
 
+          {/* Admin: Build Custom Form link */}
+          {isAdminRole && (
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-pdi-frost border border-pdi-navy/10">
+              <Wrench size={14} className="text-pdi-navy/60 flex-shrink-0" />
+              <span className="text-xs text-gray-600 flex-1">Need a form for a new part type?</span>
+              <button
+                type="button"
+                onClick={() => navigate('/inspections/new/custom')}
+                className="text-xs font-semibold text-pdi-navy hover:underline flex-shrink-0"
+              >
+                Build Custom Form →
+              </button>
+            </div>
+          )}
+
           {/* Other header fields — single column on mobile, two columns on sm+ */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {FIELD_CONFIG.map(({ key, label, required, type, wide }) => (
@@ -130,25 +145,4 @@ export default function NewInspection() {
             ))}
           </div>
 
-          {/* Actions — stack on very narrow screens */}
-          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3 pt-3 border-t border-gray-100">
-            <button
-              type="button"
-              onClick={() => navigate(-1)}
-              className="px-4 py-2.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors min-h-[44px]"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={submitting || isLoading}
-              className="px-5 py-2.5 text-sm font-semibold bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy/90 disabled:opacity-50 transition-colors min-h-[44px]"
-            >
-              {submitting ? 'Starting…' : 'Start Inspection'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  )
-}
+          {/* Actions — stack on very narro

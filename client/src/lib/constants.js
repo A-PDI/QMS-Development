@@ -4,6 +4,12 @@ export const COMPONENT_TYPE_LABELS = {
   piston_pin: 'Piston Pin',
   piston_ring: 'Piston Ring',
   cylinder_head: 'Cylinder Head',
+  camshaft: 'Camshaft',
+  radiator: 'Radiator',
+  clutch: 'Clutch',
+  oil_cooler: 'Oil Cooler',
+  turbocharger: 'Turbocharger',
+  fuel_injector: 'Fuel Injector',
 }
 
 export const STATUS_LABELS = {

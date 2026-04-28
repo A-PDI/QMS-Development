@@ -6,6 +6,7 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import InspectionList from './pages/InspectionList'
 import NewInspection from './pages/NewInspection'
+import CustomInspectionBuilder from './pages/CustomInspectionBuilder'
 import InspectionForm from './pages/InspectionForm'
 import InspectionDetail from './pages/InspectionDetail'
 import NCRList from './pages/NCRList'
@@ -54,6 +55,7 @@ export default function App() {
           <Route path="my-inspections" element={<MyInspections />} />
           <Route path="inspections" element={<InspectionList />} />
           <Route path="inspections/new" element={<NewInspection />} />
+          <Route path="inspections/new/custom" element={<CustomInspectionBuilder />} />
           <Route path="inspections/:id" element={<InspectionDetail />} />
           <Route path="inspections/:id/edit" element={<InspectionForm />} />
           <Route path="ncrs" element={<NCRList />} />

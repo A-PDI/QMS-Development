@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Printer, Search, Save, X, ChevronDown, ChevronUp, Users, FileImage, Download, AlertTriangle, Loader2, ClipboardCheck, UserCheck } from 'lucide-react'
+import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Printer, Search, Save, X, ChevronDown, ChevronUp, Users, FileImage, Download, AlertTriangle, Loader2, ClipboardCheck, UserCheck, Mail } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '../lib/api'
-import { useInspections, useDeleteInspection, useCreateInspection } from '../hooks/useInspections'
+import { useInspections, useDeleteInspection, useCreateInspection, useAssignInspection } from '../hooks/useInspections'
 import { usePartSpecs, useCreatePartSpec, useUpdatePartSpec, useDeletePartSpec } from '../hooks/usePartSpecs'
 import { useDrawings, useUploadDrawing, useSetCurrentDrawing, useDeleteDrawing } from '../hooks/useDrawings'
 import { useToast } from '../hooks/useToast'
+import { getUser } from '../lib/auth'
 import { useTemplates } from '../hooks/useTemplates'
 import { formatDate } from '../lib/utils'
 import { COMPONENT_TYPE_LABELS, STATUS_LABELS, STATUS_COLORS } from '../lib/constants'
@@ -595,6 +596,226 @@ function PartSpecsTab({ showToast }) {
   )
 }
 
+// ── Assign Modal ─────────────────────────────────────────────────────────────
+
+function AssignModal({ inspection, onClose, showToast }) {
+  const [selectedUserId, setSelectedUserId] = useState(inspection.assigned_to || '')
+  const [saving, setSaving] = useState(false)
+  const assignInspection = useAssignInspection()
+
+  const { data: usersData } = useQuery({
+    queryKey: ['admin-users'],
+    queryFn: async () => { const { data } = await api.get('/admin/users'); return data.users },
+  })
+  const users = usersData || []
+
+  async function handleSave() {
+    setSaving(true)
+    try {
+      await assignInspection.mutateAsync({ id: inspection.id, assigned_to: selectedUserId || null })
+      showToast('Inspection assigned', 'success')
+      onClose()
+    } catch (err) {
+      showToast(err?.response?.data?.error || 'Assign failed', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-semibold text-pdi-navy">Assign Inspection</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X size={18} /></button>
+        </div>
+        <div className="text-xs text-gray-500">
+          <span className="font-medium text-gray-700">{inspection.form_no}</span> — {inspection.part_number || 'No part #'}
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Assign to User</label>
+          <select
+            value={selectedUserId}
+            onChange={e => setSelectedUserId(e.target.value)}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
+          >
+            <option value="">— Unassigned —</option>
+            {users.map(u => (
+              <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
+          <button onClick={handleSave} disabled={saving}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px]">
+            <UserCheck size={14} /> {saving ? 'Saving…' : 'Assign'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Inspection Data Tab ───────────────────────────────────────────────────────
+
+function InspectionDataTab({ showToast }) {
+  const navigate = useNavigate()
+  const [filters, setFilters] = useState({ page: 1, limit: 50 })
+  const [search, setSearch] = useState('')
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [assignTarget, setAssignTarget] = useState(null)
+  const deleteInspection = useDeleteInspection()
+
+  const { data: inspectionsData } = useInspections(filters)
+  const inspections = inspectionsData?.inspections || []
+  const total = inspectionsData?.total || 0
+
+  function applySearch(e) {
+    e.preventDefault()
+    setFilters(f => ({ ...f, search, page: 1 }))
+  }
+
+  function setFilter(key, val) {
+    setFilters(f => ({ ...f, [key]: val || undefined, page: 1 }))
+  }
+
+  function handleEmail(insp) {
+    const subject = encodeURIComponent(`PDI Inspection ${insp.form_no} — ${insp.part_number || 'No part #'}`)
+    const body = encodeURIComponent(
+      `Please review the following inspection:\n\nForm: ${insp.form_no}\nPart Number: ${insp.part_number || '—'}\nPO Number: ${insp.po_number || '—'}\nInspector: ${insp.inspector_name || '—'}\nStatus: ${insp.status}\n\nView at: ${window.location.origin}/inspections/${insp.id}`
+    )
+    window.open(`mailto:?subject=${subject}&body=${body}`)
+  }
+
+  async function handleDelete(id) {
+    if (!window.confirm('Delete this inspection permanently?')) return
+    try {
+      await deleteInspection.mutateAsync(id)
+      showToast('Inspection deleted', 'success')
+    } catch (err) {
+      showToast(err?.response?.data?.error || 'Delete failed', 'error')
+    }
+  }
+
+  const activeFilterCount = ['status', 'component_type', 'date_from', 'date_to'].filter(k => filters[k]).length
+
+  return (
+    <div className="space-y-3 sm:space-y-4">
+      {assignTarget && (
+        <AssignModal
+          inspection={assignTarget}
+          onClose={() => setAssignTarget(null)}
+          showToast={showToast}
+        />
+      )}
+
+      <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-4">
+        <div className="flex flex-wrap gap-2 sm:gap-3 items-center">
+          <form onSubmit={applySearch} className="flex gap-2 flex-1 sm:flex-none min-w-0">
+            <div className="relative flex-1 sm:flex-none">
+              <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input type="text" placeholder="Part #, PO, inspector, lot…"
+                className="w-full sm:w-56 pl-8 pr-3 py-2 sm:py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px] sm:min-h-0"
+                value={search} onChange={e => setSearch(e.target.value)} />
+            </div>
+            <button type="submit" className="px-3 py-2 sm:py-1.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[40px] sm:min-h-0">Search</button>
+          </form>
+          <button
+            type="button"
+            onClick={() => setFiltersOpen(o => !o)}
+            className="sm:hidden flex items-center gap-1 px-3 py-2 text-sm border border-gray-200 rounded-lg relative min-h-[40px]"
+          >
+            Filters
+            {activeFilterCount > 0 && (
+              <span className="ml-1 bg-pdi-amber text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                {activeFilterCount}
+              </span>
+            )}
+            {filtersOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+          <span className="text-xs text-gray-500 sm:ml-auto sm:self-center">{total} records</span>
+        </div>
+        <div className={`${filtersOpen ? 'flex' : 'hidden'} sm:flex flex-wrap gap-2 sm:gap-3 items-end mt-2 sm:mt-3`}>
+          <select className="w-full sm:w-auto px-3 py-2 sm:py-1.5 text-sm border border-gray-200 rounded-lg min-h-[40px] sm:min-h-0" value={filters.status || ''} onChange={e => setFilter('status', e.target.value)}>
+            <option value="">All Statuses</option>
+            <option value="draft">Open</option>
+            <option value="complete">Complete</option>
+          </select>
+          <select className="w-full sm:w-auto px-3 py-2 sm:py-1.5 text-sm border border-gray-200 rounded-lg min-h-[40px] sm:min-h-0" value={filters.component_type || ''} onChange={e => setFilter('component_type', e.target.value)}>
+            <option value="">All Components</option>
+            {Object.entries(COMPONENT_TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <input type="date" className="flex-1 sm:flex-none px-3 py-2 sm:py-1.5 text-sm border border-gray-200 rounded-lg min-h-[40px] sm:min-h-0" value={filters.date_from || ''} onChange={e => setFilter('date_from', e.target.value)} />
+            <span className="text-gray-400 text-sm">to</span>
+            <input type="date" className="flex-1 sm:flex-none px-3 py-2 sm:py-1.5 text-sm border border-gray-200 rounded-lg min-h-[40px] sm:min-h-0" value={filters.date_to || ''} onChange={e => setFilter('date_to', e.target.value)} />
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="hidden md:block overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                {['Form No', 'Part #', 'PO #', 'Inspector', 'Date Received', 'Status', ''].map(h => (
+                  <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {inspections.map(insp => (
+                <tr key={insp.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</td>
+                  <td className="px-4 py-3 text-sm">{insp.part_number || '—'}</td>
+                  <td className="px-4 py-3 text-sm text-gray-500">{insp.po_number || '—'}</td>
+                  <td className="px-4 py-3 text-sm">{insp.inspector_name || '—'}</td>
+                  <td className="px-4 py-3 text-sm text-gray-500">{formatDate(insp.date_received)}</td>
+                  <td className="px-4 py-3"><StatusBadge status={insp.status} /></td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => navigate(`/inspections/${insp.id}`)} className="text-xs text-pdi-navy hover:underline">View</button>
+                      <button onClick={() => setAssignTarget(insp)} className="text-xs text-gray-500 hover:text-pdi-navy"><UserCheck size={13} /></button>
+                      <button onClick={() => handleEmail(insp)} className="text-xs text-gray-500 hover:text-pdi-navy"><Mail size={13} /></button>
+                      <button onClick={() => handleDelete(insp.id)} className="text-xs text-red-400 hover:text-red-600"><Trash2 size={13} /></button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="md:hidden divide-y divide-gray-100">
+          {inspections.map(insp => (
+            <div key={insp.id} className="px-3 py-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</span>
+                    <StatusBadge status={insp.status} />
+                  </div>
+                  <div className="text-sm text-gray-800 mt-0.5">{insp.part_number || '—'}</div>
+                  <div className="text-xs text-gray-500 mt-0.5">{insp.inspector_name} · {formatDate(insp.date_received)}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-4 mt-2">
+                <button onClick={() => navigate(`/inspections/${insp.id}`)} className="text-sm text-pdi-navy hover:underline min-h-[36px]">View</button>
+                <button onClick={() => setAssignTarget(insp)} className="text-sm text-gray-500 min-h-[36px]"><UserCheck size={14} /></button>
+                <button onClick={() => handleEmail(insp)} className="text-sm text-gray-500 min-h-[36px]"><Mail size={14} /></button>
+                <button onClick={() => handleDelete(insp.id)} className="text-sm text-red-400 min-h-[36px]"><Trash2 size={14} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+        {inspections.length === 0 && (
+          <div className="text-center text-gray-400 py-10 text-sm">No inspections match your filters</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Users Tab ────────────────────────────────────────────────────────────────
 
 function UsersTab({ showToast }) {
@@ -636,7 +857,6 @@ function UsersTab({ showToast }) {
       email: user.email,
       role: user.role,
       active: user.active,
-      // null = no restrictions; array = explicit list
       permTabs: tabs,
       usePermissions: tabs !== null,
     })
@@ -779,7 +999,6 @@ function UsersTab({ showToast }) {
               )}
             </div>
           )}
-
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3 pt-2 border-t border-gray-100">
             <button onClick={() => { setEditingId(null); setCreating(false); setEditForm(null) }} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
             <button onClick={handleSave} className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[40px]">
@@ -792,6 +1011,8 @@ function UsersTab({ showToast }) {
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         {isLoading ? (
           <div className="text-center text-gray-400 py-12">Loading…</div>
+        ) : users.length === 0 ? (
+          <div className="text-center text-gray-400 py-12 text-sm">No users found</div>
         ) : (
           <>
             {/* Desktop table */}
@@ -799,50 +1020,70 @@ function UsersTab({ showToast }) {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    {['Name', 'Email', 'Role', 'Active', 'Created', 'Actions'].map(h => (
+                    {['Name', 'Email', 'Role', 'Permissions', 'Status', ''].map(h => (
                       <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {users.map(user => (
-                    <tr key={user.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 font-medium text-gray-800">{user.name}</td>
-                      <td className="px-4 py-3 text-sm text-gray-700">{user.email}</td>
-                      <td className="px-4 py-3 text-sm capitalize">{user.role?.replace('_', ' ')}</td>
-                      <td className="px-4 py-3">
-                        <span className={`text-xs font-medium ${user.active ? 'text-green-600' : 'text-gray-400'}`}>{user.active ? 'Yes' : 'No'}</span>
-                      </td>
-                      <td className="px-4 py-3 text-xs text-gray-500">{formatDate(user.created_at)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          <button onClick={() => startEdit(user)} className="text-xs text-pdi-navy hover:underline"><Edit2 size={13} className="inline mr-1" /> Edit</button>
-                          <button onClick={() => handleToggleActive(user)} className="text-xs text-gray-400 hover:text-gray-600">{user.active ? 'Deactivate' : 'Activate'}</button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {users.map(u => {
+                    const tabs = parsePerms(u)
+                    return (
+                      <tr key={u.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 font-medium text-sm text-gray-900">{u.name}</td>
+                        <td className="px-4 py-3 text-sm text-gray-600">{u.email}</td>
+                        <td className="px-4 py-3 text-xs text-gray-500 capitalize">{u.role}</td>
+                        <td className="px-4 py-3 text-xs text-gray-500">
+                          {tabs ? `${tabs.length} pages` : 'All pages'}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`text-xs font-medium ${u.active ? 'text-green-600' : 'text-gray-400'}`}>
+                            {u.active ? 'Active' : 'Inactive'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-3">
+                            <button onClick={() => startEdit(u)} className="text-xs text-pdi-navy hover:underline flex items-center gap-1">
+                              <Edit2 size={12} /> Edit
+                            </button>
+                            <button onClick={() => handleToggleActive(u)} className="text-xs text-gray-500 hover:text-gray-700">
+                              {u.active ? 'Deactivate' : 'Activate'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
             {/* Mobile card list */}
             <div className="md:hidden divide-y divide-gray-100">
-              {users.map(user => (
-                <div key={user.id} className="px-4 py-3">
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <div>
-                      <div className="font-medium text-gray-800">{user.name}</div>
-                      <div className="text-xs text-gray-600 mt-0.5">{user.email}</div>
+              {users.map(u => {
+                const tabs = parsePerms(u)
+                return (
+                  <div key={u.id} className="px-3 py-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium text-sm text-gray-900">{u.name}</span>
+                          <span className={`text-xs font-medium ${u.active ? 'text-green-600' : 'text-gray-400'}`}>
+                            {u.active ? '● Active' : '○ Inactive'}
+                          </span>
+                        </div>
+                        <div className="text-xs text-gray-500 mt-0.5">{u.email}</div>
+                        <div className="text-xs text-gray-400 mt-0.5 capitalize">{u.role} · {tabs ? `${tabs.length} pages` : 'All pages'}</div>
+                      </div>
+                      <button onClick={() => startEdit(u)} className="text-pdi-navy flex-shrink-0 mt-1">
+                        <Edit2 size={14} />
+                      </button>
                     </div>
-                    <span className={`text-xs font-medium ${user.active ? 'text-green-600' : 'text-gray-400'}`}>{user.active ? 'Active' : 'Inactive'}</span>
+                    <button onClick={() => handleToggleActive(u)} className="mt-1 text-xs text-gray-500 hover:text-gray-700 min-h-[32px]">
+                      {u.active ? 'Deactivate' : 'Activate'}
+                    </button>
                   </div>
-                  <div className="text-xs text-gray-500 mb-2 capitalize">Role: {user.role?.replace('_', ' ')}</div>
-                  <div className="flex gap-3">
-                    <button onClick={() => startEdit(user)} className="text-sm text-pdi-navy min-h-[36px]"><Edit2 size={13} className="inline mr-1" /> Edit</button>
-                    <button onClick={() => handleToggleActive(user)} className="text-sm text-gray-600 min-h-[36px]">{user.active ? 'Deactivate' : 'Activate'}</button>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </>
         )}
@@ -854,28 +1095,34 @@ function UsersTab({ showToast }) {
 // ── Drawings Tab ──────────────────────────────────────────────────────────────
 
 function DrawingsTab({ showToast }) {
-  const qc = useQueryClient()
   const [partNumber, setPartNumber] = useState('')
-  const [uploadForm, setUploadForm] = useState({ version: '', notes: '' })
+  const [searchInput, setSearchInput] = useState('')
   const [uploading, setUploading] = useState(false)
+  const [uploadForm, setUploadForm] = useState({ version: '', notes: '', file: null })
+  const [showUpload, setShowUpload] = useState(false)
 
-  const { data: drawings = [] } = useDrawings(partNumber)
+  const { data: drawings = [], isLoading } = useDrawings(partNumber)
   const uploadDrawing = useUploadDrawing()
   const setCurrentDrawing = useSetCurrentDrawing()
   const deleteDrawing = useDeleteDrawing()
 
+  function applySearch(e) {
+    e.preventDefault()
+    setPartNumber(searchInput.trim())
+  }
+
   async function handleUpload(e) {
-    const file = e.target.files?.[0]
-    if (!file || !partNumber.trim() || !uploadForm.version.trim()) {
-      showToast('Part number, version, and file are required', 'error')
+    e.preventDefault()
+    if (!partNumber || !uploadForm.version || !uploadForm.file) {
+      showToast('Version and file are required', 'error')
       return
     }
     setUploading(true)
     try {
-      await uploadDrawing.mutateAsync({ partNumber, version: uploadForm.version, notes: uploadForm.notes, file })
+      await uploadDrawing.mutateAsync({ partNumber, version: uploadForm.version, notes: uploadForm.notes, file: uploadForm.file })
       showToast('Drawing uploaded', 'success')
-      setUploadForm({ version: '', notes: '' })
-      e.target.value = ''
+      setUploadForm({ version: '', notes: '', file: null })
+      setShowUpload(false)
     } catch (err) {
       showToast(err?.response?.data?.error || 'Upload failed', 'error')
     } finally {
@@ -883,488 +1130,164 @@ function DrawingsTab({ showToast }) {
     }
   }
 
-  async function handleSetCurrent(id) {
+  async function handleSetCurrent(drawing) {
     try {
-      await setCurrentDrawing.mutateAsync({ id, partNumber })
-      showToast('Drawing set as current', 'success')
-    } catch (err) {
-      showToast('Failed to set current', 'error')
-    }
+      await setCurrentDrawing.mutateAsync({ id: drawing.id, partNumber })
+      showToast('Set as current drawing', 'success')
+    } catch { showToast('Failed', 'error') }
   }
 
-  async function handleDelete(id) {
+  async function handleDelete(drawing) {
     if (!window.confirm('Delete this drawing?')) return
     try {
-      await deleteDrawing.mutateAsync({ id, partNumber })
+      await deleteDrawing.mutateAsync({ id: drawing.id, partNumber })
       showToast('Drawing deleted', 'success')
-    } catch (err) {
-      showToast('Delete failed', 'error')
-    }
+    } catch { showToast('Delete failed', 'error') }
   }
-
-  const currentDrawing = drawings.find(d => d.is_current)
 
   return (
     <div className="space-y-3 sm:space-y-4">
-      {/* Part number search */}
-      <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-4">
-        <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">Part Number</label>
+      <form onSubmit={applySearch} className="flex gap-2">
         <input
           type="text"
-          placeholder="Search or enter part number…"
-          value={partNumber}
-          onChange={e => setPartNumber(e.target.value)}
-          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
+          placeholder="Enter part number…"
+          value={searchInput}
+          onChange={e => setSearchInput(e.target.value)}
+          className="flex-1 sm:max-w-xs border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
         />
-      </div>
+        <button type="submit" className="px-3 sm:px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[40px]">Search</button>
+      </form>
 
       {partNumber && (
-        <>
-          {/* Current drawing */}
-          {currentDrawing && (
-            <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
-              <h3 className="text-sm font-semibold text-gray-800 mb-3">Current Drawing</h3>
-              <div className="flex items-center justify-between gap-3 p-3 bg-pdi-frost rounded-lg">
-                <div className="min-w-0 flex-1">
-                  <div className="font-mono text-xs font-bold text-pdi-navy">{currentDrawing.file_name}</div>
-                  <div className="text-xs text-gray-600 mt-1">v{currentDrawing.version} • {currentDrawing.uploaded_by_name} • {formatDate(currentDrawing.created_at)}</div>
-                </div>
-                <a
-                  href={`/api/drawings/download/${currentDrawing.id}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg hover:bg-gray-50 flex-shrink-0 min-h-[40px]"
-                >
-                  <Download size={14} /> Download
-                </a>
-              </div>
-            </div>
-          )}
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-gray-700">Drawings for <span className="font-mono text-pdi-navy">{partNumber}</span></span>
+          <button onClick={() => setShowUpload(s => !s)} className="flex items-center gap-1.5 text-sm text-pdi-navy hover:underline min-h-[36px]">
+            <Plus size={14} /> Upload Drawing
+          </button>
+        </div>
+      )}
 
-          {/* Upload form */}
-          <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
-            <h3 className="text-sm font-semibold text-gray-800 mb-3">Upload New Version</h3>
-            <div className="space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Version</label>
-                  <input
-                    type="text"
-                    value={uploadForm.version}
-                    onChange={e => setUploadForm(f => ({ ...f, version: e.target.value }))}
-                    placeholder="e.g., 1.0"
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
-                  <input
-                    type="text"
-                    value={uploadForm.notes}
-                    onChange={e => setUploadForm(f => ({ ...f, notes: e.target.value }))}
-                    placeholder="Optional notes…"
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">File (PDF or image)</label>
-                <input
-                  type="file"
-                  accept=".pdf,image/*"
-                  onChange={handleUploadDrawing}
-                  disabled={uploading || !uploadForm.version}
-                  className="w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-pdi-navy file:text-white hover:file:bg-pdi-navy-light disabled:opacity-50"
-                />
-                {!uploadForm.version && (
-                  <p className="text-xs text-amber-600 mt-1">Enter a version number before selecting a file.</p>
-                )}
-              </div>
-              {uploading && (
-                <div className="flex items-center gap-2 text-sm text-gray-500">
-                  <Loader2 size={14} className="animate-spin" />
-                  Uploading…
-                </div>
-              )}
+      {partNumber && showUpload && (
+        <div className="bg-white rounded-xl border border-pdi-navy/30 p-3 sm:p-5 shadow-sm space-y-3">
+          <h3 className="text-sm font-semibold text-pdi-navy">Upload Drawing</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Version <span className="text-red-500">*</span></label>
+              <input value={uploadForm.version} onChange={e => setUploadForm(f => ({ ...f, version: e.target.value }))}
+                placeholder="e.g. Rev A"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Notes</label>
+              <input value={uploadForm.notes} onChange={e => setUploadForm(f => ({ ...f, notes: e.target.value }))}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-medium text-gray-500 mb-1">File <span className="text-red-500">*</span></label>
+              <input type="file" accept=".pdf,.png,.jpg,.jpeg,.dxf,.dwg"
+                onChange={e => setUploadForm(f => ({ ...f, file: e.target.files[0] || null }))}
+                className="w-full text-sm" />
             </div>
           </div>
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+            <button onClick={() => setShowUpload(false)} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
+            <button onClick={handleUpload} disabled={uploading}
+              className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px]">
+              {uploading ? 'Uploading…' : 'Upload'}
+            </button>
+          </div>
+        </div>
+      )}
 
-          {/* All versions */}
-          {drawings.length > 0 && (
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              <div className="px-4 sm:px-5 py-3 border-b border-gray-200 bg-gray-50">
-                <h3 className="text-sm font-semibold text-gray-800">All Versions ({drawings.length})</h3>
-              </div>
-              <div className="divide-y divide-gray-100">
-                {drawings.map(d => (
-                  <div key={d.id} className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-mono text-xs font-bold text-pdi-navy">{d.file_name}</span>
-                        {d.is_current ? (
-                          <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-semibold">Current</span>
-                        ) : null}
-                      </div>
-                      <div className="text-xs text-gray-500 mt-0.5">v{d.version} • {d.notes || 'No notes'} • {formatDate(d.created_at)}</div>
+      {partNumber && (
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          {isLoading ? (
+            <div className="text-center text-gray-400 py-10">Loading…</div>
+          ) : drawings.length === 0 ? (
+            <div className="text-center text-gray-400 py-10 text-sm">No drawings for this part number</div>
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {drawings.map(d => (
+                <div key={d.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-3 sm:px-4 py-3 gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <FileImage size={14} className="text-pdi-navy flex-shrink-0" />
+                      <span className="font-medium text-sm text-gray-900 truncate">{d.file_name}</span>
+                      {d.is_current ? (
+                        <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">Current</span>
+                      ) : null}
                     </div>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      {!d.is_current && (
-                        <button
-                          onClick={() => handleSetCurrent(d.id)}
-                          className="px-2.5 py-1.5 text-xs text-pdi-navy border border-pdi-navy/30 rounded-lg hover:bg-pdi-frost transition-colors min-h-[32px]"
-                        >
-                          Set Current
-                        </button>
-                      )}
-                      <a
-                        href={`/api/drawings/download/${d.id}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="p-1.5 rounded-lg text-gray-400 hover:text-pdi-navy hover:bg-gray-100 transition-colors min-h-[32px] min-w-[32px] flex items-center justify-center"
-                        title="Download"
-                      >
-                        <Download size={14} />
-                      </a>
-                      <button
-                        onClick={() => handleDelete(d.id)}
-                        className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors min-h-[32px] min-w-[32px] flex items-center justify-center"
-                        title="Delete"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
+                    <div className="text-xs text-gray-500 mt-0.5">Rev {d.version}{d.notes ? ` · ${d.notes}` : ''}</div>
                   </div>
-                ))}
-              </div>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    {!d.is_current && (
+                      <button onClick={() => handleSetCurrent(d)} className="text-xs text-pdi-navy hover:underline min-h-[32px]">Set Current</button>
+                    )}
+                    <a href={`/api/drawings/${d.id}/file`} target="_blank" rel="noreferrer"
+                      className="text-xs text-gray-500 hover:text-pdi-navy flex items-center gap-1 min-h-[32px]">
+                      <Download size={12} /> Download
+                    </a>
+                    <button onClick={() => handleDelete(d)} className="text-xs text-red-400 hover:text-red-600 min-h-[32px]">
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
-
-          {drawings.length === 0 && !isLoadingDrawings && (
-            <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-400 text-sm">
-              No drawings found for this part number.
-            </div>
-          )}
-        </>
+        </div>
       )}
     </div>
   )
 }
 
-// ── Main Admin page ───────────────────────────────────────────────────────────
-
-
-// ── Assign Inspection Tab ─────────────────────────────────────────────────────
-function AssignTab({ showToast }) {
-  const { data: templates = [], isLoading: tplLoading } = useTemplates()
-  const createInspection = useCreateInspection()
-  const qc = useQueryClient()
-
-  const [users, setUsers] = useState([])
-  const [assignments, setAssignments] = useState([])
-  const [loadingData, setLoadingData] = useState(true)
-  const [showModal, setShowModal] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-  const [form, setForm] = useState({
-    template_id: '', assigned_to: '', part_number: '', po_number: '', due_date: '', inspector_name: ''
-  })
-
-  useEffect(() => {
-    Promise.all([
-      api.get('/admin/users').then(r => r.data.users || []),
-      api.get('/inspections?status=draft&limit=100').then(r => r.data.inspections || []),
-    ]).then(([u, ins]) => {
-      setUsers(u.filter(x => x.active))
-      setAssignments(ins.filter(i => i.assigned_to))
-    }).catch(() => {}).finally(() => setLoadingData(false))
-  }, [])
-
-  function resetForm() {
-    setForm({ template_id: '', assigned_to: '', part_number: '', po_number: '', due_date: '', inspector_name: '' })
-  }
-
-  async function handleCreate(e) {
-    e.preventDefault()
-    if (!form.template_id || !form.assigned_to) {
-      showToast('Template and assignee are required', 'error'); return
-    }
-    setSubmitting(true)
-    try {
-      const assignee = users.find(u => u.id === form.assigned_to)
-      await createInspection.mutateAsync({
-        template_id: form.template_id,
-        assigned_to: form.assigned_to,
-        due_date: form.due_date || null,
-        part_number: form.part_number || null,
-        po_number: form.po_number || null,
-        inspector_name: form.inspector_name || assignee?.name || null,
-      })
-      // Refresh assignments list
-      const r = await api.get('/inspections?status=draft&limit=100')
-      const all = r.data.inspections || []
-      setAssignments(all.filter(i => i.assigned_to))
-      setShowModal(false)
-      resetForm()
-      showToast('Inspection assigned', 'success')
-    } catch (err) {
-      showToast(err?.response?.data?.error || 'Failed to assign inspection', 'error')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  const getUserName = id => users.find(u => u.id === id)?.name || id
-
-  return (
-    <div className="space-y-4">
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="flex-shrink-0 w-10 h-10 bg-pdi-navy/10 rounded-full flex items-center justify-center">
-                <UserCheck size={18} className="text-pdi-navy" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-base font-semibold text-gray-900">Assign Inspection</h3>
-                <p className="text-sm text-gray-500 mt-0.5">Create a new inspection and assign it to an inspector.</p>
-              </div>
-              <button onClick={() => { setShowModal(false); resetForm() }} className="p-1.5 text-gray-400 hover:text-gray-600 rounded">
-                <X size={16} />
-              </button>
-            </div>
-            <form onSubmit={handleCreate} className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Inspection Form / Template <span className="text-red-500">*</span></label>
-                <select
-                  value={form.template_id}
-                  onChange={e => setForm(f => ({ ...f, template_id: e.target.value }))}
-                  required
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
-                >
-                  <option value="">— Select form —</option>
-                  {templates.map(t => (
-                    <option key={t.id} value={t.id}>{t.form_no} · {t.title.replace('PDI Incoming Quality Inspection — ', '')}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Assign To <span className="text-red-500">*</span></label>
-                <select
-                  value={form.assigned_to}
-                  onChange={e => {
-                    const u = users.find(x => x.id === e.target.value)
-                    setForm(f => ({ ...f, assigned_to: e.target.value, inspector_name: u?.name || f.inspector_name }))
-                  }}
-                  required
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
-                >
-                  <option value="">— Select inspector —</option>
-                  {users.map(u => (
-                    <option key={u.id} value={u.id}>{u.name} ({u.role.replace('_', ' ')})</option>
-                  ))}
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Part Number</label>
-                  <input
-                    type="text"
-                    value={form.part_number}
-                    onChange={e => setForm(f => ({ ...f, part_number: e.target.value }))}
-                    placeholder="e.g. 12345-A"
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">PO Number</label>
-                  <input
-                    type="text"
-                    value={form.po_number}
-                    onChange={e => setForm(f => ({ ...f, po_number: e.target.value }))}
-                    placeholder="e.g. PO-12345"
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Due Date</label>
-                <input
-                  type="date"
-                  value={form.due_date}
-                  onChange={e => setForm(f => ({ ...f, due_date: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
-                />
-              </div>
-              <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
-                <button type="button" onClick={() => { setShowModal(false); resetForm() }} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
-                <button type="submit" disabled={submitting || !form.template_id || !form.assigned_to} className="px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[40px] disabled:opacity-50">
-                  {submitting ? 'Assigning...' : 'Create Assignment'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="px-4 sm:px-5 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-gray-800">Assigned Inspections ({assignments.length})</h3>
-          <button onClick={() => setShowModal(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[36px]">
-            <Plus size={14} /> Assign Inspection
-          </button>
-        </div>
-        {loadingData ? (
-          <div className="text-center text-gray-400 text-sm py-10">Loading...</div>
-        ) : assignments.length === 0 ? (
-          <div className="text-center py-12 px-4">
-            <ClipboardCheck size={32} className="mx-auto mb-3 text-gray-300" />
-            <p className="text-sm text-gray-500">No pending assignments.</p>
-            <p className="text-xs text-gray-400 mt-1">Click "Assign Inspection" to create one.</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-100">
-                <tr>
-                  {['Form', 'Part Number', 'PO', 'Assigned To', 'Due Date', 'Status'].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {assignments.map(insp => (
-                  <tr key={insp.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{insp.part_number || '—'}</td>
-                    <td className="px-4 py-3 text-xs">{insp.po_number || '—'}</td>
-                    <td className="px-4 py-3 text-sm">{getUserName(insp.assigned_to)}</td>
-                    <td className="px-4 py-3 text-xs text-gray-500">{insp.due_date ? formatDate(insp.due_date) : '—'}</td>
-                    <td className="px-4 py-3"><StatusBadge status={insp.status} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-        <div className="text-sm font-semibold text-blue-800 mb-1">How assignments work</div>
-        <div className="text-xs text-blue-700 space-y-1">
-          <p>• Assigned inspections appear in the inspector's <strong>My Inspections</strong> page.</p>
-          <p>• Inspectors without the <strong>New Inspection</strong> permission can only work on assigned inspections.</p>
-          <p>• You can set due dates and track completion from this panel.</p>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function DataTab({ navigate }) {
-  const { data, isLoading } = useInspections({ limit: 100, page: 1 })
-  const deleteInspection = useDeleteInspection()
-  const { showToast } = useToast()
-  const inspections = data?.inspections || []
-
-  async function handleDelete(id) {
-    if (!window.confirm('Permanently delete this inspection?')) return
-    try {
-      await deleteInspection.mutateAsync(id)
-      showToast('Inspection deleted', 'success')
-    } catch {
-      showToast('Delete failed', 'error')
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="px-4 sm:px-5 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-gray-800">All Inspections ({inspections.length})</h3>
-          <button onClick={() => navigate('/inspections/new')} className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[36px]">
-            <Plus size={14} /> New
-          </button>
-        </div>
-        {isLoading ? (
-          <div className="text-center text-gray-400 text-sm py-10">Loading...</div>
-        ) : inspections.length === 0 ? (
-          <div className="text-center text-gray-400 text-sm py-10">No inspections found</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-100">
-                <tr>
-                  {['Form', 'Part Number', 'Inspector', 'Status', 'Created', ''].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {inspections.map(insp => (
-                  <tr key={insp.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{insp.part_number || '-'}</td>
-                    <td className="px-4 py-3 text-sm">{insp.inspector_name || '-'}</td>
-                    <td className="px-4 py-3"><StatusBadge status={insp.status} /></td>
-                    <td className="px-4 py-3 text-xs text-gray-500">{formatDate(insp.created_at)}</td>
-                    <td className="px-4 py-3">
-                      <button onClick={() => handleDelete(insp.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors">
-                        <Trash2 size={14} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
+// ── Admin Page ────────────────────────────────────────────────────────────────
 
 export default function Admin() {
   const [activeTab, setActiveTab] = useState('forms')
-  const navigate = useNavigate()
   const { showToast } = useToast()
 
+  const currentUser = getUser()
+  const isAdminRole = currentUser && (currentUser.role === 'admin' || currentUser.role === 'qc_manager')
+
+  const tabContent = {
+    forms:    <InspectionFormsTab showToast={showToast} />,
+    specs:    <PartSpecsTab showToast={showToast} />,
+    users:    <UsersTab showToast={showToast} />,
+    drawings: <DrawingsTab showToast={showToast} />,
+    assign:   <InspectionDataTab showToast={showToast} />,
+    data:     <InspectionDataTab showToast={showToast} />,
+  }
+
   return (
-    <div className="min-h-full bg-gray-50/50">
-      {/* Page header */}
-      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 sm:py-5">
-        <div className="flex items-center gap-3">
-          <Settings size={20} className="text-pdi-navy flex-shrink-0" />
-          <div>
-            <h1 className="text-xl sm:text-2xl font-bold text-pdi-navy">Admin</h1>
-            <p className="text-xs sm:text-sm text-gray-500 mt-0.5">Manage templates, users, and system data</p>
-          </div>
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
+        <div className="mb-4 sm:mb-6">
+          <h1 className="text-xl sm:text-2xl font-bold text-pdi-navy flex items-center gap-2">
+            <Settings size={22} /> Admin
+          </h1>
+          <p className="text-sm text-gray-500 mt-1">Manage inspection forms, part specs, users, and drawings</p>
         </div>
-        {/* Tab bar */}
-        <div className="mt-4 flex gap-1 overflow-x-auto pb-0.5">
-          {TABS.map(tab => (
+
+        {/* Tab bar — horizontal scroll on mobile */}
+        <div className="flex overflow-x-auto gap-1 pb-1 mb-4 sm:mb-6 scrollbar-hide">
+          {TABS.map(({ id, icon: Icon, label, shortLabel }) => (
             <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors flex-shrink-0 min-h-[40px] ${
-                activeTab === tab.id
-                  ? 'bg-pdi-navy text-white'
-                  : 'text-gray-600 hover:bg-gray-100'
-              }`}
+              key={id}
+              onClick={() => setActiveTab(id)}
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 text-sm rounded-lg font-medium whitespace-nowrap transition-colors flex-shrink-0 min-h-[40px]
+                ${activeTab === id
+                  ? 'bg-pdi-navy text-white shadow-sm'
+                  : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'}`}
             >
-              <tab.icon size={15} />
-              <span className="hidden sm:inline">{tab.label}</span>
-              <span className="sm:hidden">{tab.shortLabel}</span>
+              <Icon size={15} />
+              <span className="hidden sm:inline">{label}</span>
+              <span className="sm:hidden">{shortLabel}</span>
             </button>
           ))}
         </div>
-      </div>
 
-      <div className="p-4 sm:p-6">
-        {activeTab === 'forms' && <InspectionFormsTab showToast={showToast} />}
-        {activeTab === 'specs' && <PartSpecsTab showToast={showToast} />}
-        {activeTab === 'users' && <UsersTab showToast={showToast} />}
-        {activeTab === 'drawings' && <DrawingsTab showToast={showToast} />}
-        {activeTab === 'assign' && <AssignTab showToast={showToast} />}
-        {activeTab === 'data' && <DataTab navigate={navigate} />}
+        {tabContent[activeTab]}
       </div>
     </div>
   )

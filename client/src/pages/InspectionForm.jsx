@@ -21,6 +21,7 @@ import SectionVacuumTest from '../components/inspection/SectionVacuumTest'
 import FileUploadZone from '../components/FileUploadZone'
 import { initSectionData, mergeSectionData, formatFileSize } from '../lib/utils'
 import { DISPOSITION_COLORS, HEADER_FIELD_LABELS } from '../lib/constants'
+import { getUser } from '../lib/auth'
 
 const SECTION_COMPONENTS = {
   pfn_checklist: SectionReceiving,
@@ -60,18 +61,30 @@ function detectAcceptedItems(sectionData) {
   return false
 }
 
-function CollapsibleSection({ title, children, defaultOpen = true }) {
+function CollapsibleSection({ title, children, defaultOpen = true, onDelete }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 bg-pdi-frost hover:bg-pdi-steel/30 transition-colors min-h-[48px]"
-      >
-        <span className="text-sm sm:text-base font-semibold text-pdi-navy text-left truncate pr-2">{title}</span>
-        {open ? <ChevronUp size={16} className="text-pdi-navy flex-shrink-0" /> : <ChevronDown size={16} className="text-pdi-navy flex-shrink-0" />}
-      </button>
+      <div className="flex items-center bg-pdi-frost hover:bg-pdi-steel/30 transition-colors min-h-[48px]">
+        <button
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          className="flex-1 flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 text-left"
+        >
+          <span className="text-sm sm:text-base font-semibold text-pdi-navy truncate pr-2">{title}</span>
+          {open ? <ChevronUp size={16} className="text-pdi-navy flex-shrink-0" /> : <ChevronDown size={16} className="text-pdi-navy flex-shrink-0" />}
+        </button>
+        {onDelete && (
+          <button
+            type="button"
+            onClick={onDelete}
+            title="Remove section"
+            className="flex-shrink-0 px-3 py-2 text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+          >
+            <X size={15} />
+          </button>
+        )}
+      </div>
       {open && <div className="p-3 sm:p-5">{children}</div>}
     </div>
   )
@@ -170,6 +183,20 @@ export default function InspectionForm() {
   const saveTimer = useRef(null)
   const initialLoad = useRef(true)
 
+  // Admin section-editing state
+  const currentUser = getUser()
+  const isAdmin = ['admin', 'qc_manager'].includes(currentUser?.role)
+  const [customSections, setCustomSections] = useState(null) // null = use template default
+  const [addingItemKey, setAddingItemKey] = useState(null)   // section key where + is open
+  const [newItemName, setNewItemName] = useState('')
+
+  // Derive effective sections (admin overrides take priority)
+  const rawSections = template
+    ? (typeof template.sections === 'string' ? JSON.parse(template.sections) : template.sections)
+    : {}
+  const effectiveSections = customSections ?? rawSections
+
+  // Initialize section data when template and inspection are loaded
   useEffect(() => {
     if (!template || !inspection) return
     const sections = typeof template.sections === 'string'
@@ -183,6 +210,8 @@ export default function InspectionForm() {
     setDisposition(inspection.disposition || '')
     setDispositionNotes(inspection.disposition_notes || '')
     if (saved.__dimensional_added) setDimensionalAdded(true)
+    // Restore admin section customisations
+    if (saved.__admin_sections) setCustomSections(saved.__admin_sections)
     initialLoad.current = false
   }, [template?.id, inspection?.id])
 
@@ -266,6 +295,55 @@ export default function InspectionForm() {
     window.open(`mailto:?subject=${subject}&body=${body}`)
   }
 
+  // ── Admin section / item helpers ─────────────────────────────────────────
+  // Section types that support per-item add/delete
+  const ITEM_EDITABLE = new Set(['pfn_checklist', 'pass_fail_checklist'])
+
+  function applyCustomSections(updater) {
+    setCustomSections(prev => {
+      const current = prev ?? rawSections
+      const next = updater(current)
+      // Persist into sectionData so auto-save captures it
+      setSectionData(d => ({ ...d, __admin_sections: next }))
+      return next
+    })
+  }
+
+  function handleDeleteSection(key) {
+    applyCustomSections(secs => {
+      const next = { ...secs }
+      delete next[key]
+      return next
+    })
+  }
+
+  function handleDeleteItem(sectionKey, itemId) {
+    applyCustomSections(secs => ({
+      ...secs,
+      [sectionKey]: {
+        ...secs[sectionKey],
+        items: (secs[sectionKey].items || []).filter(it => String(it.id) !== String(itemId)),
+      },
+    }))
+  }
+
+  function handleAddItem(sectionKey) {
+    const name = newItemName.trim()
+    if (!name) return
+    applyCustomSections(secs => {
+      const sec = secs[sectionKey] || {}
+      const items = sec.items || []
+      const maxId = items.reduce((m, it) => Math.max(m, Number(it.id) || 0), 0)
+      return {
+        ...secs,
+        [sectionKey]: { ...sec, items: [...items, { id: maxId + 1, name }] },
+      }
+    })
+    setNewItemName('')
+    setAddingItemKey(null)
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   async function handleDeleteFile(attachmentId) {
     try {
       await deleteFile.mutateAsync({ id: attachmentId, inspectionId: id })
@@ -286,9 +364,9 @@ export default function InspectionForm() {
     }
 
     // Validate: Fail and Accepted items need description + image
-    const sections = typeof template.sections === 'string' ? JSON.parse(template.sections) : template.sections
-    const itemErrors = []
-    for (const [key, section] of Object.entries(sections)) {
+    const effectiveSections = typeof template.effectiveSections === 'string' ? JSON.parse(template.effectiveSections) : template.effectiveSections
+    const failErrors = []
+    for (const [key, section] of Object.entries(effectiveSections)) {
       const sectionArr = Array.isArray(sectionData[key]) ? sectionData[key] : []
       if (section.section_type === 'pass_fail_checklist' || section.section_type === 'pfn_checklist') {
         for (const row of sectionArr) {
@@ -422,8 +500,8 @@ export default function InspectionForm() {
             className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 text-sm bg-pdi-teal text-white rounded-lg hover:bg-teal-700 active:bg-teal-800 disabled:opacity-40 flex-shrink-0 min-h-[40px]"
           >
             <CheckSquare size={14} />
-            <span className="hidden sm:inline">{complete.isPending ? 'Completing\u2026' : (
-              Object.values(sections).some(s => s.optional) && !dimensionalAdded
+            <span className="hidden sm:inline">{complete.isPending ? 'Completing…' : (
+              Object.values(effectiveSections).some(s => s.optional) && !dimensionalAdded
                 ? 'Complete (Visual Only)'
                 : 'Complete'
             )}</span>
@@ -469,14 +547,20 @@ export default function InspectionForm() {
           )}
 
           {/* Inspection sections */}
-          {Object.entries(sections).map(([key, section]) => {
-            if (key === '__dimensional_added') return null
+          {Object.entries(effectiveSections).map(([key, section]) => {
+            if (key === '__dimensional_added' || key === '__admin_sections') return null
+            // Skip optional sections unless dimensional has been added
             if (section.optional && !dimensionalAdded) return null
             const Component = SECTION_COMPONENTS[section.section_type]
             if (!Component) return null
             const supportsImages = IMAGE_ENABLED_SECTIONS.has(section.section_type)
+            const canEditItems = isAdmin && ITEM_EDITABLE.has(section.section_type)
             return (
-              <CollapsibleSection key={key} title={section.title}>
+              <CollapsibleSection
+                key={key}
+                title={section.title}
+                onDelete={isAdmin ? () => handleDeleteSection(key) : undefined}
+              >
                 <Component
                   section={section}
                   data={sectionData[key]}
@@ -489,108 +573,11 @@ export default function InspectionForm() {
                     uploadingKey,
                   } : {})}
                 />
-              </CollapsibleSection>
-            )
-          })}
 
-          {/* Add Dimensional button */}
-          {!dimensionalAdded && Object.values(sections).some(s => s.optional) && (
-            <div className="flex justify-center py-2">
-              <button
-                type="button"
-                onClick={handleAddDimensional}
-                className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold border-2 border-dashed border-pdi-navy/40 text-pdi-navy rounded-xl hover:border-pdi-navy hover:bg-pdi-frost transition-all"
-              >
-                <PlusCircle size={16} />
-                Add Dimensional Inspection
-              </button>
-            </div>
-          )}
-
-          {/* Final Results */}
-          <CollapsibleSection title="Final Results">
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 sm:gap-3">
-                {dispositionOptions.map(opt => (
-                  <button
-                    key={opt}
-                    type="button"
-                    onClick={() => setDisposition(d => d === opt ? '' : opt)}
-                    className={`px-4 sm:px-6 py-3 text-sm font-bold rounded-lg border-2 transition-all min-h-[48px] ${
-                      disposition === opt
-                        ? DISPOSITION_COLORS[opt] || 'bg-blue-100 text-blue-700 border-blue-400'
-                        : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'
-                    }`}
-                  >
-                    {opt}
-                  </button>
-                ))}
-              </div>
-
-              {requiresDispositionAttention && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2">
-                  <AlertTriangle size={16} className="text-red-600 flex-shrink-0 mt-0.5" />
-                  <p className="text-xs text-red-700">This result requires an explanation and at least one attachment.</p>
-                </div>
-              )}
-
-              <textarea
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-pdi-navy"
-                rows={3}
-                placeholder="Disposition notes (optional)\u2026"
-                value={dispositionNotes}
-                onChange={e => setDispositionNotes(e.target.value)}
-              />
-
-              {disposition === 'ACCEPTED' && (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2">
-                  <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
-                  <p className="text-xs text-amber-700">
-                    {isAdminRole
-                      ? 'You will be prompted to create a Quality Alert after completing.'
-                      : 'Selecting Accepted will send this inspection for admin review before it can be shared.'}
-                  </p>
-                </div>
-              )}
-            </div>
-          </CollapsibleSection>
-
-          {/* General Attachments */}
-          <CollapsibleSection title={`General Attachments (${generalAttachments.length})${itemAttachmentCount > 0 ? ` \u00b7 ${itemAttachmentCount} item image${itemAttachmentCount !== 1 ? 's' : ''}` : ''}`}>
-            <div className="space-y-3">
-              <FileUploadZone onUpload={handleUpload} />
-              {generalAttachments.length > 0 && (
-                <div className="space-y-2">
-                  {generalAttachments.map(att => (
-                    <div key={att.id} className="flex items-center justify-between gap-2 p-3 bg-gray-50 rounded-lg border border-gray-100">
-                      <div className="flex items-center gap-2 min-w-0 flex-1">
-                        <Paperclip size={14} className="text-gray-400 flex-shrink-0" />
-                        <a
-                          href={`${import.meta.env.VITE_API_URL || ''}/api/attachments/${att.id}/download`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-sm text-pdi-navy hover:underline truncate"
-                        >
-                          {att.file_name}
-                        </a>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteFile(att.id)}
-                        className="flex-shrink-0 p-1.5 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors min-h-[32px] min-w-[32px] flex items-center justify-center"
-                        aria-label="Delete attachment"
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </CollapsibleSection>
-
-        </div>
-      </div>
-    </div>
-  )
-}
+                {/* Admin item controls */}
+                {canEditItems && (
+                  <div className="mt-3 border-t border-dashed border-gray-200 pt-3 space-y-1">
+                    {/* Per-item delete buttons */}
+                    {(section.items || []).map(item => (
+                      <div key={item.id} className="flex items-center justify-between gap-2 px-2 py-1 rounded hover:bg-red-50 group">
+                        <span className="text-xs text-gray-500 truncate">{item.

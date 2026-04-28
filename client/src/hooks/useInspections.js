@@ -90,6 +90,7 @@ export function useLogActivity() {
   })
 }
 
+// Fetch inspections assigned to the current user (HEAD feature)
 export function useAssignedInspections() {
   return useQuery({
     queryKey: ['inspections-assigned'],
@@ -100,27 +101,21 @@ export function useAssignedInspections() {
   })
 }
 
+// Assign an inspection to a user (used by AssignModal)
 export function useAssignInspection() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ id, assigned_to, due_date }) => {
-      const { data } = await api.patch(`/inspections/${id}/assign`, { assigned_to, due_date })
+      const { data } = await api.patch(`/inspections/${id}`, {
+        assigned_to: assigned_to || null,
+        due_date: due_date || null,
+      })
       return data
     },
     onSuccess: (_, { id }) => {
       qc.invalidateQueries({ queryKey: ['inspection', id] })
       qc.invalidateQueries({ queryKey: ['inspections'] })
       qc.invalidateQueries({ queryKey: ['inspections-assigned'] })
-    },
-  })
-}
-
-export function useInspectionAlerts() {
-  return useQuery({
-    queryKey: ['inspection-alerts'],
-    queryFn: async () => {
-      const { data } = await api.get('/inspections/alerts')
-      return data
     },
   })
 }
