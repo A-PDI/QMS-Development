@@ -146,7 +146,7 @@ export default function Sidebar({ open = false, onClose }) {
             <div className="text-xs text-pdi-steel/60 truncate">{user?.name}</div>
             <div className="text-xs text-pdi-steel/40 truncate capitalize">{user?.role}</div>
           </div>
-          {isEntraConfigured() ? (
+          {isEntraConfigured ? (
             <EntraSignOutButton onAfter={onClose} />
           ) : (
             <LocalSignOutButton onAfter={onClose} />
