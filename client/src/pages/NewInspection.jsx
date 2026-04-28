@@ -145,4 +145,26 @@ export default function NewInspection() {
             ))}
           </div>
 
-          {/* Actions — stack on very narro
+          {/* Actions — stack on very narrow screens, row on sm+ */}
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3 pt-2 border-t border-gray-100">
+            <button
+              type="button"
+              onClick={() => navigate(-1)}
+              className="px-4 py-2.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors min-h-[44px]"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex items-center justify-center gap-1.5 px-5 py-2.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 transition-colors min-h-[44px] font-medium"
+            >
+              {submitting ? 'Creating…' : 'Start Inspection'}
+            </button>
+          </div>
+
+        </form>
+      </div>
+    </div>
+  )
+}
