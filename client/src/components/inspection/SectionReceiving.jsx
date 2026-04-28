@@ -37,7 +37,7 @@ export default function SectionReceiving({
     setEditingId(null)
   }
 
-  const showImages = !!sectionKey && !!onUploadItem
+  const showImages = !!sectionKey && (!!onUploadItem || readOnly)
   const showTools = !!adminItemTools
 
   function rowClass(row) {

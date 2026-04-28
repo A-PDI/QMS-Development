@@ -433,7 +433,7 @@ export default function InspectionDetail() {
           <div className="px-4 sm:px-5 py-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
               <Paperclip size={14} />
-              Attachments ({attachments.filter(a => !a.section_key && !a.item_id).length})
+              Attachments ({attachments.length})
             </h2>
           </div>
           <div className="p-4 sm:p-5 space-y-3">

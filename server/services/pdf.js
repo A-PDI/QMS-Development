@@ -467,9 +467,10 @@ function renderPfnChecklist(doc, section, data, secAtts = []) {
 
   renderTable(doc, header, rows, cw, { statusColIdx: 4, sectionTitle: title });
 
-  for (const item of items) {
-    renderItemImages(doc, item.id, secAtts);
-  }
+  const allImgsPfn = secAtts.filter(a =>
+    (a.mime_type || '').startsWith('image/') && a.file_path && fs.existsSync(a.file_path)
+  );
+  if (allImgsPfn.length > 0) { vspace(doc, 4); renderPhotoGrid(doc, allImgsPfn); }
 }
 
 function renderPfnVisual(doc, section, data, secAtts = []) {
@@ -490,9 +491,10 @@ function renderPfnVisual(doc, section, data, secAtts = []) {
 
   renderTable(doc, header, rows, cw, { statusColIdx: 5, sectionTitle: title });
 
-  for (const item of items) {
-    renderItemImages(doc, item.id, secAtts);
-  }
+  const allImgsVis = secAtts.filter(a =>
+    (a.mime_type || '').startsWith('image/') && a.file_path && fs.existsSync(a.file_path)
+  );
+  if (allImgsVis.length > 0) { vspace(doc, 4); renderPhotoGrid(doc, allImgsVis); }
 }
 
 function renderDimensional(doc, section, data, secAtts = []) {
@@ -513,32 +515,42 @@ function renderDimensional(doc, section, data, secAtts = []) {
 
   renderTable(doc, header, rows, cw, { statusColIdx: 7, sectionTitle: title });
 
-  for (const item of items) {
-    renderItemImages(doc, item.id, secAtts);
-  }
+  const allImgsDim = secAtts.filter(a =>
+    (a.mime_type || '').startsWith('image/') && a.file_path && fs.existsSync(a.file_path)
+  );
+  if (allImgsDim.length > 0) { vspace(doc, 4); renderPhotoGrid(doc, allImgsDim); }
 }
 
 function renderPassFail(doc, section, data, secAtts = []) {
-  const title = section.title || 'Pass / Fail Checklist';
+  const title = section.title || 'Visual / Quality Checklist';
   ensureSpace(doc, 60);
   renderSectionTitle(doc, title);
 
   const items   = section.items || [];
   const dataArr = Array.isArray(data) ? data : [];
 
-  const header = ['#', 'Inspection Item', 'Requirement', 'Pass', 'Fail', 'Notes'];
-  const cw     = [24, 150, 160, 32, 32, 134]; // sum = 532
+  // Normalise old {pass,fail} boolean format to result string
+  function getResult(d) {
+    if (d.result !== undefined) return d.result || '';
+    if (d.pass === true) return 'P';
+    if (d.fail === true) return 'F';
+    return '';
+  }
+
+  const header = ['#', 'Inspection Item', 'Requirement', 'Notes', 'Status'];
+  const cw     = [24, 170, 160, 134, 44]; // sum = 532
   const rows   = items.map(item => {
     const d = dataArr.find(r => r.id === item.id) || {};
     return [String(item.id), item.name || item.description || '', item.requirement || '',
-      d.pass ? '✓' : '', d.fail ? '✗' : '', d.notes || ''];
+      d.notes || '', getResult(d)];
   });
 
-  renderTable(doc, header, rows, cw, { sectionTitle: title });
+  renderTable(doc, header, rows, cw, { statusColIdx: 4, sectionTitle: title });
 
-  for (const item of items) {
-    renderItemImages(doc, item.id, secAtts);
-  }
+  const allImgs = secAtts.filter(a =>
+    (a.mime_type || '').startsWith('image/') && a.file_path && fs.existsSync(a.file_path)
+  );
+  if (allImgs.length > 0) { vspace(doc, 4); renderPhotoGrid(doc, allImgs); }
 }
 
 function renderGeneralMeasurements(doc, section, data, secAtts = []) {
@@ -560,9 +572,10 @@ function renderGeneralMeasurements(doc, section, data, secAtts = []) {
 
   renderTable(doc, header, rows, cw, { sectionTitle: title });
 
-  for (const item of items) {
-    renderItemImages(doc, item.id, secAtts);
-  }
+  const allImgsGm = secAtts.filter(a =>
+    (a.mime_type || '').startsWith('image/') && a.file_path && fs.existsSync(a.file_path)
+  );
+  if (allImgsGm.length > 0) { vspace(doc, 4); renderPhotoGrid(doc, allImgsGm); }
 }
 
 function renderCamshaftBore(doc, section, data, secAtts = []) {

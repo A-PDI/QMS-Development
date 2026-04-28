@@ -8,7 +8,7 @@ import { usePartSpecs, useCreatePartSpec, useUpdatePartSpec, useDeletePartSpec }
 import { useDrawings, useUploadDrawing, useSetCurrentDrawing, useDeleteDrawing } from '../hooks/useDrawings'
 import { useToast } from '../hooks/useToast'
 import { getUser } from '../lib/auth'
-import { useTemplates } from '../hooks/useTemplates'
+import { useTemplates, useDeleteTemplate } from '../hooks/useTemplates'
 import { formatDate } from '../lib/utils'
 import { COMPONENT_TYPE_LABELS, STATUS_LABELS, STATUS_COLORS } from '../lib/constants'
 import StatusBadge from '../components/StatusBadge'
@@ -50,6 +50,8 @@ function InspectionFormsTab({ showToast }) {
   const [editForm, setEditForm] = useState(null)
   const [expandedSections, setExpandedSections] = useState({})
   const [creating, setCreating] = useState(false)
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  const deleteTemplate = useDeleteTemplate()
 
   const { data: adminTemplates, isLoading } = useQuery({
     queryKey: ['admin-templates'],
@@ -121,6 +123,17 @@ function InspectionFormsTab({ showToast }) {
     setCreating(false)
     setEditForm(null)
     setExpandedSections({})
+  }
+
+  async function handleDeleteTemplate(id) {
+    try {
+      await deleteTemplate.mutateAsync(id)
+      showToast('Template deleted', 'success')
+      setConfirmDeleteId(null)
+    } catch (err) {
+      showToast(err?.response?.data?.error || 'Delete failed', 'error')
+      setConfirmDeleteId(null)
+    }
   }
 
   function addSection() {
@@ -319,6 +332,23 @@ function InspectionFormsTab({ showToast }) {
         </div>
       )}
 
+      {/* Delete confirmation modal */}
+      {confirmDeleteId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4">
+            <h3 className="text-base font-semibold text-gray-900">Delete Template?</h3>
+            <p className="text-sm text-gray-500">This will permanently remove the template. Templates with linked inspections cannot be deleted.</p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setConfirmDeleteId(null)} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
+              <button onClick={() => handleDeleteTemplate(confirmDeleteId)}
+                className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 min-h-[40px]">
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Templates list */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         {/* Desktop table */}
@@ -343,10 +373,16 @@ function InspectionFormsTab({ showToast }) {
                     <span className={`text-xs font-medium ${t.active ? 'text-green-600' : 'text-gray-400'}`}>{t.active ? 'Yes' : 'No'}</span>
                   </td>
                   <td className="px-4 py-3">
-                    <button onClick={() => { setEditingId(t.id); setCreating(false); setEditForm(null) }}
-                      className="flex items-center gap-1 text-xs text-pdi-navy hover:underline">
-                      <Edit2 size={13} /> Edit
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => { setEditingId(t.id); setCreating(false); setEditForm(null) }}
+                        className="flex items-center gap-1 text-xs text-pdi-navy hover:underline">
+                        <Edit2 size={13} /> Edit
+                      </button>
+                      <button onClick={() => setConfirmDeleteId(t.id)}
+                        className="flex items-center gap-1 text-xs text-red-500 hover:underline">
+                        <Trash2 size={13} /> Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -371,7 +407,12 @@ function InspectionFormsTab({ showToast }) {
                   </div>
                   <div className="text-sm text-gray-800 mt-0.5 break-words">{t.title}</div>
                 </div>
-                <Edit2 size={14} className="text-pdi-navy flex-shrink-0 mt-1" />
+                <div className="flex items-center gap-2 flex-shrink-0">
+                <Edit2 size={14} className="text-pdi-navy" />
+                <button onClick={e => { e.stopPropagation(); setConfirmDeleteId(t.id) }} className="p-1 text-red-400 hover:text-red-600">
+                  <Trash2 size={14} />
+                </button>
+              </div>
               </div>
               <div className="mt-1 grid grid-cols-2 gap-x-3 text-xs text-gray-500">
                 <div className="truncate"><span className="text-gray-400">Component:</span> {COMPONENT_TYPE_LABELS[t.component_type] || t.component_type || '—'}</div>
@@ -1241,7 +1282,7 @@ function DrawingsTab({ showToast }) {
   )
 }
 
-// ── Admin Page ────────────────────────────────────────────────────────────────
+// ── Admin Page ────────────────────────────────────────────────────────────────────────────────
 
 export default function Admin() {
   const [activeTab, setActiveTab] = useState('forms')
@@ -1269,7 +1310,7 @@ export default function Admin() {
           <p className="text-sm text-gray-500 mt-1">Manage inspection forms, part specs, users, and drawings</p>
         </div>
 
-        {/* Tab bar — horizontal scroll on mobile */}
+        {/* Tab bar */}
         <div className="flex overflow-x-auto gap-1 pb-1 mb-4 sm:mb-6 scrollbar-hide">
           {TABS.map(({ id, icon: Icon, label, shortLabel }) => (
             <button

@@ -35,6 +35,20 @@ export function useCreateTemplate() {
   })
 }
 
+export function useDeleteTemplate() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id) => {
+      await api.delete(`/admin/templates/${id}`)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['templates'] })
+      qc.invalidateQueries({ queryKey: ['templates'] })
+      qc.invalidateQueries({ queryKey: ['admin-templates'] })
+    },
+  })
+}
+
 export function useInspectionItems() {
   return useQuery({
     queryKey: ['inspection-items'],

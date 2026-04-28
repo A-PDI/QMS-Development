@@ -37,7 +37,7 @@ export default function SectionDimensional({
     onChange(next)
   }
 
-  const showImages = !!sectionKey && !!onUploadItem
+  const showImages = !!sectionKey && (!!onUploadItem || readOnly)
 
   return (
     <div>

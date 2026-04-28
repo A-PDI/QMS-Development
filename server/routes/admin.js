@@ -120,7 +120,9 @@ router.delete('/templates/:id', requireAdminOnly, (req, res, next) => {
   try {
     const t = db.get('SELECT id FROM inspection_templates WHERE id = ?', [req.params.id]);
     if (!t) return next(new AppError('Template not found', 404));
-    db.run('UPDATE inspection_templates SET active = 0 WHERE id = ?', [req.params.id]);
+    const linked = db.get('SELECT id FROM inspections WHERE template_id = ? LIMIT 1', [req.params.id]);
+    if (linked) return next(new AppError('Cannot delete — this template has linked inspections. Deactivate it instead.', 409));
+    db.run('DELETE FROM inspection_templates WHERE id = ?', [req.params.id]);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
