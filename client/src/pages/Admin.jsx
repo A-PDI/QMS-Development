@@ -136,6 +136,22 @@ function InspectionFormsTab({ showToast }) {
     }
   }
 
+  async function handleExportForms() {
+    try {
+      const response = await api.get('/admin/templates/export', { responseType: 'blob' })
+      const url = URL.createObjectURL(response.data)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'inspection-forms-export.xlsx'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch {
+      showToast('Export failed', 'error')
+    }
+  }
+
   function addSection() {
     const key = `section_${Date.now()}`
     const newSections = { ...editForm.sections, [key]: { title: 'New Section', section_type: 'pass_fail_checklist', items: [] } }
@@ -178,7 +194,10 @@ function InspectionFormsTab({ showToast }) {
 
   return (
     <div className="space-y-3 sm:space-y-4">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <button onClick={handleExportForms} className="flex items-center gap-1.5 px-3 sm:px-4 py-2 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50 min-h-[40px]">
+          <Download size={15} /> Bulk Export
+        </button>
         <button onClick={startCreate} className="flex items-center gap-1.5 px-3 sm:px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[40px]">
           <Plus size={15} /> New Template
         </button>

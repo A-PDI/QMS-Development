@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
+const ExcelJS = require('exceljs');
 const db = require('../db/adapter');
 const { AppError } = require('../middleware/error');
 
@@ -25,6 +26,69 @@ router.get('/templates', (req, res, next) => {
       []
     );
     res.json({ templates });
+  } catch (err) { next(err); }
+});
+
+// GET /api/admin/templates/export — download all active templates + items as Excel
+router.get('/templates/export', requireAdmin, async (req, res, next) => {
+  try {
+    const templates = db.all(
+      'SELECT * FROM inspection_templates WHERE active = 1 ORDER BY component_type, form_no',
+      []
+    );
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'PDI QMS';
+    const ws = wb.addWorksheet('Inspection Forms');
+
+    ws.columns = [
+      { header: 'Form No',                  key: 'form_no',          width: 14 },
+      { header: 'Title',                     key: 'title',            width: 42 },
+      { header: 'Component Type',            key: 'component_type',   width: 18 },
+      { header: 'Revision',                  key: 'revision',         width: 10 },
+      { header: 'Section',                   key: 'section',          width: 36 },
+      { header: 'Section Type',              key: 'section_type',     width: 22 },
+      { header: 'Item #',                    key: 'item_id',          width: 8  },
+      { header: 'Inspection Item',           key: 'item_name',        width: 30 },
+      { header: 'Requirement / Description', key: 'item_requirement', width: 52 },
+    ];
+
+    const hdr = ws.getRow(1);
+    hdr.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    hdr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1B3A5C' } };
+    hdr.alignment = { vertical: 'middle' };
+
+    for (const t of templates) {
+      const sections = JSON.parse(t.sections || '{}');
+      for (const [sectionKey, section] of Object.entries(sections)) {
+        if (sectionKey.startsWith('__')) continue;
+        const items = section.items || [];
+        if (items.length === 0) {
+          ws.addRow({
+            form_no: t.form_no, title: t.title, component_type: t.component_type,
+            revision: t.revision || '', section: section.title || sectionKey,
+            section_type: section.section_type || '',
+            item_id: '', item_name: '', item_requirement: '',
+          });
+        } else {
+          for (const item of items) {
+            ws.addRow({
+              form_no: t.form_no, title: t.title, component_type: t.component_type,
+              revision: t.revision || '', section: section.title || sectionKey,
+              section_type: section.section_type || '',
+              item_id: item.id ?? '',
+              item_name: item.name || item.measurement || item.ctq_area || '',
+              item_requirement: item.requirement || item.criteria || item.spec || '',
+            });
+          }
+        }
+      }
+    }
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="inspection-forms-export.xlsx"');
+    await wb.xlsx.write(res);
+    res.end();
   } catch (err) { next(err); }
 });
 

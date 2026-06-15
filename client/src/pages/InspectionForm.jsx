@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { Save, CheckSquare, ChevronDown, ChevronUp, Paperclip, PlusCircle, X, Printer, Mail, Loader2, AlertTriangle, Bell } from 'lucide-react'
+import { Save, CheckSquare, ChevronDown, ChevronUp, Paperclip, PlusCircle, X, Printer, Mail, Loader2, AlertTriangle, Bell, ImagePlus, Trash2 } from 'lucide-react'
 import api from '../lib/api'
 import { getUser } from '../lib/auth'
 import { useInspection } from '../hooks/useInspections'
@@ -20,7 +20,7 @@ import SectionValveRecession from '../components/inspection/SectionValveRecessio
 import SectionVacuumTest from '../components/inspection/SectionVacuumTest'
 import FileUploadZone from '../components/FileUploadZone'
 import { initSectionData, mergeSectionData, formatFileSize } from '../lib/utils'
-import { DISPOSITION_COLORS, HEADER_FIELD_LABELS } from '../lib/constants'
+import { DISPOSITION_COLORS, HEADER_FIELD_LABELS, COMPONENT_TYPE_LABELS } from '../lib/constants'
 
 const SECTION_COMPONENTS = {
   pfn_checklist: SectionReceiving,
@@ -182,6 +182,7 @@ export default function InspectionForm() {
   const [completing, setCompleting] = useState(false)
   const saveTimer = useRef(null)
   const initialLoad = useRef(true)
+  const bulkUploadRef = useRef(null)
 
   // Admin section-editing state
   const isAdmin = ['admin', 'qc_manager'].includes(currentUser?.role)
@@ -251,6 +252,13 @@ export default function InspectionForm() {
         showToast(`Failed to upload ${file.name}`, 'error')
       }
     }
+  }
+
+  async function handleBulkImageSelect(e) {
+    const files = Array.from(e.target.files || [])
+    e.target.value = ''
+    if (!files.length) return
+    await handleUpload(files)
   }
 
   async function handleItemUpload(file, sectionKey, itemId) {
@@ -474,81 +482,109 @@ export default function InspectionForm() {
 
       {/* Sticky header */}
       <div className="sticky top-0 z-10 bg-white border-b border-gray-200 shadow-sm flex-shrink-0">
-        <div className="px-4 sm:px-6 pt-2 sm:pt-3 flex items-center gap-2 flex-wrap">
-          <span className="font-mono text-xs sm:text-sm font-bold text-pdi-navy">{template.form_no}</span>
-          <span className="text-gray-300 text-xs sm:text-sm select-none">/</span>
-          <span className="text-xs sm:text-sm text-gray-700 truncate max-w-[50%] sm:max-w-none">{inspection.part_number || 'No part #'}</span>
-          {inspection.po_number && (
-            <>
-              <span className="text-gray-300 text-xs sm:text-sm hidden sm:inline select-none">/</span>
-              <span className="text-xs sm:text-sm text-gray-500 hidden sm:inline">PO {inspection.po_number}</span>
-            </>
-          )}
+        <div className="px-3 sm:px-5 py-2 flex items-center gap-3 min-h-[52px]">
+          {/* Form number */}
+          <span className="font-mono text-xs font-bold text-pdi-navy flex-shrink-0 hidden sm:block">{template.form_no}</span>
+          <div className="w-px h-4 bg-gray-200 flex-shrink-0 hidden sm:block" />
+
+          {/* Info fields — scroll horizontally on small screens */}
+          <div className="flex items-center gap-4 sm:gap-5 flex-1 min-w-0 overflow-x-auto no-scrollbar">
+            {inspection.component_type && (
+              <div className="flex-shrink-0">
+                <div className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">Part Type</div>
+                <div className="text-xs font-medium text-gray-800">{COMPONENT_TYPE_LABELS[inspection.component_type] || inspection.component_type}</div>
+              </div>
+            )}
+            {inspection.part_number && (
+              <div className="flex-shrink-0">
+                <div className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">Part Number</div>
+                <div className="text-xs font-medium text-gray-800 font-mono">{inspection.part_number}</div>
+              </div>
+            )}
+            {inspection.po_number && (
+              <div className="flex-shrink-0">
+                <div className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">PO Number</div>
+                <div className="text-xs font-medium text-gray-800 font-mono">{inspection.po_number}</div>
+              </div>
+            )}
+            {inspection.inspector_name && (
+              <div className="flex-shrink-0">
+                <div className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">Inspector</div>
+                <div className="text-xs font-medium text-gray-800">{inspection.inspector_name}</div>
+              </div>
+            )}
+          </div>
+
+          {/* Status + save indicator */}
           <StatusBadge status={inspection.status} />
-          <span className={`text-xs ml-auto ${saveState === 'saving' ? 'text-gray-400' : saveState === 'saved' ? 'text-green-600' : saveState === 'error' ? 'text-red-500' : 'invisible'}`}>
-            {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? '✓ Saved' : saveState === 'error' ? 'Save failed' : ''}
+          <span className={`text-xs flex-shrink-0 hidden sm:block ${saveState === 'saving' ? 'text-gray-400' : saveState === 'saved' ? 'text-green-600' : saveState === 'error' ? 'text-red-500' : 'invisible'}`}>
+            {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? '✓ Saved' : saveState === 'error' ? 'Save failed' : '·'}
           </span>
+
+          {/* Action buttons */}
+          <div className="flex items-center gap-0.5 flex-shrink-0 pl-2 border-l border-gray-100">
+            <button
+              onClick={handleDownloadPdf}
+              disabled={pdfLoading}
+              title="Print / PDF"
+              className="p-2 rounded text-gray-500 hover:bg-gray-100 hover:text-gray-800 disabled:opacity-40 transition-colors flex-shrink-0"
+            >
+              {pdfLoading ? <Loader2 size={16} className="animate-spin" /> : <Printer size={16} />}
+            </button>
+            <button
+              onClick={handleEmail}
+              title="Email"
+              className="p-2 rounded text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors flex-shrink-0"
+            >
+              <Mail size={16} />
+            </button>
+            <button
+              onClick={() => bulkUploadRef.current?.click()}
+              title="Bulk Image Upload"
+              className="p-2 rounded text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors flex-shrink-0"
+            >
+              <ImagePlus size={16} />
+            </button>
+            <button
+              onClick={() => debouncedSave()}
+              title="Save"
+              className="p-2 rounded text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors flex-shrink-0"
+            >
+              <Save size={16} />
+            </button>
+            <button
+              onClick={handleComplete}
+              disabled={!disposition || complete.isPending}
+              title={complete.isPending ? 'Completing…' : 'Complete Inspection'}
+              className="p-2 rounded text-pdi-teal hover:bg-teal-50 hover:text-teal-700 disabled:opacity-40 transition-colors flex-shrink-0"
+            >
+              {complete.isPending ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
+            </button>
+            <div className="w-px h-5 bg-gray-200 mx-1 flex-shrink-0" />
+            <button
+              onClick={() => navigate(returnTo)}
+              title="Close"
+              className="p-2 rounded text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors flex-shrink-0"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
-        <div className="px-4 sm:px-6 py-1.5 flex items-center justify-end gap-0.5 border-t border-gray-100">
-          <button
-            onClick={handleDownloadPdf}
-            disabled={pdfLoading}
-            title="Print / PDF"
-            className="p-2 rounded text-gray-500 hover:bg-gray-100 hover:text-gray-800 disabled:opacity-40 transition-colors flex-shrink-0"
-          >
-            {pdfLoading ? <Loader2 size={16} className="animate-spin" /> : <Printer size={16} />}
-          </button>
-          <button
-            onClick={handleEmail}
-            title="Email"
-            className="p-2 rounded text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors flex-shrink-0"
-          >
-            <Mail size={16} />
-          </button>
-          <button
-            onClick={() => debouncedSave()}
-            title="Save"
-            className="p-2 rounded text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors flex-shrink-0"
-          >
-            <Save size={16} />
-          </button>
-          <button
-            onClick={handleComplete}
-            disabled={!disposition || complete.isPending}
-            title={complete.isPending ? 'Completing…' : 'Complete Inspection'}
-            className="p-2 rounded text-pdi-teal hover:bg-teal-50 hover:text-teal-700 disabled:opacity-40 transition-colors flex-shrink-0"
-          >
-            {complete.isPending ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
-          </button>
-          <div className="w-px h-5 bg-gray-200 mx-1 flex-shrink-0" />
-          <button
-            onClick={() => navigate(returnTo)}
-            title="Close"
-            className="p-2 rounded text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors flex-shrink-0"
-          >
-            <X size={16} />
-          </button>
-        </div>
+
+        {/* Hidden multi-file input for bulk image upload */}
+        <input
+          ref={bulkUploadRef}
+          type="file"
+          multiple
+          accept="image/*"
+          className="hidden"
+          onChange={handleBulkImageSelect}
+        />
       </div>
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-[1440px] mx-auto p-3 sm:p-6 space-y-3 sm:space-y-4">
-
-          {/* Header fields */}
-          <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
-            <h2 className="text-sm sm:text-base font-semibold text-gray-700 mb-3">Inspection Details</h2>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-4 sm:gap-x-6 gap-y-2 sm:gap-y-3">
-              {headerFields.map(field => (
-                inspection[field] && (
-                  <div key={field} className="min-w-0">
-                    <div className="text-xs text-gray-400 truncate">{HEADER_FIELD_LABELS[field] || field}</div>
-                    <div className="text-sm sm:text-base font-medium text-gray-800 truncate">{inspection[field]}</div>
-                  </div>
-                )
-              ))}
-            </div>
-          </div>
 
           {/* Accepted items notice for non-admins */}
           {!isAdminRole && detectAcceptedItems(sectionData) && (
@@ -636,6 +672,38 @@ export default function InspectionForm() {
                 <PlusCircle size={16} />
                 Add Dimensional Inspection
               </button>
+            </div>
+          )}
+
+          {/* General attachments gallery (bulk-uploaded images) */}
+          {generalAttachments.length > 0 && (
+            <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">Inspection Images</h3>
+              <div className="flex flex-wrap gap-3 print:gap-2">
+                {generalAttachments.map(att => (
+                  <div
+                    key={att.id}
+                    className="relative group flex-shrink-0 border border-gray-200 rounded overflow-hidden bg-gray-50"
+                    style={{ width: '2.45in', height: '3.25in' }}
+                  >
+                    <img
+                      src={`/api/attachments/download/${att.id}`}
+                      alt={att.file_name}
+                      className="w-full h-full object-cover"
+                    />
+                    <button
+                      onClick={() => handleDeleteFile(att.id)}
+                      title="Remove image"
+                      className="absolute top-1 right-1 p-1 bg-white/80 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded opacity-0 group-hover:opacity-100 transition-opacity print:hidden"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                    <div className="absolute bottom-0 left-0 right-0 bg-black/40 px-1.5 py-0.5 text-[10px] text-white truncate print:hidden">
+                      {att.file_name}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
