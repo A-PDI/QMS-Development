@@ -364,80 +364,108 @@ const TEMPLATES = [
       },
     },
   },
-
-  // ── PDI-IQI-005  Cylinder Head ──────────────────────────────────────────
-  {
-    component_type: 'cylinder_head',
-    form_no: 'PDI-IQI-005',
-    title: 'PDI Incoming Quality Inspection — Cylinder Head',
-    form_type: 'iqi_combined',
-    disposition_type: 'pass_fail',
-    revision: '',
-    header_schema: STANDARD_HEADER,
-    sections: {
-      // ── Always-shown sections ──────────────────────────────────────────
-      receiving: {
-        title: 'A. RECEIVING & DOCUMENTATION VERIFICATION',
-        section_type: 'pfn_checklist',
-        items: RECEIVING_ITEMS,
-      },
-      visual: {
-        title: 'B. VISUAL INSPECTION',
-        section_type: 'pfn_checklist',
-        items: [
-          { id: 1, name: 'Casting Integrity',                 requirement: 'No visible cracks, voids, or porosity on any casting surface; combustion deck, port walls, and coolant jacket areas are free from casting defects.' },
-          { id: 2, name: 'Combustion Deck & Machined Surfaces', requirement: 'Deck face and all machined surfaces are clean and free from scratches, gouges, pitting, or handling damage; surface finish appears within specification.' },
-          { id: 3, name: 'Thread Condition',                  requirement: 'All bolt holes, port threads, and tapped features are clean and correctly formed; no cross-threading, stripping, or debris lodged in threaded areas.' },
-          { id: 4, name: 'Intake & Exhaust Ports',            requirement: 'Port walls are correctly cast and machined; free from casting fins, metal intrusions, burrs, or machining tears that would affect flow path or port geometry.' },
-          { id: 5, name: 'Coolant & Oil Galleries',           requirement: 'Coolant passages and oil galleries are clear and unobstructed; no visible debris, casting sand, swarf, or blockage at accessible openings.' },
-          { id: 6, name: 'Oil Drain Passages',                requirement: 'Oil drain passages are correctly sized and unobstructed; free from casting burrs, fins, or blockage that would restrict return flow.' },
-          { id: 7, name: 'Injector Bores & Sealing Surfaces', requirement: 'Injector bores are correctly machined; cups are properly seated and undamaged; o-rings are correctly installed and free from damage or distortion; sealing surfaces are free from machining defects.' },
-          { id: 8, name: 'Valvetrain Components',             requirement: 'Valve springs, seats, and retainers show no visible cracks, damage, or improper installation; valve stems are straight and correctly aligned; all keepers are fully engaged and correctly seated; stem seals are properly positioned and undamaged.' },
-        ],
-      },
-      // ── Dimensional sections (optional — shown only when user adds dimensional) ──
-      general_measurements: {
-        title: 'C. DIMENSIONAL INSPECTION',
-        section_type: 'general_measurements',
-        optional: true,
-        items: [
-          { id: 1, measurement: 'Cylinder Head Height' },
-          { id: 2, measurement: 'Surface Finish (Ra)' },
-          { id: 3, measurement: 'Flatness' },
-          { id: 4, measurement: 'Valve Stem Height' },
-        ],
-      },
-      camshaft_bore: {
-        title: 'C5. CAMSHAFT BORE DIMENSION',
-        section_type: 'camshaft_bore',
-        optional: true,
-        bore_count: 7,
-      },
-      fire_ring_protrusion: {
-        title: 'C6. FIRE RING PROTRUSION',
-        section_type: 'fire_ring_protrusion',
-        optional: true,
-        cylinder_count: 6,
-      },
-      valve_recession: {
-        title: 'C7. VALVE RECESSION',
-        section_type: 'valve_recession',
-        optional: true,
-        cylinder_count: 6,
-        intake_count: 2,
-        exhaust_count: 2,
-      },
-      vacuum_test: {
-        title: 'C8. VACUUM TEST',
-        section_type: 'vacuum_test',
-        optional: true,
-        cylinder_count: 6,
-        intake_count: 2,
-        exhaust_count: 2,
-      },
-    },
-  },
 ];
+
+// ─── PDI-IQI-005 Rev A sections (preserved, inactive after Rev B seeds) ────────
+const PDI_IQI_005_V1_SECTIONS = {
+  receiving: {
+    title: 'A. RECEIVING & DOCUMENTATION VERIFICATION',
+    section_type: 'pfn_checklist',
+    items: RECEIVING_ITEMS,
+  },
+  visual: {
+    title: 'B. VISUAL INSPECTION',
+    section_type: 'pfn_checklist',
+    items: [
+      { id: 1, name: 'Casting Integrity',                    requirement: 'No visible cracks, voids, or porosity on any casting surface; combustion deck, port walls, and coolant jacket areas are free from casting defects.' },
+      { id: 2, name: 'Combustion Deck & Machined Surfaces',  requirement: 'Deck face and all machined surfaces are clean and free from scratches, gouges, pitting, or handling damage; surface finish appears within specification.' },
+      { id: 3, name: 'Thread Condition',                     requirement: 'All bolt holes, port threads, and tapped features are clean and correctly formed; no cross-threading, stripping, or debris lodged in threaded areas.' },
+      { id: 4, name: 'Intake & Exhaust Ports',               requirement: 'Port walls are correctly cast and machined; free from casting fins, metal intrusions, burrs, or machining tears that would affect flow path or port geometry.' },
+      { id: 5, name: 'Coolant & Oil Galleries',              requirement: 'Coolant passages and oil galleries are clear and unobstructed; no visible debris, casting sand, swarf, or blockage at accessible openings.' },
+      { id: 6, name: 'Oil Drain Passages',                   requirement: 'Oil drain passages are correctly sized and unobstructed; free from casting burrs, fins, or blockage that would restrict return flow.' },
+      { id: 7, name: 'Injector Bores & Sealing Surfaces',   requirement: 'Injector bores are correctly machined; cups are properly seated and undamaged; o-rings are correctly installed and free from damage or distortion; sealing surfaces are free from machining defects.' },
+      { id: 8, name: 'Valvetrain Components',                requirement: 'Valve springs, seats, and retainers show no visible cracks, damage, or improper installation; valve stems are straight and correctly aligned; all keepers are fully engaged and correctly seated; stem seals are properly positioned and undamaged.' },
+    ],
+  },
+  general_measurements: {
+    title: 'C. DIMENSIONAL INSPECTION',
+    section_type: 'general_measurements',
+    optional: true,
+    items: [
+      { id: 1, measurement: 'Cylinder Head Height' },
+      { id: 2, measurement: 'Surface Finish (Ra)' },
+      { id: 3, measurement: 'Flatness' },
+      { id: 4, measurement: 'Valve Stem Height' },
+    ],
+  },
+  camshaft_bore:        { title: 'C5. CAMSHAFT BORE DIMENSION', section_type: 'camshaft_bore',        optional: true, bore_count: 7 },
+  fire_ring_protrusion: { title: 'C6. FIRE RING PROTRUSION',   section_type: 'fire_ring_protrusion', optional: true, cylinder_count: 6 },
+  valve_recession:      { title: 'C7. VALVE RECESSION',         section_type: 'valve_recession',      optional: true, cylinder_count: 6, intake_count: 2, exhaust_count: 2 },
+  vacuum_test:          { title: 'C8. VACUUM TEST',             section_type: 'vacuum_test',          optional: true, cylinder_count: 6, intake_count: 2, exhaust_count: 2 },
+};
+
+// ─── PDI-IQI-005 Rev B sections (active revision) ────────────────────────────
+const PDI_IQI_005_V2_SECTIONS = {
+  receiving: {
+    title: 'A. RECEIVING & DOCUMENTATION VERIFICATION',
+    section_type: 'pfn_checklist',
+    items: RECEIVING_ITEMS,
+  },
+  visual: {
+    title: 'B. VISUAL INSPECTION',
+    section_type: 'pfn_checklist',
+    items: [
+      { id: 1,  name: 'Oxidation / Markings',            requirement: 'Should be free of rust, pitting, or other material oxidation' },
+      { id: 2,  name: 'Edge Debur',                       requirement: 'Check machined edges for sharp edges' },
+      { id: 3,  name: 'Block-off Plugs',                  requirement: 'Confirm all required plugs are in place and torqued to spec' },
+      { id: 4,  name: 'Heat Tab',                         requirement: 'Confirm Heat Tab in installed appropriately' },
+      { id: 5,  name: 'Casting Quality',                  requirement: 'Using bore-scope verify casting quality in all intake and exhaust ports' },
+      { id: 6,  name: 'Finish',                           requirement: 'Confirm machining finish and casting quality' },
+      { id: 7,  name: 'Machining Quality',                requirement: 'Verify machining quality in all intake and exhaust ports if applicable' },
+      { id: 8,  name: 'Material Type',                    requirement: 'Confirm injector cup material type' },
+      { id: 9,  name: 'Pass-through bore (Cummins)',      requirement: 'Confirm pass through tube fits bore' },
+      { id: 10, name: 'Correct Valves',                   requirement: 'Confirm intake/exhaust in correct locations' },
+      { id: 11, name: 'Springs / Retainers / Keepers',   requirement: 'Confirm correct spring assemblies and everything assembled properly' },
+    ],
+  },
+  general_measurements: {
+    title: 'C. DIMENSIONAL INSPECTION — General',
+    section_type: 'general_measurements',
+    optional: true,
+    items: [
+      { id: 1, measurement: 'Cylinder Head Height' },
+      { id: 2, measurement: 'Surface Finish (Ra)' },
+      { id: 3, measurement: 'Flatness' },
+      { id: 4, measurement: 'Valve Stem Height' },
+    ],
+  },
+  groove_specs: {
+    title: 'C. DIMENSIONAL INSPECTION — Groove Specs',
+    section_type: 'dimensional',
+    optional: true,
+    items: [
+      { id: 1, measurement: 'Groove diameter', location: '', spec: '6.300" Groove OD for CAT, 5.990" Groove OD for Cummins' },
+      { id: 2, measurement: 'Groove Depth',    location: '', spec: '.029-.031"' },
+      { id: 3, measurement: 'Wire Protrusion', location: '', spec: '.008-.010"' },
+    ],
+  },
+  valve_recession: {
+    title: 'C. DIMENSIONAL INSPECTION — Valve Recession',
+    section_type: 'valve_recession',
+    optional: true,
+    cylinder_count: 6,
+    intake_count: 2,
+    exhaust_count: 2,
+  },
+  vacuum_test: {
+    title: 'C. DIMENSIONAL INSPECTION — Test Valves (Vacuum)',
+    section_type: 'vacuum_test',
+    optional: true,
+    cylinder_count: 6,
+    intake_count: 2,
+    exhaust_count: 2,
+  },
+};
 
 async function seed() {
   try {
@@ -515,6 +543,76 @@ async function seed() {
           ]
         );
         console.log(`[Seed] Updated template: ${template.form_no}`);
+      }
+    }
+
+    // ── PDI-IQI-005 versioning ─────────────────────────────────────────────────
+    // Rev A (old content) is preserved inactive; Rev B (new content) is active.
+    // Admins can reactivate Rev A from Admin > Inspection Forms at any time.
+    {
+      const now = new Date().toISOString();
+      const FORM_NO = 'PDI-IQI-005';
+      const TITLE   = 'PDI Incoming Quality Inspection — Cylinder Head';
+
+      // Locate or create Rev A ------------------------------------------------
+      let revA = db.get(
+        "SELECT id, version FROM inspection_templates WHERE form_no = ? AND revision = 'A'",
+        [FORM_NO]
+      );
+
+      if (!revA) {
+        // Existing template with blank revision (pre-versioning seed) → stamp as Rev A
+        const legacy = db.get(
+          "SELECT id, version FROM inspection_templates WHERE form_no = ? AND (revision = '' OR revision IS NULL)",
+          [FORM_NO]
+        );
+        if (legacy) {
+          db.run(
+            "UPDATE inspection_templates SET revision = 'A', active = 0 WHERE id = ?",
+            [legacy.id]
+          );
+          revA = { id: legacy.id, version: legacy.version || 1 };
+          console.log('[Seed] Stamped existing PDI-IQI-005 as Rev A (inactive)');
+        } else {
+          // Fresh DB with no existing IQI-005 — insert Rev A as inactive baseline
+          const revAId = uuidv4();
+          db.run(
+            `INSERT INTO inspection_templates
+               (id, component_type, form_no, revision, title, form_type, disposition_type,
+                header_schema, sections, active, created_at, version)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)`,
+            [revAId, 'cylinder_head', FORM_NO, 'A', TITLE, 'iqi_combined', 'pass_fail',
+             JSON.stringify(STANDARD_HEADER), JSON.stringify(PDI_IQI_005_V1_SECTIONS), now]
+          );
+          revA = { id: revAId, version: 1 };
+          console.log('[Seed] Created PDI-IQI-005 Rev A (inactive baseline)');
+        }
+      }
+
+      // Locate or create Rev B ------------------------------------------------
+      const revB = db.get(
+        "SELECT id FROM inspection_templates WHERE form_no = ? AND revision = 'B'",
+        [FORM_NO]
+      );
+      if (!revB) {
+        const revBId = uuidv4();
+        db.run(
+          `INSERT INTO inspection_templates
+             (id, component_type, form_no, revision, title, form_type, disposition_type,
+              header_schema, sections, active, created_at, version, parent_template_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+          [revBId, 'cylinder_head', FORM_NO, 'B', TITLE, 'iqi_combined', 'pass_fail',
+           JSON.stringify(STANDARD_HEADER), JSON.stringify(PDI_IQI_005_V2_SECTIONS),
+           now, (revA.version || 1) + 1, revA.id]
+        );
+        // Ensure no other IQI-005 variant is left active
+        db.run(
+          "UPDATE inspection_templates SET active = 0 WHERE form_no = ? AND id != ?",
+          [FORM_NO, revBId]
+        );
+        console.log('[Seed] Created PDI-IQI-005 Rev B (active)');
+      } else {
+        console.log('[Seed] PDI-IQI-005 Rev B already exists — skipping');
       }
     }
 
