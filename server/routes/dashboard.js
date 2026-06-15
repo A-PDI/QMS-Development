@@ -41,12 +41,12 @@ router.get('/stats', (req, res, next) => {
       []
     );
 
-    // Recent inspections (for list when card is clicked — kept for compat)
+    // Recent inspections — most recently updated
     const recent_inspections = db.all(
       `SELECT id, form_no, part_number, component_type, supplier, date_received,
               inspector_name, lot_size, sample_size, po_number, lot_serial_no,
-              disposition, status, created_at, completed_at
-       FROM inspections ORDER BY created_at DESC LIMIT 5`,
+              disposition, status, created_at, updated_at, completed_at
+       FROM inspections ORDER BY updated_at DESC LIMIT 10`,
       []
     );
 
@@ -111,7 +111,7 @@ router.get('/alerts', (req, res, next) => {
     );
 
     const short_duration = db.all(
-      `SELECT id, form_no, part_number, inspector_name,
+      `SELECT id, form_no, part_number, component_type, inspector_name, created_at,
          CAST((julianday(completed_at) - julianday(created_at)) * 24 * 60 AS INTEGER) AS duration_minutes
        FROM inspections
        WHERE status = 'complete' AND completed_at IS NOT NULL

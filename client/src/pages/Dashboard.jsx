@@ -401,48 +401,65 @@ export default function Dashboard() {
               {(inspectionAlerts.short_duration || []).length === 0 ? (
                 <div className="text-center text-gray-400 text-sm py-8 px-4">No short duration completions</div>
               ) : (
-                <div className="divide-y divide-gray-100">
-                  {(inspectionAlerts.short_duration || []).slice(0, 5).map(insp => (
-                    <button
-                      key={insp.id}
-                      onClick={() => navigate(`/inspections/${insp.id}`)}
-                      className="w-full text-left px-4 sm:px-5 py-3 hover:bg-orange-50/50 transition-colors min-h-[44px] flex items-start justify-between gap-2"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</div>
-                        <div className="font-mono text-xs text-gray-600 mt-0.5">{insp.part_number || '—'}</div>
-                      </div>
-                      <div className="text-right flex-shrink-0">
-                        <div className="text-xs text-orange-600 font-semibold">{insp.duration_minutes ? `${insp.duration_minutes}m` : '—'}</div>
-                        <div className="text-xs text-gray-500 mt-0.5">{insp.inspector_name || '—'}</div>
-                      </div>
-                    </button>
-                  ))}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-100">
+                      <tr>
+                        {['Part Number', 'Part Type', 'Inspector', 'Date Started', 'Duration'].map(h => (
+                          <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {(inspectionAlerts.short_duration || []).slice(0, 10).map(insp => (
+                        <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-orange-50/40 cursor-pointer">
+                          <td className="px-4 py-2.5 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
+                          <td className="px-4 py-2.5 text-xs text-gray-700">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</td>
+                          <td className="px-4 py-2.5 text-xs text-gray-700">{insp.inspector_name || '—'}</td>
+                          <td className="px-4 py-2.5 text-xs text-gray-500">{formatDate(insp.created_at)}</td>
+                          <td className="px-4 py-2.5 text-xs text-orange-600 font-semibold">{insp.duration_minutes != null ? `${insp.duration_minutes}m` : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
           </div>
         )}
 
-        {/* Activity Log */}
-        {stats?.recent_activity && stats.recent_activity.length > 0 && (
+        {/* Recent Activity */}
+        {stats?.recent_inspections && stats.recent_inspections.length > 0 && (
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="flex items-center gap-2 px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-200 bg-gray-50">
-              <div className="w-1 h-5 bg-pdi-teal rounded-full flex-shrink-0" />
-              <h3 className="text-sm sm:text-base font-semibold text-gray-800">Recent Activity</h3>
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-200 bg-gray-50 gap-2">
+              <div className="flex items-center gap-2">
+                <div className="w-1 h-5 bg-pdi-teal rounded-full flex-shrink-0" />
+                <h3 className="text-sm sm:text-base font-semibold text-gray-800">Recent Activity</h3>
+              </div>
+              <button onClick={() => navigate('/inspections')} className="text-xs text-pdi-navy hover:underline font-medium flex-shrink-0">View all →</button>
             </div>
-            <div className="divide-y divide-gray-100">
-              {stats.recent_activity.map((act, i) => {
-                const cfg = ACTION_LABELS[act.action] || { label: act.action, color: 'bg-gray-100 text-gray-600' }
-                return (
-                  <div key={i} className="px-4 sm:px-5 py-3 flex items-center gap-3 min-h-[44px]">
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${cfg.color} flex-shrink-0`}>{cfg.label}</span>
-                    <span className="text-xs text-gray-600 font-mono flex-shrink-0">{act.form_no || act.inspection_id}</span>
-                    <span className="text-xs text-gray-500 truncate flex-1">{act.user_name}</span>
-                    <span className="text-xs text-gray-400 flex-shrink-0">{formatDate(act.created_at)}</span>
-                  </div>
-                )
-              })}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b border-gray-100">
+                  <tr>
+                    {['Part Number', 'Part Type', 'PO Number', 'Inspector', 'Status', 'Last Update'].map(h => (
+                      <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {stats.recent_inspections.map(insp => (
+                    <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-blue-50/50 cursor-pointer">
+                      <td className="px-4 py-2.5 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
+                      <td className="px-4 py-2.5 text-xs text-gray-700">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-gray-700">{insp.po_number || '—'}</td>
+                      <td className="px-4 py-2.5 text-xs text-gray-700">{insp.inspector_name || '—'}</td>
+                      <td className="px-4 py-2.5"><StatusBadge status={insp.status} /></td>
+                      <td className="px-4 py-2.5 text-xs text-gray-500">{formatDate(insp.updated_at || insp.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}

@@ -54,9 +54,9 @@ export default function SectionReceiving({
           <thead>
             <tr className="bg-gray-100">
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-8">#</th>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-40">Check Item</th>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Requirement</th>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-44">Finding / Observation</th>
+              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-36">Inspection Item</th>
+              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-56">Description</th>
+              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Finding / Observation</th>
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-28">Status</th>
               {showImages && (
                 <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 w-20">Image</th>
