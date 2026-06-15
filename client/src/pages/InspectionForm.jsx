@@ -19,6 +19,7 @@ import SectionFireRingProtrusion from '../components/inspection/SectionFireRingP
 import SectionValveRecession from '../components/inspection/SectionValveRecession'
 import SectionVacuumTest from '../components/inspection/SectionVacuumTest'
 import FileUploadZone from '../components/FileUploadZone'
+import AuthImage from '../components/AuthImage'
 import { initSectionData, mergeSectionData, formatFileSize } from '../lib/utils'
 import { DISPOSITION_COLORS, HEADER_FIELD_LABELS, COMPONENT_TYPE_LABELS } from '../lib/constants'
 
@@ -152,6 +153,37 @@ function QualityAlertModal({ inspectionId, onDone }) {
   )
 }
 
+// Resize an image File to 490×650px (≈2.45"×3.25" at 200 dpi) before upload.
+// Uses a centered cover crop so the exact aspect ratio is preserved.
+async function resizeImageFile(file) {
+  const TARGET_W = 490
+  const TARGET_H = 650
+  return new Promise((resolve) => {
+    const img = new Image()
+    const url = URL.createObjectURL(file)
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      const canvas = document.createElement('canvas')
+      canvas.width = TARGET_W
+      canvas.height = TARGET_H
+      const ctx = canvas.getContext('2d')
+      const srcScale = Math.min(img.width / TARGET_W, img.height / TARGET_H)
+      const srcW = TARGET_W * srcScale
+      const srcH = TARGET_H * srcScale
+      const srcX = (img.width - srcW) / 2
+      const srcY = (img.height - srcH) / 2
+      ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, TARGET_W, TARGET_H)
+      canvas.toBlob(
+        blob => resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' })),
+        'image/jpeg',
+        0.92
+      )
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file) }
+    img.src = url
+  })
+}
+
 export default function InspectionForm() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -258,7 +290,8 @@ export default function InspectionForm() {
     const files = Array.from(e.target.files || [])
     e.target.value = ''
     if (!files.length) return
-    await handleUpload(files)
+    const resized = await Promise.all(files.map(resizeImageFile))
+    await handleUpload(resized)
   }
 
   async function handleItemUpload(file, sectionKey, itemId) {
@@ -678,27 +711,29 @@ export default function InspectionForm() {
           {/* General attachments gallery (bulk-uploaded images) */}
           {generalAttachments.length > 0 && (
             <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">Inspection Images</h3>
-              <div className="flex flex-wrap gap-3 print:gap-2">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                Inspection Images ({generalAttachments.length})
+              </h3>
+              <div className="grid grid-cols-3 gap-3">
                 {generalAttachments.map(att => (
                   <div
                     key={att.id}
-                    className="relative group flex-shrink-0 border border-gray-200 rounded overflow-hidden bg-gray-50"
-                    style={{ width: '2.45in', height: '3.25in' }}
+                    className="relative group border border-gray-200 rounded overflow-hidden bg-gray-50"
+                    style={{ aspectRatio: '2.45 / 3.25' }}
                   >
-                    <img
-                      src={`/api/attachments/download/${att.id}`}
+                    <AuthImage
+                      attachmentId={att.id}
                       alt={att.file_name}
-                      className="w-full h-full object-cover"
+                      className="absolute inset-0 w-full h-full object-cover"
                     />
                     <button
                       onClick={() => handleDeleteFile(att.id)}
                       title="Remove image"
-                      className="absolute top-1 right-1 p-1 bg-white/80 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded opacity-0 group-hover:opacity-100 transition-opacity print:hidden"
+                      className="absolute top-1 right-1 p-1 bg-white/80 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded opacity-0 group-hover:opacity-100 transition-opacity"
                     >
                       <Trash2 size={13} />
                     </button>
-                    <div className="absolute bottom-0 left-0 right-0 bg-black/40 px-1.5 py-0.5 text-[10px] text-white truncate print:hidden">
+                    <div className="absolute bottom-0 left-0 right-0 bg-black/40 px-1.5 py-0.5 text-[10px] text-white truncate">
                       {att.file_name}
                     </div>
                   </div>
