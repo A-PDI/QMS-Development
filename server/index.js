@@ -186,4 +186,12 @@ app.use(errorHandler);
 // ── Start ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`[Startup] Server running on port ${PORT} (${process.env.NODE_ENV || 'development'})`);
+  // Run one-time DB migrations after the server is listening
+  try {
+    const db = require('./db/adapter');
+    const { applyMigrations } = require('./db/migrations');
+    applyMigrations(db);
+  } catch (err) {
+    console.error('[Startup] Migration error:', err.message);
+  }
 });
