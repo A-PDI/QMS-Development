@@ -1,9 +1,12 @@
+import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, ClipboardList, PlusCircle, LogOut, Shield, AlertTriangle, Settings, X, Bell, User, BarChart2, FileImage } from 'lucide-react'
+import { LayoutDashboard, ClipboardList, PlusCircle, LogOut, Shield, AlertTriangle, Settings, X, Bell, User, BarChart2, FileImage, KeyRound } from 'lucide-react'
 import { useMsal } from '@azure/msal-react'
 import { isEntraConfigured } from '../lib/msalConfig'
 import { getUser, clearAuth } from '../lib/auth'
 import { useQualityAlertCount } from '../hooks/useQualityAlerts'
+import { useToast } from '../hooks/useToast'
+import api from '../lib/api'
 
 const nav = [
   { to: '/',                icon: LayoutDashboard, label: 'Dashboard',       end: true, permKey: 'dashboard' },
@@ -16,6 +19,91 @@ const nav = [
   { to: '/reports',         icon: BarChart2,       label: 'Reports',        adminOnly: true },
   { to: '/admin',           icon: Settings,        label: 'Admin',          adminOnly: true },
 ]
+
+function ChangePasswordModal({ onClose }) {
+  const [form, setForm] = useState({ current: '', next: '', confirm: '' })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setError('')
+    if (form.next.length < 8) { setError('New password must be at least 8 characters'); return }
+    if (form.next !== form.confirm) { setError('Passwords do not match'); return }
+    setSaving(true)
+    try {
+      await api.patch('/auth/password', { current_password: form.current, new_password: form.next })
+      onClose(true)
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Failed to change password')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-semibold text-gray-900">Change Password</h3>
+          <button type="button" onClick={() => onClose(false)} className="p-1 text-gray-400 hover:text-gray-600">
+            <X size={18} />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Current Password</label>
+            <input
+              type="password"
+              required
+              autoFocus
+              value={form.current}
+              onChange={e => setForm(f => ({ ...f, current: e.target.value }))}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">New Password <span className="text-gray-400 font-normal">(min 8 characters)</span></label>
+            <input
+              type="password"
+              required
+              value={form.next}
+              onChange={e => setForm(f => ({ ...f, next: e.target.value }))}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Confirm New Password</label>
+            <input
+              type="password"
+              required
+              value={form.confirm}
+              onChange={e => setForm(f => ({ ...f, confirm: e.target.value }))}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
+            />
+          </div>
+          {error && <p className="text-xs text-red-500">{error}</p>}
+          <div className="flex gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => onClose(false)}
+              className="flex-1 px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="flex-1 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px]"
+            >
+              {saving ? 'Saving…' : 'Update Password'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
 
 function EntraSignOutButton({ onAfter }) {
   const { instance } = useMsal()
@@ -52,6 +140,8 @@ function SignOutButton({ onClick }) {
 export default function Sidebar({ open = false, onClose }) {
   const user = getUser()
   const { data: qualityAlertCount = 0 } = useQualityAlertCount()
+  const { showToast } = useToast()
+  const [showChangePw, setShowChangePw] = useState(false)
 
   function handleNavClick() {
     if (onClose) onClose()
@@ -143,9 +233,21 @@ export default function Sidebar({ open = false, onClose }) {
         </nav>
 
         <div className="px-3 py-4 border-t border-white/10">
-          <div className="px-3 py-2 mb-2">
-            <div className="text-xs text-pdi-steel/60 truncate">{user?.name}</div>
-            <div className="text-xs text-pdi-steel/40 truncate capitalize">{user?.role}</div>
+          <div className="px-3 py-2 mb-2 flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="text-xs text-pdi-steel/60 truncate">{user?.name}</div>
+              <div className="text-xs text-pdi-steel/40 truncate capitalize">{user?.role}</div>
+            </div>
+            {!isEntraConfigured && (
+              <button
+                type="button"
+                onClick={() => setShowChangePw(true)}
+                title="Change Password"
+                className="flex-shrink-0 p-1.5 rounded text-pdi-steel/50 hover:bg-white/10 hover:text-pdi-steel transition-colors"
+              >
+                <KeyRound size={14} />
+              </button>
+            )}
           </div>
           {isEntraConfigured ? (
             <EntraSignOutButton onAfter={onClose} />
@@ -154,6 +256,15 @@ export default function Sidebar({ open = false, onClose }) {
           )}
         </div>
       </aside>
+
+      {showChangePw && (
+        <ChangePasswordModal
+          onClose={(success) => {
+            setShowChangePw(false)
+            if (success) showToast('Password updated successfully', 'success')
+          }}
+        />
+      )}
     </>
   )
 }
