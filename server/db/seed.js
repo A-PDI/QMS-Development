@@ -365,7 +365,7 @@ const TEMPLATES = [
     },
   },
 
-  // ── PDI-IQI-005  Cylinder Head (Visual + optional Dimensional) ──────────
+  // ── PDI-IQI-005  Cylinder Head ──────────────────────────────────────────
   {
     component_type: 'cylinder_head',
     form_no: 'PDI-IQI-005',
@@ -375,63 +375,29 @@ const TEMPLATES = [
     revision: '',
     header_schema: STANDARD_HEADER,
     sections: {
-      // ── Visual sections (always shown) ──────────────────────────────────
+      // ── Always-shown sections ──────────────────────────────────────────
+      receiving: {
+        title: 'A. RECEIVING & DOCUMENTATION VERIFICATION',
+        section_type: 'pfn_checklist',
+        items: RECEIVING_ITEMS,
+      },
       visual: {
-        title: 'A. VISUAL INSPECTION',
-        section_type: 'pass_fail_checklist',
+        title: 'B. VISUAL INSPECTION',
+        section_type: 'pfn_checklist',
         items: [
-          { id: 1, description: 'Check for visible cracks, casting voids, or porosity' },
-          { id: 2, description: 'Inspect all machined surfaces for finish quality and damage' },
-          { id: 3, description: 'Verify proper placement of all casting identification marks' },
-          { id: 4, description: 'Ensure no rust, oxidation, or excessive contaminants' },
-          { id: 5, description: 'Confirm correct thread condition on all bolt holes' },
+          { id: 1, name: 'Casting Integrity',                 requirement: 'No visible cracks, voids, or porosity on any casting surface; combustion deck, port walls, and coolant jacket areas are free from casting defects.' },
+          { id: 2, name: 'Combustion Deck & Machined Surfaces', requirement: 'Deck face and all machined surfaces are clean and free from scratches, gouges, pitting, or handling damage; surface finish appears within specification.' },
+          { id: 3, name: 'Thread Condition',                  requirement: 'All bolt holes, port threads, and tapped features are clean and correctly formed; no cross-threading, stripping, or debris lodged in threaded areas.' },
+          { id: 4, name: 'Intake & Exhaust Ports',            requirement: 'Port walls are correctly cast and machined; free from casting fins, metal intrusions, burrs, or machining tears that would affect flow path or port geometry.' },
+          { id: 5, name: 'Coolant & Oil Galleries',           requirement: 'Coolant passages and oil galleries are clear and unobstructed; no visible debris, casting sand, swarf, or blockage at accessible openings.' },
+          { id: 6, name: 'Oil Drain Passages',                requirement: 'Oil drain passages are correctly sized and unobstructed; free from casting burrs, fins, or blockage that would restrict return flow.' },
+          { id: 7, name: 'Injector Bores & Sealing Surfaces', requirement: 'Injector bores are correctly machined; cups are properly seated and undamaged; o-rings are correctly installed and free from damage or distortion; sealing surfaces are free from machining defects.' },
+          { id: 8, name: 'Valvetrain Components',             requirement: 'Valve springs, seats, and retainers show no visible cracks, damage, or improper installation; valve stems are straight and correctly aligned; all keepers are fully engaged and correctly seated; stem seals are properly positioned and undamaged.' },
         ],
       },
-      port_galley: {
-        title: 'B. PORT & GALLEY INSPECTION',
-        section_type: 'pass_fail_checklist',
-        items: [
-          { id: 1, description: 'Inspect intake ports for proper casting and machining' },
-          { id: 2, description: 'Inspect exhaust ports for proper casting and machining' },
-          { id: 3, description: 'Check coolant galleries for cleanliness' },
-          { id: 4, description: 'Check oil galleries for cleanliness' },
-          { id: 5, description: 'Confirm oil drain passages are properly sized and free from flaws' },
-        ],
-      },
-      injector_bore: {
-        title: 'C. INJECTOR BORE INSPECTION',
-        section_type: 'pass_fail_checklist',
-        items: [
-          { id: 1, description: 'Verify that injector bores are properly machined' },
-          { id: 2, description: 'Ensure injector cups are installed correctly' },
-          { id: 3, description: 'Check for o-rings in injector bores and ensure proper fitment' },
-          { id: 4, description: 'Inspect sealing surfaces for machining issues' },
-        ],
-      },
-      valvetrain: {
-        title: 'D. VALVETRAIN INSPECTION',
-        section_type: 'pass_fail_checklist',
-        items: [
-          { id: 1, description: 'Inspect valve springs for visible damage, corrosion, or uneven seating' },
-          { id: 2, description: 'Check spring seats/retainers for cracks, wear, or improper installation' },
-          { id: 3, description: 'Verify valve stem seals are properly seated and free from visible damage' },
-          { id: 4, description: 'Inspect valve stems for proper alignment — check for bent or misaligned valves' },
-          { id: 5, description: 'Confirm all valve keepers are fully engaged and properly seated' },
-        ],
-      },
-      packaging: {
-        title: 'E. PACKAGING',
-        section_type: 'pass_fail_checklist',
-        items: [
-          { id: 1, description: 'Verify proper rust prevention measures applied' },
-          { id: 2, description: 'Ensure packaging prevents shipping damage' },
-          { id: 3, description: 'All required documentation included' },
-          { id: 4, description: 'Shipping labels correct and legible' },
-        ],
-      },
-      // ── Dimensional sections (optional — shown only when user clicks "Add Dimensional") ──
+      // ── Dimensional sections (optional — shown only when user adds dimensional) ──
       general_measurements: {
-        title: 'F. GENERAL MEASUREMENTS',
+        title: 'C. DIMENSIONAL INSPECTION',
         section_type: 'general_measurements',
         optional: true,
         items: [
@@ -442,19 +408,19 @@ const TEMPLATES = [
         ],
       },
       camshaft_bore: {
-        title: 'G. CAMSHAFT BORE DIMENSION',
+        title: 'C5. CAMSHAFT BORE DIMENSION',
         section_type: 'camshaft_bore',
         optional: true,
         bore_count: 7,
       },
       fire_ring_protrusion: {
-        title: 'H. FIRE RING PROTRUSION',
+        title: 'C6. FIRE RING PROTRUSION',
         section_type: 'fire_ring_protrusion',
         optional: true,
         cylinder_count: 6,
       },
       valve_recession: {
-        title: 'I. VALVE RECESSION',
+        title: 'C7. VALVE RECESSION',
         section_type: 'valve_recession',
         optional: true,
         cylinder_count: 6,
@@ -462,7 +428,7 @@ const TEMPLATES = [
         exhaust_count: 2,
       },
       vacuum_test: {
-        title: 'J. VACUUM TEST',
+        title: 'C8. VACUUM TEST',
         section_type: 'vacuum_test',
         optional: true,
         cylinder_count: 6,

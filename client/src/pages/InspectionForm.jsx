@@ -476,65 +476,57 @@ export default function InspectionForm() {
       <div className="sticky top-0 z-10 bg-white border-b border-gray-200 shadow-sm flex-shrink-0">
         <div className="px-4 sm:px-6 pt-2 sm:pt-3 flex items-center gap-2 flex-wrap">
           <span className="font-mono text-xs sm:text-sm font-bold text-pdi-navy">{template.form_no}</span>
-          <span className="text-gray-400 text-xs sm:text-sm">\u00b7</span>
+          <span className="text-gray-300 text-xs sm:text-sm select-none">/</span>
           <span className="text-xs sm:text-sm text-gray-700 truncate max-w-[50%] sm:max-w-none">{inspection.part_number || 'No part #'}</span>
           {inspection.po_number && (
             <>
-              <span className="text-gray-400 text-xs sm:text-sm hidden sm:inline">\u00b7</span>
+              <span className="text-gray-300 text-xs sm:text-sm hidden sm:inline select-none">/</span>
               <span className="text-xs sm:text-sm text-gray-500 hidden sm:inline">PO {inspection.po_number}</span>
             </>
           )}
           <StatusBadge status={inspection.status} />
-          <span className={`text-xs ml-auto ${saveState === 'saving' ? 'text-gray-400' : saveState === 'saved' ? 'text-green-600' : saveState === 'error' ? 'text-red-500' : 'text-transparent'}`}>
-            {saveState === 'saving' ? 'Saving\u2026' : saveState === 'saved' ? '\u2713 Saved' : saveState === 'error' ? 'Save failed' : '\u00b7'}
+          <span className={`text-xs ml-auto ${saveState === 'saving' ? 'text-gray-400' : saveState === 'saved' ? 'text-green-600' : saveState === 'error' ? 'text-red-500' : 'invisible'}`}>
+            {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? '✓ Saved' : saveState === 'error' ? 'Save failed' : ''}
           </span>
         </div>
-        <div className="px-4 sm:px-6 py-2 sm:py-3 flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
+        <div className="px-4 sm:px-6 py-1.5 flex items-center justify-end gap-0.5 border-t border-gray-100">
           <button
             onClick={handleDownloadPdf}
             disabled={pdfLoading}
             title="Print / PDF"
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 active:bg-purple-800 disabled:opacity-50 flex-shrink-0 min-h-[40px]"
+            className="p-2 rounded text-gray-500 hover:bg-gray-100 hover:text-gray-800 disabled:opacity-40 transition-colors flex-shrink-0"
           >
-            {pdfLoading ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
-            <span className="hidden sm:inline">Print</span>
+            {pdfLoading ? <Loader2 size={16} className="animate-spin" /> : <Printer size={16} />}
           </button>
           <button
             onClick={handleEmail}
             title="Email"
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 active:bg-indigo-700 flex-shrink-0 min-h-[40px]"
+            className="p-2 rounded text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors flex-shrink-0"
           >
-            <Mail size={14} />
-            <span className="hidden sm:inline">Email</span>
+            <Mail size={16} />
           </button>
           <button
             onClick={() => debouncedSave()}
             title="Save"
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light active:bg-pdi-navy flex-shrink-0 min-h-[40px]"
+            className="p-2 rounded text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors flex-shrink-0"
           >
-            <Save size={14} />
-            <span className="hidden sm:inline">Save</span>
+            <Save size={16} />
           </button>
           <button
             onClick={handleComplete}
             disabled={!disposition || complete.isPending}
-            title={complete.isPending ? 'Completing\u2026' : 'Complete'}
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 text-sm bg-pdi-teal text-white rounded-lg hover:bg-teal-700 active:bg-teal-800 disabled:opacity-40 flex-shrink-0 min-h-[40px]"
+            title={complete.isPending ? 'Completing…' : 'Complete Inspection'}
+            className="p-2 rounded text-pdi-teal hover:bg-teal-50 hover:text-teal-700 disabled:opacity-40 transition-colors flex-shrink-0"
           >
-            <CheckSquare size={14} />
-            <span className="hidden sm:inline">{complete.isPending ? 'Completing…' : (
-              Object.values(effectiveSections).some(s => s.optional) && !dimensionalAdded
-                ? 'Complete (Visual Only)'
-                : 'Complete'
-            )}</span>
+            {complete.isPending ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
           </button>
+          <div className="w-px h-5 bg-gray-200 mx-1 flex-shrink-0" />
           <button
             onClick={() => navigate(returnTo)}
             title="Close"
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100 active:bg-gray-200 flex-shrink-0 min-h-[40px] ml-auto sm:ml-0"
+            className="p-2 rounded text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors flex-shrink-0"
           >
-            <X size={14} />
-            <span className="hidden sm:inline">Close</span>
+            <X size={16} />
           </button>
         </div>
       </div>
@@ -632,6 +624,20 @@ export default function InspectionForm() {
               </CollapsibleSection>
             )
           })}
+
+          {/* Add Dimensional Inspection button */}
+          {!dimensionalAdded && Object.values(effectiveSections).some(s => s.optional) && (
+            <div className="flex justify-center py-2">
+              <button
+                type="button"
+                onClick={handleAddDimensional}
+                className="flex items-center gap-2 px-5 py-2.5 text-sm border-2 border-dashed border-pdi-navy/40 text-pdi-navy rounded-lg hover:border-pdi-navy hover:bg-pdi-frost transition-colors font-medium"
+              >
+                <PlusCircle size={16} />
+                Add Dimensional Inspection
+              </button>
+            </div>
+          )}
 
           {/* Disposition + Complete */}
           {inspection.status === 'draft' && (
