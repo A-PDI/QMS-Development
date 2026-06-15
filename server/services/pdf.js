@@ -420,30 +420,51 @@ function renderItemImages(doc, itemId, sectionAtts) {
 }
 
 function renderPhotoGrid(doc, atts) {
-  const maxW = 180, maxH = 135, gap = 10;
-  let xp      = M;
-  let rowBaseY = null;
+  const COLS = 3;
+  const gap  = 8;                                          // pts between columns
+  const imgW = Math.floor((PW - (COLS - 1) * gap) / COLS); // ≈172 pt (≈2.39")
+  const imgH = Math.round(imgW * (3.25 / 2.45));           // ≈228 pt (≈3.17")
+
+  let col      = 0;
+  let rowBaseY = doc.y;
+  let hasImage = false;
 
   for (const att of atts) {
     if (!att.file_path || !fs.existsSync(att.file_path)) continue;
+    hasImage = true;
 
-    // Start a new row if this image won't fit horizontally
-    if (xp + maxW > M + PW) {
-      doc.y = rowBaseY + maxH + gap;
-      xp    = M;
+    if (col === 0) {
+      ensureSpace(doc, imgH + gap + 4);
+      rowBaseY = doc.y;
     }
-    ensureSpace(doc, maxH + 4);
-    if (rowBaseY === null || xp === M) rowBaseY = doc.y;
 
+    const xp = M + col * (imgW + gap);
+
+    // Clip to cell bounds so images never bleed into adjacent cells or rows
+    doc.save();
+    doc.rect(xp, rowBaseY, imgW, imgH).clip();
     try {
-      doc.image(att.file_path, xp, rowBaseY, { fit: [maxW, maxH] });
+      doc.image(att.file_path, xp, rowBaseY, { cover: [imgW, imgH], align: 'center', valign: 'center' });
     } catch (err) {
       console.error(`[PDF] Failed to embed attachment ${att.file_name}:`, err.message);
     }
-    xp += maxW + gap;
+    doc.restore();
+
+    // Light border around each cell
+    doc.rect(xp, rowBaseY, imgW, imgH).strokeColor(BORDER).lineWidth(0.5).stroke();
+
+    col++;
+    if (col >= COLS) {
+      col      = 0;
+      doc.y    = rowBaseY + imgH + gap;
+      rowBaseY = doc.y;
+    }
   }
-  // Advance cursor past the last row of images
-  if (rowBaseY !== null) doc.y = rowBaseY + maxH + gap + 4;
+
+  // Advance cursor past the last (possibly partial) row
+  if (hasImage) {
+    doc.y = rowBaseY + imgH + gap + 4;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
