@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Printer, Search, Save, X, ChevronDown, ChevronUp, Users, FileImage, Download, AlertTriangle, Loader2, ClipboardCheck, UserCheck, Mail } from 'lucide-react'
+import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Printer, Search, Save, X, ChevronDown, ChevronUp, Users, FileImage, Download, AlertTriangle, Loader2, ClipboardCheck, UserCheck, Mail, Upload, FileSpreadsheet, DownloadCloud } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '../lib/api'
 import { useInspections, useDeleteInspection, useCreateInspection, useAssignInspection } from '../hooks/useInspections'
-import { usePartSpecs, useAllPartSpecs, useCreatePartSpec, useUpdatePartSpec, useDeletePartSpec } from '../hooks/usePartSpecs'
+import { usePartSpecs, useAllPartSpecs, useCreatePartSpec, useUpdatePartSpec, useDeletePartSpec, useImportPartSpecs, useImportPartsFromInspections } from '../hooks/usePartSpecs'
 import { useDrawings, useUploadDrawing, useSetCurrentDrawing, useDeleteDrawing } from '../hooks/useDrawings'
 import { useToast } from '../hooks/useToast'
 import { getUser } from '../lib/auth'
@@ -469,12 +469,51 @@ function PartNumbersTab({ showToast }) {
   const createSpec = useCreatePartSpec()
   const updateSpec = useUpdatePartSpec()
   const deleteSpec = useDeletePartSpec()
+  const importSpecs = useImportPartSpecs()
+  const importFromInspections = useImportPartsFromInspections()
 
   const [search, setSearch] = useState('')
   const [editingId, setEditingId] = useState(null)   // spec id, or 'new'
   const [form, setForm] = useState(BLANK_PART)
   const [confirmDeleteId, setConfirmDeleteId] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [importResult, setImportResult] = useState(null)
+  const [confirmSeed, setConfirmSeed] = useState(false)
+  const fileInputRef = useRef(null)
+
+  function summarise(r) {
+    const parts = []
+    if (r.created) parts.push(`${r.created} added`)
+    if (r.updated) parts.push(`${r.updated} updated`)
+    if (r.skipped) parts.push(`${r.skipped} skipped`)
+    return parts.length ? parts.join(', ') : 'No rows processed'
+  }
+
+  async function handleFilePicked(e) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow re-selecting the same file
+    if (!file) return
+    setImportResult(null)
+    try {
+      const r = await importSpecs.mutateAsync(file)
+      setImportResult(r)
+      showToast(`Import complete — ${summarise(r)}`, r.skipped ? 'info' : 'success')
+    } catch (err) {
+      showToast(err?.response?.data?.error || 'Import failed', 'error')
+    }
+  }
+
+  async function handleSeedFromInspections() {
+    setConfirmSeed(false)
+    setImportResult(null)
+    try {
+      const r = await importFromInspections.mutateAsync()
+      setImportResult(r)
+      showToast(`Imported from inspections — ${summarise(r)}`, 'success')
+    } catch (err) {
+      showToast(err?.response?.data?.error || 'Import failed', 'error')
+    }
+  }
 
   const q = search.trim().toLowerCase()
   const filtered = specs
@@ -563,6 +602,68 @@ function PartNumbersTab({ showToast }) {
           <Plus size={15} /> Add Part Number
         </button>
       </div>
+
+      {/* Bulk import controls */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 bg-pdi-frost/40 border border-pdi-navy/10 rounded-lg px-3 py-2.5">
+        <div className="flex items-center gap-1.5 text-xs text-gray-600 flex-1 min-w-0">
+          <FileSpreadsheet size={15} className="text-pdi-navy/60 flex-shrink-0" />
+          <span className="truncate">
+            Bulk import from Excel/CSV with columns <b>Part Number</b>, <b>Description</b>, <b>Product Type</b>.
+          </span>
+        </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".xlsx,.xls,.csv"
+          onChange={handleFilePicked}
+          className="hidden"
+        />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={templates.length === 0 || importSpecs.isLoading}
+            className="flex items-center justify-center gap-1.5 px-3 py-2 text-sm border border-pdi-navy/30 text-pdi-navy rounded-lg hover:bg-white disabled:opacity-50 min-h-[40px]"
+          >
+            {importSpecs.isLoading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+            {importSpecs.isLoading ? 'Importing…' : 'Upload Excel'}
+          </button>
+          <button
+            onClick={() => setConfirmSeed(true)}
+            disabled={importFromInspections.isLoading}
+            title="Add part numbers found on existing inspections to this list"
+            className="flex items-center justify-center gap-1.5 px-3 py-2 text-sm border border-pdi-navy/30 text-pdi-navy rounded-lg hover:bg-white disabled:opacity-50 min-h-[40px]"
+          >
+            {importFromInspections.isLoading ? <Loader2 size={14} className="animate-spin" /> : <DownloadCloud size={14} />}
+            Import from inspections
+          </button>
+        </div>
+      </div>
+
+      {confirmSeed && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5">
+          <span className="text-xs text-amber-800">
+            Add every distinct part number found on existing inspection records into this catalogue?
+          </span>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setConfirmSeed(false)} className="px-3 py-1.5 text-xs border border-gray-200 rounded-lg hover:bg-white min-h-[34px]">Cancel</button>
+            <button onClick={handleSeedFromInspections} className="px-3 py-1.5 text-xs bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[34px]">Yes, import</button>
+          </div>
+        </div>
+      )}
+
+      {importResult && (
+        <div className="bg-white border border-gray-200 rounded-lg px-3 py-2.5 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-gray-700">Last import: {summarise(importResult)}</span>
+            <button onClick={() => setImportResult(null)} className="text-gray-400 hover:text-gray-600"><X size={14} /></button>
+          </div>
+          {Array.isArray(importResult.errors) && importResult.errors.length > 0 && (
+            <ul className="mt-1.5 space-y-0.5 text-amber-700 max-h-32 overflow-y-auto">
+              {importResult.errors.map((e, i) => <li key={i}>• {e}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
 
       {templates.length === 0 && (
         <p className="text-xs text-amber-600">No inspection forms exist yet — create a form first so parts can be assigned a product type.</p>
