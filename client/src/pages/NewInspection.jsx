@@ -7,11 +7,11 @@ import { getUser } from '../lib/auth'
 import { X, Wrench } from 'lucide-react'
 import PartNumberCombobox from '../components/PartNumberCombobox'
 
+// Part Number, Part Description and Part Type are rendered first (in that
+// order) as a dedicated lookup block. The remaining header fields follow.
 const FIELD_CONFIG = [
   { key: 'po_number',      label: 'PO Number',         required: true,  type: 'text' },
   { key: 'lot_serial_no',  label: 'Lot / Serial No.',  required: false, type: 'text' },
-  { key: 'part_number',    label: 'Part Number',        required: true,  type: 'text' },
-  { key: 'description',    label: 'Part Description',   required: false, type: 'text', wide: true },
   { key: 'date_received',  label: 'Date Received',      required: true,  type: 'date' },
   { key: 'inspector_name', label: 'Inspector Name',     required: true,  type: 'text' },
 ]
@@ -32,6 +32,8 @@ export default function NewInspection() {
   const [templateId, setTemplateId] = useState('')
   const [form, setForm] = useState({ inspector_name: currentUser?.name || '' })
   const [submitting, setSubmitting] = useState(false)
+  // Tracks which fields were auto-filled from a known part number (for hints).
+  const [autoFilled, setAutoFilled] = useState({ description: false, template: false })
 
   // Close on Escape key
   useEffect(() => {
@@ -43,17 +45,27 @@ export default function NewInspection() {
   }, [navigate])
 
   // When a known part number is chosen from the combobox, auto-fill the
-  // description and (if the user hasn't already picked one) pre-select the
-  // matching Part Type template.
+  // Part Description and the Part Type (product type) from the catalogue.
   function handlePartSelect(rec) {
+    const filledDesc = !!rec.description
     setForm(f => ({
       ...f,
       part_number: rec.part_number,
       description: rec.description || f.description || '',
     }))
-    if (rec.template_id && !templateId) {
+    let filledTemplate = false
+    if (rec.template_id) {
       const match = templates.find(t => t.id === rec.template_id)
-      if (match) setTemplateId(rec.template_id)
+      if (match) { setTemplateId(rec.template_id); filledTemplate = true }
+    }
+    setAutoFilled({ description: filledDesc, template: filledTemplate })
+  }
+
+  // Typing in the part-number box invalidates prior auto-fill hints.
+  function handlePartNumberChange(val) {
+    setForm(f => ({ ...f, part_number: val }))
+    if (autoFilled.description || autoFilled.template) {
+      setAutoFilled({ description: false, template: false })
     }
   }
 
@@ -103,18 +115,53 @@ export default function NewInspection() {
         {/* Form body */}
         <form onSubmit={handleCreate} className="px-4 sm:px-6 py-4 sm:py-5 space-y-4">
 
-          {/* Part Type dropdown */}
+          {/* 1) Part Number — primary field, drives auto-fill */}
           <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">
+            <label htmlFor="field-part_number" className="block text-xs font-semibold text-gray-700 mb-1">
+              Part Number <span className="text-red-400">*</span>
+            </label>
+            <PartNumberCombobox
+              id="field-part_number"
+              required
+              value={form.part_number || ''}
+              onChange={handlePartNumberChange}
+              onSelect={handlePartSelect}
+            />
+          </div>
+
+          {/* 2) Part Description — auto-filled from a known part number */}
+          <div>
+            <label htmlFor="field-description" className="block text-xs font-semibold text-gray-700 mb-1">
+              Part Description
+              {autoFilled.description && (
+                <span className="ml-1.5 text-[10px] font-medium text-pdi-navy">· auto-filled</span>
+              )}
+            </label>
+            <input
+              id="field-description"
+              type="text"
+              value={form.description || ''}
+              onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pdi-navy min-h-[40px]"
+            />
+          </div>
+
+          {/* 3) Part Type — auto-filled when the part number is in the catalogue */}
+          <div>
+            <label htmlFor="field-part_type" className="block text-xs font-semibold text-gray-700 mb-1">
               Part Type <span className="text-red-400">*</span>
+              {autoFilled.template && (
+                <span className="ml-1.5 text-[10px] font-medium text-pdi-navy">· auto-filled</span>
+              )}
             </label>
             {isLoading ? (
               <div className="h-10 bg-gray-100 rounded-lg animate-pulse" />
             ) : (
               <select
+                id="field-part_type"
                 required
                 value={templateId}
-                onChange={e => setTemplateId(e.target.value)}
+                onChange={e => { setTemplateId(e.target.value); setAutoFilled(a => ({ ...a, template: false })) }}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pdi-navy bg-white min-h-[40px]"
               >
                 <option value="">— Select inspection form —</option>
@@ -142,7 +189,7 @@ export default function NewInspection() {
             </div>
           )}
 
-          {/* Other header fields — single column on mobile, two columns on sm+ */}
+          {/* Remaining header fields — single column on mobile, two columns on sm+ */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {FIELD_CONFIG.map(({ key, label, required, type, wide }) => (
               <div key={key} className={wide ? 'sm:col-span-2' : ''}>
@@ -150,25 +197,14 @@ export default function NewInspection() {
                   {label}
                   {required && <span className="text-red-400 ml-0.5">*</span>}
                 </label>
-                {key === 'part_number' ? (
-                  <PartNumberCombobox
-                    id={`field-${key}`}
-                    required={required}
-                    value={form.part_number || ''}
-                    templateId={templateId || undefined}
-                    onChange={val => setForm(f => ({ ...f, part_number: val }))}
-                    onSelect={handlePartSelect}
-                  />
-                ) : (
-                  <input
-                    id={`field-${key}`}
-                    type={type}
-                    required={required}
-                    value={form[key] || ''}
-                    onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pdi-navy min-h-[40px]"
-                  />
-                )}
+                <input
+                  id={`field-${key}`}
+                  type={type}
+                  required={required}
+                  value={form[key] || ''}
+                  onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pdi-navy min-h-[40px]"
+                />
               </div>
             ))}
           </div>

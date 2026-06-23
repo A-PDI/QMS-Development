@@ -16,6 +16,18 @@ export function usePartSpecs(filters = {}) {
   })
 }
 
+// Fetch the full flat catalogue of part specs (all templates). Used by the
+// Admin "Part Numbers" tab to manage every part in one list.
+export function useAllPartSpecs() {
+  return useQuery({
+    queryKey: ['part-specs', 'all'],
+    queryFn: async () => {
+      const { data } = await api.get('/part-specs')
+      return data.specs || []
+    },
+  })
+}
+
 // Typeahead lookup for known part numbers (catalogue + inspection history).
 // Returns { results: [{ part_number, description, template_id, form_no,
 // template_title, component_type, source }] }.

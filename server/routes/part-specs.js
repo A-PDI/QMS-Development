@@ -111,7 +111,12 @@ router.post('/', (req, res, next) => {
     const spec = db.get('SELECT * FROM part_specs WHERE id = ?', [id]);
     spec.spec_data = JSON.parse(spec.spec_data || '{}');
     res.status(201).json({ spec });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (/UNIQUE constraint/i.test(err?.message || '')) {
+      return next(new AppError('That part number already exists for this product type', 409));
+    }
+    next(err);
+  }
 });
 
 // PATCH /api/part-specs/:id
@@ -127,13 +132,24 @@ router.patch('/:id', (req, res, next) => {
     if (req.body.part_number !== undefined) { updates.push('part_number = ?'); values.push(req.body.part_number); }
     if (req.body.description !== undefined) { updates.push('description = ?'); values.push(req.body.description); }
     if (req.body.spec_data !== undefined) { updates.push('spec_data = ?'); values.push(JSON.stringify(req.body.spec_data)); }
+    if (req.body.template_id !== undefined) {
+      // Allow re-assigning the product type (template) of an existing part.
+      const tmpl = db.get('SELECT id FROM inspection_templates WHERE id = ?', [req.body.template_id]);
+      if (!tmpl) return next(new AppError('Template not found', 404));
+      updates.push('template_id = ?'); values.push(req.body.template_id);
+    }
     if (updates.length === 0) return res.json({ spec: existing });
     updates.push('updated_at = ?'); values.push(now); values.push(req.params.id);
     db.run(`UPDATE part_specs SET ${updates.join(', ')} WHERE id = ?`, values);
     const spec = db.get('SELECT * FROM part_specs WHERE id = ?', [req.params.id]);
     spec.spec_data = JSON.parse(spec.spec_data || '{}');
     res.json({ spec });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (/UNIQUE constraint/i.test(err?.message || '')) {
+      return next(new AppError('That part number already exists for this product type', 409));
+    }
+    next(err);
+  }
 });
 
 // DELETE /api/part-specs/:id
