@@ -4,7 +4,7 @@ import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Printer, Se
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '../lib/api'
 import { useInspections, useDeleteInspection, useCreateInspection, useAssignInspection } from '../hooks/useInspections'
-import { usePartSpecs, useCreatePartSpec, useUpdatePartSpec, useDeletePartSpec } from '../hooks/usePartSpecs'
+import { usePartSpecs, useAllPartSpecs, useCreatePartSpec, useUpdatePartSpec, useDeletePartSpec } from '../hooks/usePartSpecs'
 import { useDrawings, useUploadDrawing, useSetCurrentDrawing, useDeleteDrawing } from '../hooks/useDrawings'
 import { useToast } from '../hooks/useToast'
 import { getUser } from '../lib/auth'
@@ -15,7 +15,8 @@ import StatusBadge from '../components/StatusBadge'
 
 const TABS = [
   { id: 'forms',    label: 'Inspection Forms', shortLabel: 'Forms',    icon: FileText },
-  { id: 'specs',    label: 'Part Specifications', shortLabel: 'Specs',  icon: Package },
+  { id: 'parts',    label: 'Part Numbers',       shortLabel: 'Parts',   icon: Package },
+  { id: 'specs',    label: 'Part Specifications', shortLabel: 'Specs',  icon: Database },
   { id: 'users',    label: 'User Management',    shortLabel: 'Users',   icon: Users },
   { id: 'drawings', label: 'Engineering Drawings', shortLabel: 'Drawings', icon: FileImage },
   { id: 'assign',   label: 'Assignments',         shortLabel: 'Assign',  icon: ClipboardCheck },
@@ -441,6 +442,296 @@ function InspectionFormsTab({ showToast }) {
             </button>
           ))}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Part Numbers Tab ──────────────────────────────────────────────────────────
+// Flat, fully-editable catalogue of every part number across all product types.
+// Three columns: Part Number, Description, Product Type (the inspection
+// template / component). Admins can add, edit, and delete rows.
+
+function productTypeLabel(template) {
+  if (!template) return '—'
+  const compLabel = COMPONENT_TYPE_LABELS[template.component_type] || template.component_type || ''
+  return compLabel ? `${compLabel} (${template.form_no})` : template.form_no
+}
+
+const BLANK_PART = { part_number: '', description: '', template_id: '' }
+
+function PartNumbersTab({ showToast }) {
+  const { data: templatesData } = useTemplates()
+  const templates = templatesData || []
+  const templateById = Object.fromEntries(templates.map(t => [t.id, t]))
+
+  const { data: specs = [], isLoading } = useAllPartSpecs()
+  const createSpec = useCreatePartSpec()
+  const updateSpec = useUpdatePartSpec()
+  const deleteSpec = useDeletePartSpec()
+
+  const [search, setSearch] = useState('')
+  const [editingId, setEditingId] = useState(null)   // spec id, or 'new'
+  const [form, setForm] = useState(BLANK_PART)
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  const [saving, setSaving] = useState(false)
+
+  const q = search.trim().toLowerCase()
+  const filtered = specs
+    .filter(s => {
+      if (!q) return true
+      const t = templateById[s.template_id]
+      return (
+        (s.part_number || '').toLowerCase().includes(q) ||
+        (s.description || '').toLowerCase().includes(q) ||
+        productTypeLabel(t).toLowerCase().includes(q)
+      )
+    })
+    .sort((a, b) => (a.part_number || '').localeCompare(b.part_number || ''))
+
+  function startCreate() {
+    setEditingId('new')
+    setForm({ ...BLANK_PART, template_id: templates[0]?.id || '' })
+  }
+  function startEdit(spec) {
+    setEditingId(spec.id)
+    setForm({
+      part_number: spec.part_number || '',
+      description: spec.description || '',
+      template_id: spec.template_id || '',
+    })
+  }
+  function cancelEdit() { setEditingId(null); setForm(BLANK_PART) }
+
+  async function handleSave() {
+    if (!form.part_number.trim()) { showToast('Part number is required', 'error'); return }
+    if (!form.template_id) { showToast('Product type is required', 'error'); return }
+    setSaving(true)
+    try {
+      if (editingId === 'new') {
+        await createSpec.mutateAsync({
+          template_id: form.template_id,
+          part_number: form.part_number.trim(),
+          description: form.description.trim(),
+        })
+        showToast('Part number added', 'success')
+      } else {
+        await updateSpec.mutateAsync({
+          id: editingId,
+          part_number: form.part_number.trim(),
+          description: form.description.trim(),
+          template_id: form.template_id,
+        })
+        showToast('Part number updated', 'success')
+      }
+      cancelEdit()
+    } catch (err) {
+      showToast(err?.response?.data?.error || 'Save failed', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleDelete(id) {
+    try {
+      await deleteSpec.mutateAsync(id)
+      showToast('Part number deleted', 'success')
+      setConfirmDeleteId(null)
+    } catch { showToast('Delete failed', 'error') }
+  }
+
+  const showEditorRow = editingId === 'new'
+
+  return (
+    <div className="space-y-3 sm:space-y-4">
+      {/* Toolbar */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+        <div className="relative flex-1 sm:max-w-md">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search part #, description, product type…"
+            className="w-full border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
+          />
+        </div>
+        <button
+          onClick={startCreate}
+          disabled={templates.length === 0}
+          className="flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px]"
+        >
+          <Plus size={15} /> Add Part Number
+        </button>
+      </div>
+
+      {templates.length === 0 && (
+        <p className="text-xs text-amber-600">No inspection forms exist yet — create a form first so parts can be assigned a product type.</p>
+      )}
+
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        {isLoading ? (
+          <div className="text-center text-gray-400 py-10 text-sm">Loading…</div>
+        ) : (
+          <>
+            {/* Desktop table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    {['Part Number', 'Description', 'Product Type', ''].map(h => (
+                      <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {showEditorRow && (
+                    <PartEditorRow
+                      form={form} setForm={setForm} templates={templates}
+                      onSave={handleSave} onCancel={cancelEdit} saving={saving}
+                    />
+                  )}
+                  {filtered.length === 0 && !showEditorRow ? (
+                    <tr><td colSpan={4} className="text-center text-gray-400 py-10 text-sm">
+                      {q ? 'No parts match your search' : 'No part numbers yet — click “Add Part Number”.'}
+                    </td></tr>
+                  ) : filtered.map(spec => (
+                    editingId === spec.id ? (
+                      <PartEditorRow
+                        key={spec.id}
+                        form={form} setForm={setForm} templates={templates}
+                        onSave={handleSave} onCancel={cancelEdit} saving={saving}
+                      />
+                    ) : (
+                      <tr key={spec.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 font-mono text-sm font-semibold text-pdi-navy">{spec.part_number}</td>
+                        <td className="px-4 py-3 text-sm text-gray-600">{spec.description || '—'}</td>
+                        <td className="px-4 py-3 text-sm text-gray-600">{productTypeLabel(templateById[spec.template_id])}</td>
+                        <td className="px-4 py-3">
+                          {confirmDeleteId === spec.id ? (
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500">Delete?</span>
+                              <button onClick={() => handleDelete(spec.id)} className="text-xs text-red-600 font-semibold hover:underline">Yes</button>
+                              <button onClick={() => setConfirmDeleteId(null)} className="text-xs text-gray-500 hover:underline">No</button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-3">
+                              <button onClick={() => startEdit(spec)} className="text-xs text-pdi-navy hover:underline flex items-center gap-1"><Edit2 size={12} /> Edit</button>
+                              <button onClick={() => setConfirmDeleteId(spec.id)} className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1"><Trash2 size={12} /> Delete</button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile card list */}
+            <div className="md:hidden divide-y divide-gray-100">
+              {showEditorRow && (
+                <PartEditorCard form={form} setForm={setForm} templates={templates} onSave={handleSave} onCancel={cancelEdit} saving={saving} />
+              )}
+              {filtered.length === 0 && !showEditorRow ? (
+                <div className="text-center text-gray-400 py-10 px-4 text-sm">
+                  {q ? 'No parts match your search' : 'No part numbers yet.'}
+                </div>
+              ) : filtered.map(spec => (
+                editingId === spec.id ? (
+                  <PartEditorCard key={spec.id} form={form} setForm={setForm} templates={templates} onSave={handleSave} onCancel={cancelEdit} saving={saving} />
+                ) : (
+                  <div key={spec.id} className="px-3 py-3">
+                    <div className="font-mono text-sm font-semibold text-pdi-navy break-words">{spec.part_number}</div>
+                    <div className="text-xs text-gray-600 mt-0.5 break-words">{spec.description || '—'}</div>
+                    <div className="text-xs text-gray-500 mt-1">{productTypeLabel(templateById[spec.template_id])}</div>
+                    <div className="flex items-center gap-4 mt-2">
+                      <button onClick={() => startEdit(spec)} className="text-sm text-pdi-navy hover:underline flex items-center gap-1 min-h-[36px]"><Edit2 size={13} /> Edit</button>
+                      {confirmDeleteId === spec.id ? (
+                        <span className="flex items-center gap-2 text-sm">
+                          <button onClick={() => handleDelete(spec.id)} className="text-red-600 font-semibold">Confirm delete</button>
+                          <button onClick={() => setConfirmDeleteId(null)} className="text-gray-500">Cancel</button>
+                        </span>
+                      ) : (
+                        <button onClick={() => setConfirmDeleteId(spec.id)} className="text-sm text-red-500 hover:text-red-600 flex items-center gap-1 min-h-[36px]"><Trash2 size={13} /> Delete</button>
+                      )}
+                    </div>
+                  </div>
+                )
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Inline editor row (desktop) for adding/editing a part number.
+function PartEditorRow({ form, setForm, templates, onSave, onCancel, saving }) {
+  return (
+    <tr className="bg-pdi-frost/40">
+      <td className="px-4 py-2">
+        <input
+          autoFocus
+          value={form.part_number}
+          onChange={e => setForm(f => ({ ...f, part_number: e.target.value }))}
+          placeholder="Part number *"
+          className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+        />
+      </td>
+      <td className="px-4 py-2">
+        <input
+          value={form.description}
+          onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+          placeholder="Description"
+          className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+        />
+      </td>
+      <td className="px-4 py-2">
+        <select
+          value={form.template_id}
+          onChange={e => setForm(f => ({ ...f, template_id: e.target.value }))}
+          className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+        >
+          <option value="">— Select product type * —</option>
+          {templates.map(t => <option key={t.id} value={t.id}>{productTypeLabel(t)}</option>)}
+        </select>
+      </td>
+      <td className="px-4 py-2">
+        <div className="flex items-center gap-2">
+          <button onClick={onSave} disabled={saving} className="flex items-center gap-1 px-2.5 py-1.5 text-xs bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50"><Save size={12} /> {saving ? 'Saving…' : 'Save'}</button>
+          <button onClick={onCancel} className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-700"><X size={14} /></button>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+// Inline editor card (mobile).
+function PartEditorCard({ form, setForm, templates, onSave, onCancel, saving }) {
+  return (
+    <div className="px-3 py-3 bg-pdi-frost/40 space-y-2">
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">Part Number <span className="text-red-500">*</span></label>
+        <input autoFocus value={form.part_number} onChange={e => setForm(f => ({ ...f, part_number: e.target.value }))}
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">Description</label>
+        <input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">Product Type <span className="text-red-500">*</span></label>
+        <select value={form.template_id} onChange={e => setForm(f => ({ ...f, template_id: e.target.value }))}
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]">
+          <option value="">— Select product type —</option>
+          {templates.map(t => <option key={t.id} value={t.id}>{productTypeLabel(t)}</option>)}
+        </select>
+      </div>
+      <div className="flex justify-end gap-2 pt-1">
+        <button onClick={onCancel} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
+        <button onClick={onSave} disabled={saving} className="flex items-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px]"><Save size={14} /> {saving ? 'Saving…' : 'Save'}</button>
       </div>
     </div>
   )
@@ -1312,6 +1603,7 @@ export default function Admin() {
 
   const tabContent = {
     forms:    <InspectionFormsTab showToast={showToast} />,
+    parts:    <PartNumbersTab showToast={showToast} />,
     specs:    <PartSpecsTab showToast={showToast} />,
     users:    <UsersTab showToast={showToast} />,
     drawings: <DrawingsTab showToast={showToast} />,
