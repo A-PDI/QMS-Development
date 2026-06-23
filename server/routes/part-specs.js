@@ -5,6 +5,76 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db/adapter');
 const { AppError } = require('../middleware/error');
 
+// GET /api/part-specs/lookup?q=&template_id=&limit=
+// Returns a deduped list of known part numbers for autocomplete. Sources are
+// the curated part_specs catalogue (authoritative description + template) plus
+// part numbers already used on past inspections (so recently-entered parts are
+// suggested even before a spec row exists). part_specs wins on conflicts.
+router.get('/lookup', (req, res, next) => {
+  try {
+    const { q, template_id } = req.query;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 25, 100);
+    const like = q ? `%${String(q).trim()}%` : null;
+
+    // 1) Curated catalogue (authoritative)
+    let psSql = `SELECT ps.part_number, ps.description, ps.template_id,
+                        t.form_no, t.title AS template_title, t.component_type
+                 FROM part_specs ps
+                 JOIN inspection_templates t ON t.id = ps.template_id
+                 WHERE ps.part_number IS NOT NULL AND ps.part_number <> ''`;
+    const psParams = [];
+    if (template_id) { psSql += ' AND ps.template_id = ?'; psParams.push(template_id); }
+    if (like) { psSql += ' AND (ps.part_number LIKE ? OR ps.description LIKE ?)'; psParams.push(like, like); }
+    psSql += ' ORDER BY ps.part_number ASC';
+    const catalogue = db.all(psSql, psParams);
+
+    // 2) Distinct part numbers seen on inspections (most recent description wins)
+    let inSql = `SELECT i.part_number, i.description, i.template_id,
+                        t.form_no, t.title AS template_title, t.component_type,
+                        MAX(i.created_at) AS last_used
+                 FROM inspections i
+                 JOIN inspection_templates t ON t.id = i.template_id
+                 WHERE i.part_number IS NOT NULL AND i.part_number <> ''`;
+    const inParams = [];
+    if (template_id) { inSql += ' AND i.template_id = ?'; inParams.push(template_id); }
+    if (like) { inSql += ' AND (i.part_number LIKE ? OR i.description LIKE ?)'; inParams.push(like, like); }
+    inSql += ' GROUP BY i.part_number, i.template_id ORDER BY last_used DESC';
+    const history = db.all(inSql, inParams);
+
+    // Merge: keyed by part_number; catalogue entries are authoritative.
+    const byPart = new Map();
+    for (const row of catalogue) {
+      byPart.set(row.part_number, {
+        part_number: row.part_number,
+        description: row.description || '',
+        template_id: row.template_id,
+        form_no: row.form_no,
+        template_title: row.template_title,
+        component_type: row.component_type,
+        source: 'catalogue',
+      });
+    }
+    for (const row of history) {
+      if (byPart.has(row.part_number)) continue;
+      byPart.set(row.part_number, {
+        part_number: row.part_number,
+        description: row.description || '',
+        template_id: row.template_id,
+        form_no: row.form_no,
+        template_title: row.template_title,
+        component_type: row.component_type,
+        source: 'history',
+      });
+    }
+
+    const results = Array.from(byPart.values())
+      .sort((a, b) => a.part_number.localeCompare(b.part_number))
+      .slice(0, limit);
+
+    res.json({ results });
+  } catch (err) { next(err); }
+});
+
 // GET /api/part-specs?template_id=&part_number=
 router.get('/', (req, res, next) => {
   try {
