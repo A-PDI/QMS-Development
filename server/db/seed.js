@@ -441,10 +441,11 @@ const PDI_IQI_005_V2_SECTIONS = {
   },
   groove_specs: {
     title: 'C. DIMENSIONAL INSPECTION — Groove Specs',
-    section_type: 'dimensional',
+    section_type: 'groove_specs',
     optional: true,
+    cylinder_count: 6,
     items: [
-      { id: 1, measurement: 'Groove diameter', location: '', spec: '6.300" Groove OD for CAT, 5.990" Groove OD for Cummins' },
+      { id: 1, measurement: 'Groove Diameter', location: '', spec: '6.300" Groove OD for CAT, 5.990" Groove OD for Cummins' },
       { id: 2, measurement: 'Groove Depth',    location: '', spec: '.029-.031"' },
       { id: 3, measurement: 'Wire Protrusion', location: '', spec: '.008-.010"' },
     ],
@@ -458,7 +459,7 @@ const PDI_IQI_005_V2_SECTIONS = {
     exhaust_count: 2,
   },
   vacuum_test: {
-    title: 'C. DIMENSIONAL INSPECTION — Test Valves (Vacuum)',
+    title: 'C. DIMENSIONAL INSPECTION — Vacuum Test',
     section_type: 'vacuum_test',
     optional: true,
     cylinder_count: 6,

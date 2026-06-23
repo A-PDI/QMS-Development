@@ -47,7 +47,7 @@ export function initSectionData(templateSections) {
         data[key] = section.items.map(item => ({ id: item.id, pass: false, fail: false, notes: '' }))
         break
       case 'general_measurements':
-        data[key] = section.items.map(item => ({ id: item.id, specification: '', actual_value: '', notes: '' }))
+        data[key] = section.items.map(item => ({ id: item.id, specification: '', actual_value: '', notes: '', result: '' }))
         break
       case 'camshaft_bore':
         data[key] = { spec: '', bores: Array(section.bore_count).fill('') }
@@ -65,6 +65,16 @@ export function initSectionData(templateSections) {
         data[key] = {
           cylinders: Array(section.cylinder_count).fill(null).map(() => ({
             overall: '', int1: '', int2: '', exh1: '', exh2: ''
+          }))
+        }
+        break
+      case 'groove_specs':
+        data[key] = {
+          measurements: section.items.map(item => ({
+            id: item.id,
+            cylinders: Array(section.cylinder_count || 6).fill(''),
+            status: '',
+            notes: '',
           }))
         }
         break

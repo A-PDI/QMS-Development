@@ -71,7 +71,7 @@ export default function SectionDimensional({
               const needsNotes = isAccepted && !row.notes?.trim()
               const isEditing = editingId === item.id
               return (
-                <tr key={item.id} className={`border-b border-gray-100 hover:bg-gray-50 ${isFail ? 'bg-red-50' : isAccepted ? 'bg-amber-50' : ''}`}>
+                <tr key={item.id} className="border-b border-gray-100 hover:bg-gray-50">
                   <td className="px-3 py-2 text-gray-500">{item.id}</td>
                   <td className="px-3 py-2 font-medium text-gray-700 text-xs">
                     {isEditing ? (
@@ -177,7 +177,7 @@ export default function SectionDimensional({
           const isFail = row.status === 'F'
           const needsNotes = isAccepted && !row.notes?.trim()
           return (
-            <div key={item.id} className={`border rounded-lg p-3 ${isFail ? 'bg-red-50 border-red-200' : isAccepted ? 'bg-amber-50 border-amber-200' : 'bg-white border-gray-200'}`}>
+            <div key={item.id} className="border rounded-lg p-3 bg-white border-gray-200">
               <div className="flex items-baseline gap-1.5 mb-1">
                 <span className="font-mono text-xs font-bold text-pdi-navy">{item.id}.</span>
                 <span className="text-xs text-gray-700 font-medium">{item.measurement || item.location || `Item ${item.id}`}</span>

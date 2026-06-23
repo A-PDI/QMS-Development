@@ -52,10 +52,11 @@ const IQI_005_V2_SECTIONS = {
   },
   groove_specs: {
     title: 'C. DIMENSIONAL INSPECTION — Groove Specs',
-    section_type: 'dimensional',
+    section_type: 'groove_specs',
     optional: true,
+    cylinder_count: 6,
     items: [
-      { id: 1, measurement: 'Groove diameter', location: '', spec: '6.300" Groove OD for CAT, 5.990" Groove OD for Cummins' },
+      { id: 1, measurement: 'Groove Diameter', location: '', spec: '6.300" Groove OD for CAT, 5.990" Groove OD for Cummins' },
       { id: 2, measurement: 'Groove Depth',    location: '', spec: '.029-.031"' },
       { id: 3, measurement: 'Wire Protrusion', location: '', spec: '.008-.010"' },
     ],
@@ -69,7 +70,7 @@ const IQI_005_V2_SECTIONS = {
     exhaust_count: 2,
   },
   vacuum_test: {
-    title: 'C. DIMENSIONAL INSPECTION — Test Valves (Vacuum)',
+    title: 'C. DIMENSIONAL INSPECTION — Vacuum Test',
     section_type: 'vacuum_test',
     optional: true,
     cylinder_count: 6,
@@ -145,6 +146,79 @@ function applyMigrations(db) {
     );
     // Deactivate all other IQI-005 variants
     db.run("UPDATE inspection_templates SET active = 0 WHERE form_no = ? AND id != ?", [FORM_NO, revBId]);
+  });
+
+  // ── Migration: rename Vacuum Test section title ───────────────────────────
+  // The original Rev B insert used "C. DIMENSIONAL INSPECTION — Test Valves
+  // (Vacuum)". For databases that already have Rev B, patch the stored sections
+  // JSON so the section header reads "C. DIMENSIONAL INSPECTION — Vacuum Test".
+  once('iqi_005_vacuum_test_rename', () => {
+    const OLD_TITLE = 'C. DIMENSIONAL INSPECTION — Test Valves (Vacuum)';
+    const NEW_TITLE = 'C. DIMENSIONAL INSPECTION — Vacuum Test';
+    const rows = db.all(
+      "SELECT id, sections FROM inspection_templates WHERE sections LIKE ?",
+      [`%${OLD_TITLE}%`]
+    );
+    for (const row of rows) {
+      let sections;
+      try {
+        sections = JSON.parse(row.sections);
+      } catch {
+        continue;
+      }
+      let changed = false;
+      for (const key of Object.keys(sections)) {
+        if (sections[key] && sections[key].title === OLD_TITLE) {
+          sections[key].title = NEW_TITLE;
+          changed = true;
+        }
+      }
+      if (changed) {
+        db.run('UPDATE inspection_templates SET sections = ? WHERE id = ?', [
+          JSON.stringify(sections),
+          row.id,
+        ]);
+      }
+    }
+  });
+
+  // ── Migration: Groove Specs chart layout ──────────────────────────────────
+  // Originally the Groove Specs section reused the generic 'dimensional'
+  // renderer. It now has its own 'groove_specs' chart renderer (specs in the
+  // header, one 6-cylinder chart per measurement). Patch existing templates so
+  // the section_type and cylinder_count match the new component.
+  once('iqi_005_groove_specs_chart', () => {
+    const rows = db.all(
+      "SELECT id, sections FROM inspection_templates WHERE sections LIKE ?",
+      ['%Groove Specs%']
+    );
+    for (const row of rows) {
+      let sections;
+      try {
+        sections = JSON.parse(row.sections);
+      } catch {
+        continue;
+      }
+      let changed = false;
+      for (const key of Object.keys(sections)) {
+        const s = sections[key];
+        if (s && typeof s.title === 'string' && s.title.includes('Groove Specs')) {
+          if (s.section_type !== 'groove_specs') { s.section_type = 'groove_specs'; changed = true; }
+          if (!s.cylinder_count) { s.cylinder_count = 6; changed = true; }
+          if (Array.isArray(s.items)) {
+            for (const it of s.items) {
+              if (it.measurement === 'Groove diameter') { it.measurement = 'Groove Diameter'; changed = true; }
+            }
+          }
+        }
+      }
+      if (changed) {
+        db.run('UPDATE inspection_templates SET sections = ? WHERE id = ?', [
+          JSON.stringify(sections),
+          row.id,
+        ]);
+      }
+    }
   });
 }
 

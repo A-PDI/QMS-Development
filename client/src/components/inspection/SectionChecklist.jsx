@@ -50,11 +50,8 @@ export default function SectionChecklist({
   const showImages = !!sectionKey && (!!onUploadItem || readOnly)
   const showTools = !!adminItemTools
 
-  function rowBg(row) {
-    const r = normalizeRow(row)
-    if (r.result === 'F') return 'bg-red-50 border-red-200'
-    if (r.result === 'A') return 'bg-amber-50 border-amber-200'
-    if (r.result === 'P') return 'bg-green-50 border-green-200'
+  function rowBg() {
+    // Pass/Fail is signified by the check/X status control, not a row fill.
     return 'bg-white border-gray-200'
   }
 
@@ -86,7 +83,7 @@ export default function SectionChecklist({
               const needsNotes = (isFail || isAccepted) && !row.notes?.trim()
               const isEditing = editingId === item.id
               return (
-                <tr key={item.id} className={`border-b border-gray-100 hover:bg-gray-50 ${isFail ? 'bg-red-50' : isAccepted ? 'bg-amber-50' : row.result === 'P' ? 'bg-green-50' : ''}`}>
+                <tr key={item.id} className="border-b border-gray-100 hover:bg-gray-50">
                   <td className="px-3 py-2 text-gray-500 align-top pt-3">{item.id}</td>
                   <td className="px-3 py-2 text-gray-700 align-top pt-2">
                     {isEditing ? (
