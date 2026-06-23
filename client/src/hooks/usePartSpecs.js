@@ -70,6 +70,35 @@ export function useUpdatePartSpec() {
   })
 }
 
+// Bulk import part numbers from an Excel/CSV file (parsed server-side).
+// Returns { created, updated, skipped, errors }.
+export function useImportPartSpecs() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (file) => {
+      const fd = new FormData()
+      fd.append('file', file)
+      const { data } = await api.post('/part-specs/import', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['part-specs'] }),
+  })
+}
+
+// Seed the catalogue from part numbers already used on existing inspections.
+export function useImportPartsFromInspections() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.post('/part-specs/import-from-inspections')
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['part-specs'] }),
+  })
+}
+
 export function useDeletePartSpec() {
   const qc = useQueryClient()
   return useMutation({
