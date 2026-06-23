@@ -70,6 +70,8 @@ function generateInspectionPdf(inspection, template, attachments = []) {
             renderPassFail(doc, def, data, secAtts); break;
           case 'general_measurements':
             renderGeneralMeasurements(doc, def, data, secAtts); break;
+          case 'groove_specs':
+            renderGrooveSpecs(doc, def, data, secAtts); break;
           case 'camshaft_bore':
             renderCamshaftBore(doc, def, data, secAtts); break;
           case 'fire_ring_protrusion':
@@ -78,6 +80,8 @@ function generateInspectionPdf(inspection, template, attachments = []) {
             renderValveRecession(doc, def, data, secAtts); break;
           case 'vacuum_test':
             renderVacuumTest(doc, def, data, secAtts); break;
+          case 'groove_specs':
+            renderGrooveSpecs(doc, def, data, secAtts); break;
           default: break;
         }
         vspace(doc, 8);
@@ -168,6 +172,50 @@ function vspace(doc, pts) {
 /** If fewer than `needed` points remain on the page, start a new page. */
 function ensureSpace(doc, needed) {
   if (doc.y + needed > PH - FOOT) doc.addPage();
+}
+
+/**
+ * Normalise a status cell value to one of 'P' | 'F' | 'A' | '' so we can pick
+ * the right glyph (a status column may hold P/F/A, PASS/FAIL/ACCEPT/REJECT, or
+ * the lowercase pass/fail used by the vacuum-test section).
+ */
+function statusToGlyph(value) {
+  const sv = String(value == null ? '' : value).trim().toUpperCase();
+  if (['P', 'PASS'].includes(sv)) return 'P';
+  if (['F', 'FAIL', 'REJECT'].includes(sv)) return 'F';
+  if (['A', 'ACCEPT', 'ACCEPTED'].includes(sv)) return 'A';
+  return '';
+}
+
+/**
+ * Draw a Pass / Fail / Accepted indicator centred in a cell:
+ *   P → green check, F → red X, A → amber "A".
+ * Replaces the old full-row colour fill.
+ */
+function drawStatusGlyph(doc, glyph, cellX, cellY, cellW, cellH) {
+  const cx = cellX + cellW / 2;
+  const cy = cellY + cellH / 2;
+  if (glyph === 'P') {
+    // Check mark
+    const s = 5;
+    doc.save().strokeColor(GREEN).lineWidth(1.6).lineJoin('round').lineCap('round');
+    doc.moveTo(cx - s, cy)
+      .lineTo(cx - s * 0.25, cy + s * 0.85)
+      .lineTo(cx + s * 1.05, cy - s * 0.9)
+      .stroke();
+    doc.restore();
+  } else if (glyph === 'F') {
+    // X mark
+    const s = 4.2;
+    doc.save().strokeColor(RED).lineWidth(1.6).lineCap('round');
+    doc.moveTo(cx - s, cy - s).lineTo(cx + s, cy + s).stroke();
+    doc.moveTo(cx + s, cy - s).lineTo(cx - s, cy + s).stroke();
+    doc.restore();
+  } else if (glyph === 'A') {
+    doc.save().fontSize(9).font('Helvetica-Bold').fillColor(AMBER);
+    doc.text('A', cellX, cy - 5, { width: cellW, align: 'center', lineBreak: false });
+    doc.restore();
+  }
 }
 
 /**
@@ -324,15 +372,11 @@ function renderTable(doc, headerRow, dataRows, colWidths, opts = {}, pad = 5) {
   }
 
   function drawRow(y, row, rowH, isHeader, rowIndex) {
-    // Background
+    // Background — neutral zebra striping only (Pass/Fail is now shown by a
+    // glyph in the status cell, not by tinting the whole row).
     let bg = WHITE;
     if (isHeader) {
       bg = THBG;
-    } else if (statusColIdx >= 0) {
-      const sv = String(row[statusColIdx] == null ? '' : row[statusColIdx]).toUpperCase();
-      if      (['F', 'FAIL', 'REJECT'].includes(sv)) bg = '#FEE2E2';
-      else if (['P', 'PASS', 'ACCEPT'].includes(sv)) bg = '#DCFCE7';
-      else if (rowIndex % 2 === 1)                   bg = ROWALT;
     } else if (rowIndex % 2 === 1) {
       bg = ROWALT;
     }
@@ -346,6 +390,13 @@ function renderTable(doc, headerRow, dataRows, colWidths, opts = {}, pad = 5) {
     let xc = M;
     row.forEach((cell, ci) => {
       const cw = colWidths[ci] || 60;
+      // Status column on data rows → draw a check / X / A glyph instead of text
+      if (!isHeader && ci === statusColIdx) {
+        const glyph = statusToGlyph(cell);
+        if (glyph) drawStatusGlyph(doc, glyph, xc, y, cw, rowH);
+        xc += cw;
+        return;
+      }
       doc.fontSize(isHeader ? 7 : 8)
         .font(isHeader ? 'Helvetica-Bold' : 'Helvetica')
         .fillColor(isHeader ? DGRAY : BLACK);
@@ -582,21 +633,63 @@ function renderGeneralMeasurements(doc, section, data, secAtts = []) {
   const items   = section.items || [];
   const dataArr = Array.isArray(data) ? data : [];
 
-  const notesW = Math.max(40, PW - 22 - 128 - 128 - 128);
-  const header = ['#', 'Measurement', 'Specification', 'Actual Value', 'Notes'];
-  const cw     = [22, 128, 128, 128, notesW];
+  const notesW = Math.max(40, PW - 22 - 116 - 110 - 110 - 44);
+  const header = ['#', 'Measurement', 'Specification', 'Actual Value', 'Notes', 'Result'];
+  const cw     = [22, 116, 110, 110, notesW, 44];
   const rows   = items.map(item => {
     const d = dataArr.find(r => r.id === item.id) || {};
     return [String(item.id), item.measurement || '', d.specification || '',
-      d.actual_value || '', d.notes || ''];
+      d.actual_value || '', d.notes || '', d.result || ''];
   });
 
-  renderTable(doc, header, rows, cw, { sectionTitle: title });
+  renderTable(doc, header, rows, cw, { statusColIdx: 5, sectionTitle: title });
 
   const allImgsGm = secAtts.filter(a =>
     (a.mime_type || '').startsWith('image/') && a.file_path && fs.existsSync(a.file_path)
   );
   if (allImgsGm.length > 0) { vspace(doc, 4); renderPhotoGrid(doc, allImgsGm); }
+}
+
+function renderGrooveSpecs(doc, section, data, secAtts = []) {
+  const title = section.title || 'Groove Specs';
+  ensureSpace(doc, 60);
+  renderSectionTitle(doc, title);
+
+  data        = data || {};
+  const items = section.items || [];
+  const cc    = section.cylinder_count || 6;
+  const measurements = Array.isArray(data.measurements) ? data.measurements : [];
+
+  // One small chart per measurement: spec shown in the row label, a Cylinder
+  // 1..N header row, the recorded values, and a Result glyph column.
+  const labelW = 150;
+  const resW   = 44;
+  const cylW   = Math.floor((PW - labelW - resW) / cc);
+  // Absorb rounding into the label column so the widths still sum to PW.
+  const realLabelW = PW - resW - cylW * cc;
+  const cw = [realLabelW, ...Array(cc).fill(cylW), resW];
+
+  const header = ['Measurement',
+    ...Array.from({ length: cc }, (_, i) => `Cyl ${i + 1}`),
+    'Result'];
+
+  const rows = items.map(item => {
+    const m    = measurements.find(x => x.id === item.id) || {};
+    const cyls = Array.isArray(m.cylinders) ? m.cylinders : [];
+    const label = item.spec
+      ? `${item.measurement}\n${item.spec}`
+      : (item.measurement || '');
+    return [label,
+      ...Array.from({ length: cc }, (_, i) => cyls[i] || ''),
+      m.status || ''];
+  });
+
+  renderTable(doc, header, rows, cw, { statusColIdx: cw.length - 1, sectionTitle: title });
+
+  const imgs = secAtts.filter(a =>
+    (a.mime_type || '').startsWith('image/') && a.file_path && fs.existsSync(a.file_path)
+  );
+  if (imgs.length > 0) { vspace(doc, 4); renderPhotoGrid(doc, imgs); }
 }
 
 function renderCamshaftBore(doc, section, data, secAtts = []) {
@@ -648,16 +741,61 @@ function renderValveRecession(doc, section, data, secAtts = []) {
 
   data       = data || {};
   const cc   = section.cylinder_count || 6;
-  const cw   = [56, 119, 119, 119, 119]; // sum = 532
+  const cyls = Array.isArray(data.cylinders) ? data.cylinders : Array(cc).fill({});
+  const hasResult = cyls.some(c => c && String(c.result || '').trim() !== '');
 
-  const header   = ['Cyl', 'Int 1', 'Int 2', 'Exh 1', 'Exh 2'];
-  const cyls     = Array.isArray(data.cylinders) ? data.cylinders : Array(cc).fill({});
-  const dataRows = Array.from({ length: cc }, (_, i) => {
-    const c = cyls[i] || {};
-    return [`C${i + 1}`, c.int1 || '', c.int2 || '', c.exh1 || '', c.exh2 || ''];
+  let header, cw, dataRows, statusColIdx;
+  if (hasResult) {
+    header = ['Cyl', 'Int 1', 'Int 2', 'Exh 1', 'Exh 2', 'Result'];
+    cw     = [52, 100, 100, 100, 100, 80]; // sum = 532
+    statusColIdx = 5;
+    dataRows = Array.from({ length: cc }, (_, i) => {
+      const c = cyls[i] || {};
+      return [`C${i + 1}`, c.int1 || '', c.int2 || '', c.exh1 || '', c.exh2 || '', c.result || ''];
+    });
+  } else {
+    header = ['Cyl', 'Int 1', 'Int 2', 'Exh 1', 'Exh 2'];
+    cw     = [56, 119, 119, 119, 119]; // sum = 532
+    statusColIdx = -1;
+    dataRows = Array.from({ length: cc }, (_, i) => {
+      const c = cyls[i] || {};
+      return [`C${i + 1}`, c.int1 || '', c.int2 || '', c.exh1 || '', c.exh2 || ''];
+    });
+  }
+
+  renderTable(doc, header, dataRows, cw, { statusColIdx, sectionTitle: title });
+}
+
+function renderGrooveSpecs(doc, section, data, secAtts = []) {
+  const title = section.title || 'Groove Specs';
+  ensureSpace(doc, 80);
+  renderSectionTitle(doc, title);
+
+  data        = data || {};
+  const cc    = section.cylinder_count || 6;
+  const items = section.items || [];
+  const meas  = Array.isArray(data.measurements) ? data.measurements : [];
+
+  // Layout: a label/spec column + a status column + one column per cylinder.
+  const labelW  = 150;
+  const statusW = 40;
+  const cylW    = Math.floor((PW - labelW - statusW) / cc);
+  const cws     = [labelW, ...Array(cc).fill(cylW), statusW];
+
+  const header = ['Measurement / Spec', ...Array.from({ length: cc }, (_, i) => `Cyl ${i + 1}`), ''];
+  const rows   = items.map(item => {
+    const m = meas.find(r => r.id === item.id) || {};
+    const cyls = Array.isArray(m.cylinders) ? m.cylinders : [];
+    const label = item.spec ? `${item.measurement}\n${item.spec}` : (item.measurement || '');
+    return [label, ...Array.from({ length: cc }, (_, i) => cyls[i] || ''), m.status || ''];
   });
 
-  renderTable(doc, header, dataRows, cw, { sectionTitle: title });
+  renderTable(doc, header, rows, cws, { statusColIdx: cc + 1, sectionTitle: title });
+
+  const allImgs = secAtts.filter(a =>
+    (a.mime_type || '').startsWith('image/') && a.file_path && fs.existsSync(a.file_path)
+  );
+  if (allImgs.length > 0) { vspace(doc, 4); renderPhotoGrid(doc, allImgs); }
 }
 
 function renderVacuumTest(doc, section, data, secAtts = []) {
@@ -667,16 +805,34 @@ function renderVacuumTest(doc, section, data, secAtts = []) {
 
   data       = data || {};
   const cc   = section.cylinder_count || 6;
-  const cw   = [44, 98, 98, 98, 98, 96]; // sum = 532
+  const cyls = Array.isArray(data.cylinders) ? data.cylinders : Array(cc).fill({});
 
-  const header   = ['Cyl', 'Int 1', 'Int 2', 'Exh 1', 'Exh 2', 'Overall'];
-  const cyls     = Array.isArray(data.cylinders) ? data.cylinders : Array(cc).fill({});
-  const dataRows = Array.from({ length: cc }, (_, i) => {
+  // The Int/Exh sub-results only apply to a failing cylinder. If none of the
+  // cylinders have any sub-results recorded, omit those columns entirely so the
+  // report shows just Cylinder # and the Pass/Fail/Accepted result.
+  const SUBS = ['int1', 'int2', 'exh1', 'exh2'];
+  const hasSubs = Array.from({ length: cc }).some((_, i) => {
     const c = cyls[i] || {};
-    return [`C${i + 1}`, c.int1 || '', c.int2 || '', c.exh1 || '', c.exh2 || '', c.overall || ''];
+    return SUBS.some(f => String(c[f] || '').trim() !== '');
   });
 
-  renderTable(doc, header, dataRows, cw, { sectionTitle: title });
+  if (hasSubs) {
+    const cw     = [44, 98, 98, 98, 98, 96]; // sum = 532
+    const header = ['Cyl', 'Int 1', 'Int 2', 'Exh 1', 'Exh 2', 'Result'];
+    const rows   = Array.from({ length: cc }, (_, i) => {
+      const c = cyls[i] || {};
+      return [`C${i + 1}`, c.int1 || '', c.int2 || '', c.exh1 || '', c.exh2 || '', c.overall || ''];
+    });
+    renderTable(doc, header, rows, cw, { statusColIdx: 5, sectionTitle: title });
+  } else {
+    const cw     = [266, 266]; // sum = 532
+    const header = ['Cylinder', 'Result'];
+    const rows   = Array.from({ length: cc }, (_, i) => {
+      const c = cyls[i] || {};
+      return [`Cylinder ${i + 1}`, c.overall || ''];
+    });
+    renderTable(doc, header, rows, cw, { statusColIdx: 1, sectionTitle: title });
+  }
 }
 
 module.exports = { generateInspectionPdf };

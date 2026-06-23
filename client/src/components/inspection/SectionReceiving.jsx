@@ -40,9 +40,8 @@ export default function SectionReceiving({
   const showImages = !!sectionKey && (!!onUploadItem || readOnly)
   const showTools = !!adminItemTools
 
-  function rowClass(row) {
-    if (row.status === 'F') return 'bg-red-50 border-red-200'
-    if (row.status === 'A') return 'bg-amber-50 border-amber-200'
+  function rowClass() {
+    // Pass/Fail is signified by the check/X status control, not a row fill.
     return 'bg-white border-gray-200'
   }
 
@@ -75,7 +74,7 @@ export default function SectionReceiving({
               const needsImage = showImages && isAccepted && !attachments.some(a => a.section_key === sectionKey && String(a.item_id) === String(item.id))
               const isEditing = editingId === item.id
               return (
-                <tr key={item.id} className={`border-b hover:bg-gray-50 ${isFail ? 'bg-red-50' : isAccepted ? 'bg-amber-50' : ''}`}>
+                <tr key={item.id} className="border-b hover:bg-gray-50">
                   <td className="px-3 py-2 text-gray-500 align-top pt-3">{item.id}</td>
                   <td className="px-3 py-2 font-medium text-gray-700 align-top pt-2">
                     {isEditing ? (
