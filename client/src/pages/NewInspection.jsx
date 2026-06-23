@@ -5,6 +5,7 @@ import { useCreateInspection } from '../hooks/useInspections'
 import { useToast } from '../hooks/useToast'
 import { getUser } from '../lib/auth'
 import { X, Wrench } from 'lucide-react'
+import PartNumberCombobox from '../components/PartNumberCombobox'
 
 const FIELD_CONFIG = [
   { key: 'po_number',      label: 'PO Number',         required: true,  type: 'text' },
@@ -40,6 +41,21 @@ export default function NewInspection() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [navigate])
+
+  // When a known part number is chosen from the combobox, auto-fill the
+  // description and (if the user hasn't already picked one) pre-select the
+  // matching Part Type template.
+  function handlePartSelect(rec) {
+    setForm(f => ({
+      ...f,
+      part_number: rec.part_number,
+      description: rec.description || f.description || '',
+    }))
+    if (rec.template_id && !templateId) {
+      const match = templates.find(t => t.id === rec.template_id)
+      if (match) setTemplateId(rec.template_id)
+    }
+  }
 
   async function handleCreate(e) {
     e.preventDefault()
@@ -130,17 +146,29 @@ export default function NewInspection() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {FIELD_CONFIG.map(({ key, label, required, type, wide }) => (
               <div key={key} className={wide ? 'sm:col-span-2' : ''}>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                <label htmlFor={`field-${key}`} className="block text-xs font-semibold text-gray-700 mb-1">
                   {label}
                   {required && <span className="text-red-400 ml-0.5">*</span>}
                 </label>
-                <input
-                  type={type}
-                  required={required}
-                  value={form[key] || ''}
-                  onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pdi-navy min-h-[40px]"
-                />
+                {key === 'part_number' ? (
+                  <PartNumberCombobox
+                    id={`field-${key}`}
+                    required={required}
+                    value={form.part_number || ''}
+                    templateId={templateId || undefined}
+                    onChange={val => setForm(f => ({ ...f, part_number: val }))}
+                    onSelect={handlePartSelect}
+                  />
+                ) : (
+                  <input
+                    id={`field-${key}`}
+                    type={type}
+                    required={required}
+                    value={form[key] || ''}
+                    onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pdi-navy min-h-[40px]"
+                  />
+                )}
               </div>
             ))}
           </div>

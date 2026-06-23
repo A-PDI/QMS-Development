@@ -16,6 +16,26 @@ export function usePartSpecs(filters = {}) {
   })
 }
 
+// Typeahead lookup for known part numbers (catalogue + inspection history).
+// Returns { results: [{ part_number, description, template_id, form_no,
+// template_title, component_type, source }] }.
+export function usePartNumberLookup(query = '', { templateId, enabled = true } = {}) {
+  const q = (query || '').trim()
+  return useQuery({
+    queryKey: ['part-number-lookup', q, templateId || ''],
+    queryFn: async () => {
+      const params = new URLSearchParams()
+      if (q) params.set('q', q)
+      if (templateId) params.set('template_id', templateId)
+      const { data } = await api.get(`/part-specs/lookup?${params}`)
+      return data.results || []
+    },
+    enabled,
+    staleTime: 30_000,
+    keepPreviousData: true,
+  })
+}
+
 export function useCreatePartSpec() {
   const qc = useQueryClient()
   return useMutation({
