@@ -2,12 +2,6 @@ import PFNToggle from './PFNToggle'
 import ItemAttachment from './ItemAttachment'
 import { PFN_COLORS } from '../../lib/constants'
 
-const FIELD_LABELS = {
-  specification: 'Specification',
-  actual_value: 'Actual Value',
-  notes: 'Notes',
-}
-
 export default function SectionGeneralMeasurements({
   section,
   data = [],
@@ -51,7 +45,7 @@ export default function SectionGeneralMeasurements({
               const isFail = row.result === 'F'
               const needsNotes = isAccepted && !row.notes?.trim()
               return (
-                <tr key={item.id} className={`border-b border-gray-100 hover:bg-gray-50 ${isFail ? 'bg-red-50' : isAccepted ? 'bg-amber-50' : ''}`}>
+                <tr key={item.id} className="border-b border-gray-100 hover:bg-gray-50">
                   <td className="px-3 py-2 text-gray-500">{item.id}</td>
                   <td className="px-3 py-2 font-medium text-gray-700">{item.measurement}</td>
                   {['specification', 'actual_value'].map(field => (
@@ -86,6 +80,28 @@ export default function SectionGeneralMeasurements({
                       </div>
                     )}
                   </td>
+                  <td className="px-3 py-2">
+                    <PFNToggle
+                      value={row.result}
+                      onChange={v => update(item.id, 'result', v)}
+                      readOnly={readOnly}
+                      options={['P', 'F', 'A']}
+                    />
+                  </td>
+                  {showImages && (
+                    <td className="px-3 py-2">
+                      <ItemAttachment
+                        sectionKey={sectionKey}
+                        itemId={item.id}
+                        isFail={isFail || isAccepted}
+                        attachments={attachments}
+                        onUpload={onUploadItem}
+                        onDelete={onDeleteItem}
+                        uploadingKey={uploadingKey}
+                        readOnly={readOnly}
+                      />
+                    </td>
+                  )}
                 </tr>
               )
             })}
@@ -96,28 +112,53 @@ export default function SectionGeneralMeasurements({
       {/* Mobile cards */}
       <div className="md:hidden space-y-3">
         {section.items.map(item => {
-          const row = data.find(r => r.id === item.id) || { id: item.id, actual: '', status: '', notes: '' }
-          const isAccepted = row.status === 'A'
+          const row = data.find(r => r.id === item.id) || { id: item.id, specification: '', actual_value: '', result: '', notes: '' }
+          const isAccepted = row.result === 'A'
           const needsNotes = isAccepted && !row.notes?.trim()
-          const isFail = row.status === 'F'
+          const isFail = row.result === 'F'
           return (
-            <div key={item.id} className={`border rounded-lg p-3 ${isFail ? 'bg-red-50 border-red-200' : isAccepted ? 'bg-amber-50 border-amber-200' : 'bg-white border-gray-200'}`}>
-              <div className="text-xs font-medium text-gray-700 mb-2">{item.measurement || `Item ${item.id}`}</div>
-              <div className="flex gap-2 mb-2">
-                {readOnly ? (
-                  <span className="text-xs font-mono">{row.actual || '—'}</span>
-                ) : (
-                  <input type="text" value={row.actual || ''} onChange={e => update(item.id, 'actual', e.target.value)}
-                    placeholder="Actual…"
-                    className="flex-1 text-xs border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[36px]" />
+            <div key={item.id} className="border rounded-lg p-3 bg-white border-gray-200">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="text-xs font-medium text-gray-700">{item.measurement || `Item ${item.id}`}</div>
+                {showImages && (
+                  <ItemAttachment
+                    sectionKey={sectionKey}
+                    itemId={item.id}
+                    isFail={isFail || isAccepted}
+                    attachments={attachments}
+                    onUpload={onUploadItem}
+                    onDelete={onDeleteItem}
+                    uploadingKey={uploadingKey}
+                    readOnly={readOnly}
+                  />
                 )}
+              </div>
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <div>
+                  <label className="block text-xs text-gray-400 mb-0.5">Specification</label>
+                  {readOnly ? (
+                    <span className="text-xs font-mono">{row.specification || '—'}</span>
+                  ) : (
+                    <input type="text" value={row.specification || ''} onChange={e => update(item.id, 'specification', e.target.value)}
+                      className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[36px]" />
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-0.5">Actual Value</label>
+                  {readOnly ? (
+                    <span className="text-xs font-mono">{row.actual_value || '—'}</span>
+                  ) : (
+                    <input type="text" inputMode="decimal" value={row.actual_value || ''} onChange={e => update(item.id, 'actual_value', e.target.value)}
+                      className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[36px]" />
+                  )}
+                </div>
               </div>
               {!readOnly && (
                 <div className="flex gap-1.5 mb-1.5">
                   {['P','F','A'].map(v => (
                     <button key={v} type="button"
-                      onClick={() => update(item.id, 'status', row.status === v ? '' : v)}
-                      className={`px-2.5 py-1 text-xs font-semibold rounded border min-h-[32px] ${row.status === v ? PFN_COLORS[v] : 'bg-white text-gray-400 border-gray-200'}`}>
+                      onClick={() => update(item.id, 'result', row.result === v ? '' : v)}
+                      className={`px-2.5 py-1 text-xs font-semibold rounded border min-h-[32px] ${row.result === v ? PFN_COLORS[v] : 'bg-white text-gray-400 border-gray-200'}`}>
                       {v === 'P' ? 'Pass' : v === 'F' ? 'Fail' : 'Acc'}
                     </button>
                   ))}

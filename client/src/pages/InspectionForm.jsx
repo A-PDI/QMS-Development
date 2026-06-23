@@ -18,6 +18,7 @@ import SectionCamshaftBore from '../components/inspection/SectionCamshaftBore'
 import SectionFireRingProtrusion from '../components/inspection/SectionFireRingProtrusion'
 import SectionValveRecession from '../components/inspection/SectionValveRecession'
 import SectionVacuumTest from '../components/inspection/SectionVacuumTest'
+import SectionGrooveSpecs from '../components/inspection/SectionGrooveSpecs'
 import FileUploadZone from '../components/FileUploadZone'
 import AuthImage from '../components/AuthImage'
 import { initSectionData, mergeSectionData, formatFileSize } from '../lib/utils'
@@ -33,6 +34,7 @@ const SECTION_COMPONENTS = {
   fire_ring_protrusion: SectionFireRingProtrusion,
   valve_recession: SectionValveRecession,
   vacuum_test: SectionVacuumTest,
+  groove_specs: SectionGrooveSpecs,
 }
 
 // All section types now support per-item images
@@ -54,6 +56,11 @@ function detectAcceptedItems(sectionData) {
       if (Array.isArray(data.cylinders)) {
         for (const c of data.cylinders) {
           if (c && (c.result === 'A' || c.overall === 'A')) return true
+        }
+      }
+      if (Array.isArray(data.measurements)) {
+        for (const m of data.measurements) {
+          if (m && m.status === 'A') return true
         }
       }
     }

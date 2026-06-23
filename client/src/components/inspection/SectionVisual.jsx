@@ -46,7 +46,7 @@ export default function SectionVisual({
               const isAccepted = row.result === 'A'
               const needsRemarks = isAccepted && !row.remarks?.trim()
               return (
-                <tr key={item.id} className={`border-b border-gray-100 hover:bg-gray-50 ${isFail ? 'bg-red-50' : isAccepted ? 'bg-amber-50' : ''}`}>
+                <tr key={item.id} className="border-b border-gray-100 hover:bg-gray-50">
                   <td className="px-3 py-2 text-gray-500">{item.id}</td>
                   <td className="px-3 py-2 font-medium text-gray-700 text-xs">{item.ctq_area}</td>
                   <td className="px-3 py-2 text-gray-600 text-xs">{item.failure_mode}</td>
@@ -106,7 +106,7 @@ export default function SectionVisual({
           const isAccepted = row.result === 'A'
           const needsRemarks = isAccepted && !row.remarks?.trim()
           return (
-            <div key={item.id} className={`border rounded-lg p-3 ${isFail ? 'bg-red-50 border-red-200' : isAccepted ? 'bg-amber-50 border-amber-200' : 'bg-white border-gray-200'}`}>
+            <div key={item.id} className="border rounded-lg p-3 bg-white border-gray-200">
                 <div className="text-xs font-semibold text-gray-700 mb-1">{item.ctq_area || item.failure_mode || `Item ${item.id}`}</div>
                 {item.criteria && <div className="text-xs text-gray-400 mb-2">{item.criteria}</div>}
                 <div className="flex gap-1.5 flex-wrap mb-2">
