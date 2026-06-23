@@ -16,35 +16,51 @@ function requireAdminOrQC(req, res, next) {
   next();
 }
 
+// Treat empty string, null/undefined and the sentinel "All" as "no filter".
+function isMeaningful(v) {
+  return v !== undefined && v !== null && v !== '' && v !== 'All';
+}
+
+// The status dropdown sends human-friendly labels ("Open"/"Complete") but the
+// inspections table stores 'draft' / 'complete'. Normalise so the filter
+// actually matches stored rows.
+function normaliseStatus(v) {
+  const s = String(v).toLowerCase();
+  if (s === 'open' || s === 'draft') return 'draft';
+  if (s === 'complete' || s === 'completed') return 'complete';
+  return v;
+}
+
 function buildQueryFilters(filters) {
   let sql = 'WHERE 1=1';
   const params = [];
 
-  if (filters.date_from) {
+  if (isMeaningful(filters.date_from)) {
     sql += ' AND created_at >= ?';
     params.push(filters.date_from);
   }
-  if (filters.date_to) {
+  if (isMeaningful(filters.date_to)) {
+    // Inclusive of the whole end day even when only a date (no time) is given.
     sql += ' AND created_at <= ?';
-    params.push(filters.date_to);
+    params.push(/^\d{4}-\d{2}-\d{2}$/.test(String(filters.date_to)) ? `${filters.date_to} 23:59:59` : filters.date_to);
   }
-  if (filters.component_type) {
+  if (isMeaningful(filters.component_type)) {
     sql += ' AND component_type = ?';
     params.push(filters.component_type);
   }
-  if (filters.status) {
+  if (isMeaningful(filters.status)) {
     sql += ' AND status = ?';
-    params.push(filters.status);
+    params.push(normaliseStatus(filters.status));
   }
-  if (filters.disposition) {
+  if (isMeaningful(filters.disposition)) {
     sql += ' AND disposition = ?';
     params.push(filters.disposition);
   }
-  if (filters.assigned_to) {
+  if (isMeaningful(filters.assigned_to)) {
     sql += ' AND assigned_to = ?';
     params.push(filters.assigned_to);
   }
-  if (filters.template_id) {
+  if (isMeaningful(filters.template_id)) {
     sql += ' AND template_id = ?';
     params.push(filters.template_id);
   }

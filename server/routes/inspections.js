@@ -33,6 +33,8 @@ router.get('/', (req, res, next) => {
       date_from,
       date_to,
       search,
+      sort_by,
+      sort_dir,
       page = 1,
       limit = 20,
     } = req.query;
@@ -50,7 +52,22 @@ router.get('/', (req, res, next) => {
       const s = `%${search}%`;
       params.push(s, s, s, s);
     }
-    sql += ' ORDER BY created_at DESC';
+    // Sorting — whitelist columns to avoid SQL injection.
+    const SORTABLE = {
+      component_type: 'component_type',
+      part_number: 'part_number',
+      po_number: 'po_number',
+      lot_serial_no: 'lot_serial_no',
+      inspector_name: 'inspector_name',
+      date_received: 'date_received',
+      created_at: 'created_at',
+      status: 'status',
+      disposition: 'disposition',
+    };
+    const sortCol = SORTABLE[sort_by] || 'created_at';
+    const sortDir = String(sort_dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+    // Stable secondary ordering so equal values keep a deterministic order.
+    sql += ` ORDER BY ${sortCol} ${sortDir}, created_at DESC`;
     const countSql = sql.replace(/SELECT.*?FROM/, 'SELECT COUNT(*) as count FROM');
     const total = db.get(countSql, params).count;
     const inspections = db.all(sql + ` LIMIT ? OFFSET ?`, [...params, parseInt(limit), offset]);

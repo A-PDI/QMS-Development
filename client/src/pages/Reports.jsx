@@ -13,6 +13,7 @@ const GROUP_BY_OPTIONS = [
   { value: 'disposition', label: 'Disposition' },
   { value: 'status', label: 'Status' },
   { value: 'month', label: 'Month' },
+  { value: 'week', label: 'Week' },
   { value: 'assigned_to', label: 'Assigned Inspector' },
 ]
 
@@ -36,13 +37,14 @@ export default function Reports() {
   const [saveModalOpen, setSaveModalOpen] = useState(false)
   const [saveName, setSaveName] = useState('')
 
-  const { data: reportData } = useRunReport(config, true)
+  const { data: reportData, isFetching, refetch } = useRunReport(config, true)
   const { data: savedReports = [] } = useSavedReports()
   const saveReport = useSaveReport()
   const deleteReport = useDeleteSavedReport()
 
   const rows = reportData?.rows || []
   const totals = reportData?.totals || {}
+  const hasResults = rows.length > 0 || (totals.total || 0) > 0
 
   async function handleExport(format) {
     try {
@@ -188,10 +190,12 @@ export default function Reports() {
               </div>
 
               <button
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light transition-all min-h-[44px]"
+                onClick={() => refetch()}
+                disabled={isFetching}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light transition-all min-h-[44px] disabled:opacity-50"
               >
                 <BarChart2 size={14} />
-                Run Report
+                {isFetching ? 'Running…' : 'Run Report'}
               </button>
 
               <div className="border-t border-gray-200 pt-4">
@@ -233,8 +237,17 @@ export default function Reports() {
 
           {/* Right panel: Results */}
           <div className="lg:col-span-2 space-y-4">
+            {/* Empty state */}
+            {reportData && !hasResults && !isFetching && (
+              <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
+                <BarChart2 size={32} className="text-gray-300 mx-auto mb-3" />
+                <p className="text-sm font-medium text-gray-600">No inspections match these filters</p>
+                <p className="text-xs text-gray-400 mt-1">Try widening the date range or setting Status / Disposition to “All”.</p>
+              </div>
+            )}
+
             {/* Totals row */}
-            {reportData && (
+            {reportData && hasResults && (
               <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
                   <div className="text-center">
@@ -346,7 +359,7 @@ export default function Reports() {
             )}
 
             {/* Export buttons */}
-            {reportData && (
+            {reportData && hasResults && (
               <div className="flex gap-3">
                 <button
                   onClick={() => handleExport('excel')}
