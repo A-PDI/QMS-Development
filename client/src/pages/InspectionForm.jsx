@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { Save, CheckSquare, ChevronDown, ChevronUp, Paperclip, PlusCircle, X, Printer, Mail, Loader2, AlertTriangle, Bell, ImagePlus, Trash2 } from 'lucide-react'
+import { Save, CheckSquare, ChevronDown, ChevronUp, Paperclip, PlusCircle, X, Printer, Mail, Loader2, AlertTriangle, Bell, ImagePlus, Trash2, Pencil } from 'lucide-react'
 import api from '../lib/api'
 import { getUser } from '../lib/auth'
 import { useInspection } from '../hooks/useInspections'
@@ -205,6 +205,11 @@ export default function InspectionForm() {
   const [sectionData, setSectionData] = useState({})
   const [disposition, setDisposition] = useState('')
   const [dispositionNotes, setDispositionNotes] = useState('')
+  // Editable inspection header info (part #, PO, lot/serial, date received, inspector)
+  const [headerInfo, setHeaderInfo] = useState({
+    part_number: '', po_number: '', lot_serial_no: '', date_received: '', inspector_name: '',
+  })
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const [saveState, setSaveState] = useState('idle')
   const [uploadingKey, setUploadingKey] = useState(null)
   const [dimensionalAdded, setDimensionalAdded] = useState(false)
@@ -241,6 +246,13 @@ export default function InspectionForm() {
     setSectionData(mergeSectionData(saved, fresh))
     setDisposition(inspection.disposition || '')
     setDispositionNotes(inspection.disposition_notes || '')
+    setHeaderInfo({
+      part_number: inspection.part_number || '',
+      po_number: inspection.po_number || '',
+      lot_serial_no: inspection.lot_serial_no || '',
+      date_received: (inspection.date_received || '').slice(0, 10),
+      inspector_name: inspection.inspector_name || '',
+    })
     if (saved.__dimensional_added) setDimensionalAdded(true)
     // Restore admin section customisations
     if (saved.__admin_sections) setCustomSections(saved.__admin_sections)
@@ -258,6 +270,7 @@ export default function InspectionForm() {
           section_data: sectionData,
           disposition,
           disposition_notes: dispositionNotes,
+          ...headerInfo,
         })
         setSaveState('saved')
         setTimeout(() => setSaveState('idle'), 2000)
@@ -265,11 +278,11 @@ export default function InspectionForm() {
         setSaveState('error')
       }
     }, 600)
-  }, [id, sectionData, disposition, dispositionNotes])
+  }, [id, sectionData, disposition, dispositionNotes, headerInfo])
 
   useEffect(() => {
     if (!initialLoad.current) debouncedSave()
-  }, [sectionData, disposition, dispositionNotes])
+  }, [sectionData, disposition, dispositionNotes, headerInfo])
 
   function handleAddDimensional() {
     setDimensionalAdded(true)
@@ -450,7 +463,7 @@ export default function InspectionForm() {
     setCompleting(true)
     clearTimeout(saveTimer.current)
     try {
-      await update.mutateAsync({ id, section_data: sectionData, disposition, disposition_notes: dispositionNotes })
+      await update.mutateAsync({ id, section_data: sectionData, disposition, disposition_notes: dispositionNotes, ...headerInfo })
       const hasAccepted = Object.entries(sectionData).some(([, rows]) =>
         Array.isArray(rows) && rows.some(r => r.result === 'A' || r.status === 'A')
       )
@@ -528,24 +541,44 @@ export default function InspectionForm() {
                 <div className="text-xs font-medium text-gray-800">{COMPONENT_TYPE_LABELS[inspection.component_type] || inspection.component_type}</div>
               </div>
             )}
-            {inspection.part_number && (
+            {headerInfo.part_number && (
               <div className="flex-shrink-0">
                 <div className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">Part Number</div>
-                <div className="text-xs font-medium text-gray-800 font-mono">{inspection.part_number}</div>
+                <div className="text-xs font-medium text-gray-800 font-mono">{headerInfo.part_number}</div>
               </div>
             )}
-            {inspection.po_number && (
+            {headerInfo.po_number && (
               <div className="flex-shrink-0">
                 <div className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">PO Number</div>
-                <div className="text-xs font-medium text-gray-800 font-mono">{inspection.po_number}</div>
+                <div className="text-xs font-medium text-gray-800 font-mono">{headerInfo.po_number}</div>
               </div>
             )}
-            {inspection.inspector_name && (
+            {headerInfo.lot_serial_no && (
+              <div className="flex-shrink-0">
+                <div className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">Lot / Serial No.</div>
+                <div className="text-xs font-medium text-gray-800 font-mono">{headerInfo.lot_serial_no}</div>
+              </div>
+            )}
+            {headerInfo.date_received && (
+              <div className="flex-shrink-0">
+                <div className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">Date Received</div>
+                <div className="text-xs font-medium text-gray-800 font-mono">{headerInfo.date_received}</div>
+              </div>
+            )}
+            {headerInfo.inspector_name && (
               <div className="flex-shrink-0">
                 <div className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">Inspector</div>
-                <div className="text-xs font-medium text-gray-800">{inspection.inspector_name}</div>
+                <div className="text-xs font-medium text-gray-800">{headerInfo.inspector_name}</div>
               </div>
             )}
+            <button
+              onClick={() => setDetailsOpen(o => !o)}
+              className="flex-shrink-0 inline-flex items-center gap-1 text-[11px] font-medium text-pdi-navy hover:text-pdi-navy-light px-2 py-1 rounded hover:bg-pdi-frost transition-colors"
+              title="Edit inspection details"
+            >
+              <Pencil size={12} />
+              {detailsOpen ? 'Hide' : 'Edit'}
+            </button>
           </div>
 
           {/* Status + save indicator */}
@@ -613,6 +646,31 @@ export default function InspectionForm() {
           className="hidden"
           onChange={handleBulkImageSelect}
         />
+
+        {/* Editable inspection details */}
+        {detailsOpen && (
+          <div className="border-t border-gray-100 bg-gray-50/70 px-3 sm:px-5 py-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+              {[
+                { key: 'part_number', label: 'Part Number', mono: true },
+                { key: 'po_number', label: 'PO Number', mono: true },
+                { key: 'lot_serial_no', label: 'Lot / Serial No.', mono: true },
+                { key: 'date_received', label: 'Date Received', type: 'date' },
+                { key: 'inspector_name', label: 'Inspector' },
+              ].map(f => (
+                <div key={f.key}>
+                  <label className="block text-[10px] text-gray-500 uppercase tracking-wide font-semibold mb-1">{f.label}</label>
+                  <input
+                    type={f.type || 'text'}
+                    value={headerInfo[f.key]}
+                    onChange={e => setHeaderInfo(h => ({ ...h, [f.key]: e.target.value }))}
+                    className={`w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[36px] ${f.mono ? 'font-mono' : ''}`}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Body */}

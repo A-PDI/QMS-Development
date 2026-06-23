@@ -215,7 +215,7 @@ export default function Dashboard() {
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 border-b border-gray-100">
                       <tr>
-                        {['Component', 'Part Number', 'PO Number', 'Inspector', 'Date Received', 'Status'].map(h => (
+                        {['Component', 'Part Number', 'PO Number', 'Lot / Serial', 'Inspector', 'Date Received', 'Status'].map(h => (
                           <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
                         ))}
                       </tr>
@@ -229,6 +229,7 @@ export default function Dashboard() {
                           </td>
                           <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
                           <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.po_number || '—'}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.lot_serial_no || '—'}</td>
                           <td className="px-4 py-3 text-sm text-gray-700">{insp.inspector_name || '—'}</td>
                           <td className="px-4 py-3 text-sm text-gray-500">{formatDate(insp.date_received || insp.created_at)}</td>
                           <td className="px-4 py-3"><StatusBadge status={insp.status} /></td>
@@ -442,7 +443,7 @@ export default function Dashboard() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-100">
                   <tr>
-                    {['Part Number', 'Part Type', 'PO Number', 'Inspector', 'Status', 'Last Update'].map(h => (
+                    {['Part Number', 'Part Type', 'PO Number', 'Lot / Serial', 'Inspector', 'Status', 'Last Update'].map(h => (
                       <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
                     ))}
                   </tr>
@@ -453,6 +454,7 @@ export default function Dashboard() {
                       <td className="px-4 py-2.5 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
                       <td className="px-4 py-2.5 text-xs text-gray-700">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</td>
                       <td className="px-4 py-2.5 font-mono text-xs text-gray-700">{insp.po_number || '—'}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-gray-700">{insp.lot_serial_no || '—'}</td>
                       <td className="px-4 py-2.5 text-xs text-gray-700">{insp.inspector_name || '—'}</td>
                       <td className="px-4 py-2.5"><StatusBadge status={insp.status} /></td>
                       <td className="px-4 py-2.5 text-xs text-gray-500">{formatDate(insp.updated_at || insp.created_at)}</td>

@@ -1,7 +1,7 @@
 'use strict'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { PlusCircle, Search, SlidersHorizontal, X, Eye, Mail, Printer, Trash2, UserPlus, Loader2 } from 'lucide-react'
+import { PlusCircle, Search, SlidersHorizontal, X, Eye, Mail, Printer, Trash2, UserPlus, Loader2, ArrowUp, ArrowDown, ChevronsUpDown } from 'lucide-react'
 import { useInspections, useDeleteInspection, useAssignInspection } from '../hooks/useInspections'
 import StatusBadge from '../components/StatusBadge'
 import { formatDate } from '../lib/utils'
@@ -13,8 +13,18 @@ export default function InspectionList() {
   const navigate = useNavigate()
   const user = getUser()
   const isAdminRole = user && (user.role === 'admin' || user.role === 'qc_manager')
-  const [filters, setFilters] = useState({ page: 1, limit: 20 })
+  const [filters, setFilters] = useState({ page: 1, limit: 20, sort_by: 'created_at', sort_dir: 'desc' })
   const [search, setSearch] = useState('')
+
+  // Toggle sort: click a column to sort by it; click again to flip direction.
+  function toggleSort(col) {
+    setFilters(f => {
+      if (f.sort_by === col) {
+        return { ...f, sort_dir: f.sort_dir === 'asc' ? 'desc' : 'asc', page: 1 }
+      }
+      return { ...f, sort_by: col, sort_dir: 'asc', page: 1 }
+    })
+  }
   const [filtersOpen, setFiltersOpen] = useState(false)
   const { data, isLoading } = useInspections(filters)
   const deleteInspection = useDeleteInspection()
@@ -196,7 +206,7 @@ export default function InspectionList() {
             <form onSubmit={applySearch} className="flex gap-2 flex-1 min-w-0">
               <div className="relative flex-1 min-w-0">
                 <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input type="text" placeholder="Part #, PO, inspector…"
+                <input type="text" placeholder="Part #, PO, Lot/Serial, inspector…"
                   className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-pdi-navy"
                   value={search} onChange={e => setSearch(e.target.value)} />
               </div>
@@ -252,9 +262,34 @@ export default function InspectionList() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  {['Component', 'Part Number', 'PO Number', 'Inspector', 'Date Received', 'Date Started', 'Status', 'Final Results'].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
-                  ))}
+                  {[
+                    { label: 'Component', col: 'component_type' },
+                    { label: 'Part Number', col: 'part_number' },
+                    { label: 'PO Number', col: 'po_number' },
+                    { label: 'Lot / Serial', col: 'lot_serial_no' },
+                    { label: 'Inspector', col: 'inspector_name' },
+                    { label: 'Date Received', col: 'date_received' },
+                    { label: 'Date Started', col: 'created_at' },
+                    { label: 'Status', col: 'status' },
+                    { label: 'Final Results', col: 'disposition' },
+                  ].map(({ label, col }) => {
+                    const active = filters.sort_by === col
+                    return (
+                      <th key={col} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                        <button
+                          type="button"
+                          onClick={() => toggleSort(col)}
+                          className={`group inline-flex items-center gap-1 hover:text-pdi-navy transition-colors ${active ? 'text-pdi-navy' : ''}`}
+                          title={`Sort by ${label}`}
+                        >
+                          {label}
+                          {active
+                            ? (filters.sort_dir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)
+                            : <ChevronsUpDown size={12} className="text-gray-300 group-hover:text-gray-400" />}
+                        </button>
+                      </th>
+                    )
+                  })}
                   {isAdminRole && (
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Actions</th>
                   )}
@@ -262,9 +297,9 @@ export default function InspectionList() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {isLoading ? (
-                  <tr><td colSpan={isAdminRole ? 9 : 8} className="text-center text-gray-400 py-12">Loading…</td></tr>
+                  <tr><td colSpan={isAdminRole ? 10 : 9} className="text-center text-gray-400 py-12">Loading…</td></tr>
                 ) : inspections.length === 0 ? (
-                  <tr><td colSpan={isAdminRole ? 9 : 8} className="text-center text-gray-400 py-12">No inspections found</td></tr>
+                  <tr><td colSpan={isAdminRole ? 10 : 9} className="text-center text-gray-400 py-12">No inspections found</td></tr>
                 ) : inspections.map(insp => (
                   <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-blue-50/50 cursor-pointer">
                     <td className="px-4 py-3">
@@ -273,6 +308,7 @@ export default function InspectionList() {
                     </td>
                     <td className="px-4 py-3 font-mono text-xs">{insp.part_number || '—'}</td>
                     <td className="px-4 py-3 font-mono text-xs">{insp.po_number || '—'}</td>
+                    <td className="px-4 py-3 font-mono text-xs">{insp.lot_serial_no || '—'}</td>
                     <td className="px-4 py-3 text-sm">{insp.inspector_name || '—'}</td>
                     <td className="px-4 py-3 text-sm text-gray-500">{formatDate(insp.date_received)}</td>
                     <td className="px-4 py-3 text-sm text-gray-500">{formatDate(insp.created_at)}</td>
@@ -335,6 +371,7 @@ export default function InspectionList() {
                   <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
                     <div className="min-w-0 truncate"><span className="text-gray-400">Part: </span><span className="font-mono text-gray-700">{insp.part_number || '—'}</span></div>
                     <div className="min-w-0 truncate"><span className="text-gray-400">PO: </span><span className="font-mono text-gray-700">{insp.po_number || '—'}</span></div>
+                    <div className="min-w-0 truncate"><span className="text-gray-400">Lot/Serial: </span><span className="font-mono text-gray-700">{insp.lot_serial_no || '—'}</span></div>
                     <div className="min-w-0 truncate"><span className="text-gray-400">By: </span><span className="text-gray-700">{insp.inspector_name || '—'}</span></div>
                     <div className="min-w-0 truncate"><span className="text-gray-400">Received: </span><span className="text-gray-500">{formatDate(insp.date_received)}</span></div>
                   </div>
