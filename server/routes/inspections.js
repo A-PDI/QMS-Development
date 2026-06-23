@@ -281,8 +281,14 @@ router.get('/:id/pdf', async (req, res, next) => {
       [req.params.id]
     );
     const pdfBuffer = await generateInspectionPdf(inspection, template, attachments);
-    const filename = `${inspection.form_no || 'inspection'}-${inspection.part_number || inspection.id}.pdf`
-      .replace(/[^a-zA-Z0-9._-]/g, '_');
+    // Filename format: QC_<Part#>_<Serial#>.pdf
+    const sanitise = (v, fallback) => {
+      const s = String(v ?? '').trim().replace(/[^a-zA-Z0-9._-]/g, '_').replace(/_{2,}/g, '_').replace(/^_+|_+$/g, '');
+      return s || fallback;
+    };
+    const partPart   = sanitise(inspection.part_number, 'NoPart');
+    const serialPart = sanitise(inspection.lot_serial_no, 'NoSerial');
+    const filename = `QC_${partPart}_${serialPart}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(pdfBuffer);

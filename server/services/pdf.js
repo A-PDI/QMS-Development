@@ -172,6 +172,26 @@ function ensureSpace(doc, needed) {
   if (doc.y + needed > PH - FOOT) doc.addPage();
 }
 
+/** True if a value counts as actual entered data (not blank / whitespace). */
+function hasValue(v) {
+  return v !== undefined && v !== null && String(v).trim() !== '';
+}
+
+/**
+ * For dimensional / general-measurement sections, decide whether a single
+ * item row has any inspector-entered data. Spec/measurement/location come
+ * from the template definition and do NOT count — only the recorded values
+ * (actuals, notes, status/result) make a row "filled in".
+ */
+function isMeasurementRowFilled(d) {
+  if (!d || typeof d !== 'object') return false;
+  return [
+    d.actual1, d.actual2, d.actual3,        // dimensional
+    d.actual_value, d.specification,        // general measurements (entered spec)
+    d.notes, d.status, d.result,            // shared
+  ].some(hasValue);
+}
+
 /**
  * Normalise a status cell value to one of 'P' | 'F' | 'A' | '' so we can pick
  * the right glyph (a status column may hold P/F/A, PASS/FAIL/ACCEPT/REJECT, or
@@ -569,15 +589,24 @@ function renderPfnVisual(doc, section, data, secAtts = []) {
 
 function renderDimensional(doc, section, data, secAtts = []) {
   const title = section.title || 'Dimensional Inspection';
-  ensureSpace(doc, 60);
-  renderSectionTitle(doc, title);
 
   const items   = section.items || [];
   const dataArr = Array.isArray(data) ? data : [];
 
+  // Only include items the inspector actually filled in. If none are filled,
+  // omit the whole section from the PDF.
+  const filledItems = items.filter(item => {
+    const d = dataArr.find(r => r.id === item.id);
+    return isMeasurementRowFilled(d);
+  });
+  if (filledItems.length === 0) return;
+
+  ensureSpace(doc, 60);
+  renderSectionTitle(doc, title);
+
   const header = ['#', 'Measurement', 'Location', 'Spec', 'Actual 1', 'Actual 2', 'Actual 3', 'Status'];
   const cw     = [24, 130, 80, 68, 60, 60, 60, 50]; // sum = 532
-  const rows   = items.map(item => {
+  const rows   = filledItems.map(item => {
     const d = dataArr.find(r => r.id === item.id) || {};
     return [String(item.id), item.measurement || '', item.location || '', item.spec || '',
       d.actual1 || '', d.actual2 || '', d.actual3 || '', d.status || ''];
@@ -625,16 +654,25 @@ function renderPassFail(doc, section, data, secAtts = []) {
 
 function renderGeneralMeasurements(doc, section, data, secAtts = []) {
   const title = section.title || 'General Measurements';
-  ensureSpace(doc, 60);
-  renderSectionTitle(doc, title);
 
   const items   = section.items || [];
   const dataArr = Array.isArray(data) ? data : [];
 
+  // Only include items the inspector actually filled in. If none are filled,
+  // omit the whole section from the PDF.
+  const filledItems = items.filter(item => {
+    const d = dataArr.find(r => r.id === item.id);
+    return isMeasurementRowFilled(d);
+  });
+  if (filledItems.length === 0) return;
+
+  ensureSpace(doc, 60);
+  renderSectionTitle(doc, title);
+
   const notesW = Math.max(40, PW - 22 - 116 - 110 - 110 - 44);
   const header = ['#', 'Measurement', 'Specification', 'Actual Value', 'Notes', 'Result'];
   const cw     = [22, 116, 110, 110, notesW, 44];
-  const rows   = items.map(item => {
+  const rows   = filledItems.map(item => {
     const d = dataArr.find(r => r.id === item.id) || {};
     return [String(item.id), item.measurement || '', d.specification || '',
       d.actual_value || '', d.notes || '', d.result || ''];
@@ -650,11 +688,15 @@ function renderGeneralMeasurements(doc, section, data, secAtts = []) {
 
 function renderCamshaftBore(doc, section, data, secAtts = []) {
   const title = section.title || 'Camshaft Bore';
-  ensureSpace(doc, 60);
-  renderSectionTitle(doc, title);
 
   data       = data || {};
   const bc   = section.bore_count || 7;
+  // Omit if no bore actuals recorded.
+  const boresFilled = Array.isArray(data.bores) && data.bores.some(hasValue);
+  if (!boresFilled) return;
+
+  ensureSpace(doc, 60);
+  renderSectionTitle(doc, title);
   const cw0  = 48;
   const cw1  = Math.floor((PW - cw0) / bc);
   const cws  = [cw0, ...Array(bc).fill(cw1)];
@@ -671,11 +713,15 @@ function renderCamshaftBore(doc, section, data, secAtts = []) {
 
 function renderFireRing(doc, section, data, secAtts = []) {
   const title = section.title || 'Fire Ring Protrusion';
-  ensureSpace(doc, 60);
-  renderSectionTitle(doc, title);
 
   data       = data || {};
   const cc   = section.cylinder_count || 6;
+  // Omit if no cylinder actuals recorded.
+  const cylsFilled = Array.isArray(data.cylinders) && data.cylinders.some(hasValue);
+  if (!cylsFilled) return;
+
+  ensureSpace(doc, 60);
+  renderSectionTitle(doc, title);
   const cw0  = 48;
   const cw1  = Math.floor((PW - cw0) / cc);
   const cws  = [cw0, ...Array(cc).fill(cw1)];
@@ -692,12 +738,17 @@ function renderFireRing(doc, section, data, secAtts = []) {
 
 function renderValveRecession(doc, section, data, secAtts = []) {
   const title = section.title || 'Valve Recession';
-  ensureSpace(doc, 60);
-  renderSectionTitle(doc, title);
 
   data       = data || {};
   const cc   = section.cylinder_count || 6;
   const cyls = Array.isArray(data.cylinders) ? data.cylinders : Array(cc).fill({});
+  // Omit if no cylinder has any value (int/exh/result) recorded.
+  const anyFilled = cyls.some(c => c && [c.int1, c.int2, c.exh1, c.exh2, c.result].some(hasValue));
+  if (!anyFilled) return;
+
+  ensureSpace(doc, 60);
+  renderSectionTitle(doc, title);
+
   const hasResult = cyls.some(c => c && String(c.result || '').trim() !== '');
 
   let header, cw, dataRows, statusColIdx;
@@ -724,8 +775,6 @@ function renderValveRecession(doc, section, data, secAtts = []) {
 
 function renderGrooveSpecs(doc, section, data, secAtts = []) {
   const title = section.title || 'Fire Ring';
-  ensureSpace(doc, 80);
-  renderSectionTitle(doc, title);
 
   data        = data || {};
   const cc    = section.cylinder_count || 6;
@@ -737,6 +786,19 @@ function renderGrooveSpecs(doc, section, data, secAtts = []) {
   const entryItems = items.filter(it =>
     it.entry === true || (it.entry === undefined && /wire protrusion/i.test(it.measurement || ''))
   );
+
+  // Omit the whole section if none of the entry items have any cylinder value
+  // or status recorded.
+  const anyFilled = entryItems.some(item => {
+    const m = meas.find(r => r.id === item.id);
+    if (!m) return false;
+    const cyls = Array.isArray(m.cylinders) ? m.cylinders : [];
+    return cyls.some(hasValue) || hasValue(m.status) || hasValue(m.notes);
+  });
+  if (!anyFilled) return;
+
+  ensureSpace(doc, 80);
+  renderSectionTitle(doc, title);
 
   // ── Specifications block (reference only) ───────────────────────────────
   doc.fontSize(8).font('Helvetica-Bold').fillColor(DGRAY);
@@ -776,12 +838,17 @@ function renderGrooveSpecs(doc, section, data, secAtts = []) {
 
 function renderVacuumTest(doc, section, data, secAtts = []) {
   const title = section.title || 'Vacuum Test';
-  ensureSpace(doc, 60);
-  renderSectionTitle(doc, title);
 
   data       = data || {};
   const cc   = section.cylinder_count || 6;
   const cyls = Array.isArray(data.cylinders) ? data.cylinders : Array(cc).fill({});
+
+  // Omit if no cylinder has any result or sub-result recorded.
+  const anyFilled = cyls.some(c => c && [c.overall, c.int1, c.int2, c.exh1, c.exh2].some(hasValue));
+  if (!anyFilled) return;
+
+  ensureSpace(doc, 60);
+  renderSectionTitle(doc, title);
 
   // The Int/Exh sub-results only apply to a failing cylinder. If none of the
   // cylinders have any sub-results recorded, omit those columns entirely so the

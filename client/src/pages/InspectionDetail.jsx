@@ -97,9 +97,14 @@ export default function InspectionDetail() {
       const url = URL.createObjectURL(response.data)
       const a = document.createElement('a')
       a.href = url
-      const po = inspection.po_number ? inspection.po_number.replace(/[^a-zA-Z0-9-]/g, '') : 'NO-PO'
-      const part = inspection.part_number ? inspection.part_number.replace(/[^a-zA-Z0-9-]/g, '') : 'NO-PART'
-      a.download = `QC-${po}-${part}.pdf`
+      // Filename format: QC_<Part#>_<Serial#>.pdf
+      const clean = (v, fallback) => {
+        const s = String(v ?? '').trim().replace(/[^a-zA-Z0-9._-]/g, '_').replace(/_{2,}/g, '_').replace(/^_+|_+$/g, '')
+        return s || fallback
+      }
+      const part = clean(inspection.part_number, 'NoPart')
+      const serial = clean(inspection.lot_serial_no, 'NoSerial')
+      a.download = `QC_${part}_${serial}.pdf`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
