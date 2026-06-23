@@ -80,8 +80,6 @@ function generateInspectionPdf(inspection, template, attachments = []) {
             renderValveRecession(doc, def, data, secAtts); break;
           case 'vacuum_test':
             renderVacuumTest(doc, def, data, secAtts); break;
-          case 'groove_specs':
-            renderGrooveSpecs(doc, def, data, secAtts); break;
           default: break;
         }
         vspace(doc, 8);
@@ -650,48 +648,6 @@ function renderGeneralMeasurements(doc, section, data, secAtts = []) {
   if (allImgsGm.length > 0) { vspace(doc, 4); renderPhotoGrid(doc, allImgsGm); }
 }
 
-function renderGrooveSpecs(doc, section, data, secAtts = []) {
-  const title = section.title || 'Groove Specs';
-  ensureSpace(doc, 60);
-  renderSectionTitle(doc, title);
-
-  data        = data || {};
-  const items = section.items || [];
-  const cc    = section.cylinder_count || 6;
-  const measurements = Array.isArray(data.measurements) ? data.measurements : [];
-
-  // One small chart per measurement: spec shown in the row label, a Cylinder
-  // 1..N header row, the recorded values, and a Result glyph column.
-  const labelW = 150;
-  const resW   = 44;
-  const cylW   = Math.floor((PW - labelW - resW) / cc);
-  // Absorb rounding into the label column so the widths still sum to PW.
-  const realLabelW = PW - resW - cylW * cc;
-  const cw = [realLabelW, ...Array(cc).fill(cylW), resW];
-
-  const header = ['Measurement',
-    ...Array.from({ length: cc }, (_, i) => `Cyl ${i + 1}`),
-    'Result'];
-
-  const rows = items.map(item => {
-    const m    = measurements.find(x => x.id === item.id) || {};
-    const cyls = Array.isArray(m.cylinders) ? m.cylinders : [];
-    const label = item.spec
-      ? `${item.measurement}\n${item.spec}`
-      : (item.measurement || '');
-    return [label,
-      ...Array.from({ length: cc }, (_, i) => cyls[i] || ''),
-      m.status || ''];
-  });
-
-  renderTable(doc, header, rows, cw, { statusColIdx: cw.length - 1, sectionTitle: title });
-
-  const imgs = secAtts.filter(a =>
-    (a.mime_type || '').startsWith('image/') && a.file_path && fs.existsSync(a.file_path)
-  );
-  if (imgs.length > 0) { vspace(doc, 4); renderPhotoGrid(doc, imgs); }
-}
-
 function renderCamshaftBore(doc, section, data, secAtts = []) {
   const title = section.title || 'Camshaft Bore';
   ensureSpace(doc, 60);
@@ -767,7 +723,7 @@ function renderValveRecession(doc, section, data, secAtts = []) {
 }
 
 function renderGrooveSpecs(doc, section, data, secAtts = []) {
-  const title = section.title || 'Groove Specs';
+  const title = section.title || 'Fire Ring';
   ensureSpace(doc, 80);
   renderSectionTitle(doc, title);
 
@@ -776,14 +732,34 @@ function renderGrooveSpecs(doc, section, data, secAtts = []) {
   const items = section.items || [];
   const meas  = Array.isArray(data.measurements) ? data.measurements : [];
 
-  // Layout: a label/spec column + a status column + one column per cylinder.
+  // All specs are listed in the header; only items flagged for entry get a
+  // per-cylinder data row.
+  const entryItems = items.filter(it =>
+    it.entry === true || (it.entry === undefined && /wire protrusion/i.test(it.measurement || ''))
+  );
+
+  // ── Specifications block (reference only) ───────────────────────────────
+  doc.fontSize(8).font('Helvetica-Bold').fillColor(DGRAY);
+  put(doc, 'Specifications', M, doc.y, { width: PW }, doc.y + 12);
+  doc.fontSize(8).font('Helvetica').fillColor(BLACK);
+  for (const item of items) {
+    const line = item.spec ? `${item.measurement}:  ${item.spec}` : item.measurement;
+    put(doc, line, M + 6, doc.y, { width: PW - 6 }, doc.y + 12);
+  }
+  vspace(doc, 4);
+
+  // ── Data-entry chart(s) ─────────────────────────────────────────────────
+  if (entryItems.length === 0) return;
+
   const labelW  = 150;
   const statusW = 40;
   const cylW    = Math.floor((PW - labelW - statusW) / cc);
-  const cws     = [labelW, ...Array(cc).fill(cylW), statusW];
+  // Absorb rounding into the label column so widths still sum to PW.
+  const realLabelW = PW - statusW - cylW * cc;
+  const cws     = [realLabelW, ...Array(cc).fill(cylW), statusW];
 
-  const header = ['Measurement / Spec', ...Array.from({ length: cc }, (_, i) => `Cyl ${i + 1}`), ''];
-  const rows   = items.map(item => {
+  const header = ['Measurement', ...Array.from({ length: cc }, (_, i) => `Cyl ${i + 1}`), 'Result'];
+  const rows   = entryItems.map(item => {
     const m = meas.find(r => r.id === item.id) || {};
     const cyls = Array.isArray(m.cylinders) ? m.cylinders : [];
     const label = item.spec ? `${item.measurement}\n${item.spec}` : (item.measurement || '');

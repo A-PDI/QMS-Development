@@ -51,14 +51,16 @@ const IQI_005_V2_SECTIONS = {
     ],
   },
   groove_specs: {
-    title: 'C. DIMENSIONAL INSPECTION — Groove Specs',
+    title: 'C. DIMENSIONAL INSPECTION — Fire Ring',
     section_type: 'groove_specs',
     optional: true,
     cylinder_count: 6,
+    // All three specs are shown in the section header. Only items flagged
+    // `entry: true` get per-cylinder data-entry fields (Wire Protrusion only).
     items: [
-      { id: 1, measurement: 'Groove Diameter', location: '', spec: '6.300" Groove OD for CAT, 5.990" Groove OD for Cummins' },
-      { id: 2, measurement: 'Groove Depth',    location: '', spec: '.029-.031"' },
-      { id: 3, measurement: 'Wire Protrusion', location: '', spec: '.008-.010"' },
+      { id: 1, measurement: 'Groove Diameter', location: '', spec: '6.300" Groove OD for CAT, 5.990" Groove OD for Cummins', entry: false },
+      { id: 2, measurement: 'Groove Depth',    location: '', spec: '.029-.031"', entry: false },
+      { id: 3, measurement: 'Wire Protrusion', location: '', spec: '.008-.010"', entry: true },
     ],
   },
   valve_recession: {
@@ -209,6 +211,46 @@ function applyMigrations(db) {
             for (const it of s.items) {
               if (it.measurement === 'Groove diameter') { it.measurement = 'Groove Diameter'; changed = true; }
             }
+          }
+        }
+      }
+      if (changed) {
+        db.run('UPDATE inspection_templates SET sections = ? WHERE id = ?', [
+          JSON.stringify(sections),
+          row.id,
+        ]);
+      }
+    }
+  });
+
+  // ── Migration: Fire Ring rename + entry flags ─────────────────────────────
+  // "Groove Specs" is renamed to "Fire Ring". All three specs stay in the
+  // section header, but only Wire Protrusion gets per-cylinder data-entry
+  // fields (entry: true); Groove Diameter / Groove Depth are header-only.
+  once('iqi_005_groove_specs_to_fire_ring', () => {
+    const rows = db.all(
+      "SELECT id, sections FROM inspection_templates WHERE sections LIKE ?",
+      ['%"section_type":"groove_specs"%']
+    );
+    for (const row of rows) {
+      let sections;
+      try {
+        sections = JSON.parse(row.sections);
+      } catch {
+        continue;
+      }
+      let changed = false;
+      for (const key of Object.keys(sections)) {
+        const s = sections[key];
+        if (!s || s.section_type !== 'groove_specs') continue;
+        if (typeof s.title === 'string' && s.title.includes('Groove Specs')) {
+          s.title = s.title.replace('Groove Specs', 'Fire Ring');
+          changed = true;
+        }
+        if (Array.isArray(s.items)) {
+          for (const it of s.items) {
+            const wantEntry = /wire protrusion/i.test(it.measurement || '');
+            if (it.entry !== wantEntry) { it.entry = wantEntry; changed = true; }
           }
         }
       }

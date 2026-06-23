@@ -440,14 +440,16 @@ const PDI_IQI_005_V2_SECTIONS = {
     ],
   },
   groove_specs: {
-    title: 'C. DIMENSIONAL INSPECTION — Groove Specs',
+    title: 'C. DIMENSIONAL INSPECTION — Fire Ring',
     section_type: 'groove_specs',
     optional: true,
     cylinder_count: 6,
+    // All specs are shown in the header; only Wire Protrusion (entry: true)
+    // has per-cylinder data-entry fields.
     items: [
-      { id: 1, measurement: 'Groove Diameter', location: '', spec: '6.300" Groove OD for CAT, 5.990" Groove OD for Cummins' },
-      { id: 2, measurement: 'Groove Depth',    location: '', spec: '.029-.031"' },
-      { id: 3, measurement: 'Wire Protrusion', location: '', spec: '.008-.010"' },
+      { id: 1, measurement: 'Groove Diameter', location: '', spec: '6.300" Groove OD for CAT, 5.990" Groove OD for Cummins', entry: false },
+      { id: 2, measurement: 'Groove Depth',    location: '', spec: '.029-.031"', entry: false },
+      { id: 3, measurement: 'Wire Protrusion', location: '', spec: '.008-.010"', entry: true },
     ],
   },
   valve_recession: {

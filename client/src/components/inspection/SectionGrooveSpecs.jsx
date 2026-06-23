@@ -3,13 +3,14 @@ import ItemAttachment from './ItemAttachment'
 import MeasurementInput from './MeasurementInput'
 
 /**
- * Groove Specs (Cylinder Head, section C — Dimensional Inspection).
+ * Fire Ring (Cylinder Head, section C — Dimensional Inspection).
  *
  * Layout requirements:
- *  - The spec / limit for each measurement (Groove Diameter, Groove Depth,
- *    Wire Protrusion) lives in the section header rather than a table column.
- *  - Each measurement is entered as a small chart: row 1 = Cylinder 1..N
- *    headers, row 2 = a data input per cylinder.
+ *  - All specs (Groove Diameter, Groove Depth, Wire Protrusion) live in the
+ *    section header as reference only.
+ *  - Only items flagged `entry: true` get a per-cylinder data-entry chart
+ *    (row 1 = Cylinder 1..N headers, row 2 = inputs). Currently that is just
+ *    Wire Protrusion.
  *
  * Data shape (per section):
  *   { measurements: [ { id, cylinders: string[], status: '', notes: '' } ] }
@@ -43,6 +44,11 @@ export default function SectionGrooveSpecs({
 }) {
   const count = section.cylinder_count || DEFAULT_CYL_COUNT
   const items = section.items || []
+  // Only these items get data-entry charts. If no item is explicitly flagged
+  // (older templates), fall back to Wire Protrusion by name.
+  const entryItems = items.filter(it =>
+    it.entry === true || (it.entry === undefined && /wire protrusion/i.test(it.measurement || ''))
+  )
 
   function setRow(itemId, patch) {
     const base = items.map(item => rowFor(data, item, count))
@@ -60,7 +66,7 @@ export default function SectionGrooveSpecs({
 
   return (
     <div className="space-y-4">
-      {/* Spec reference header */}
+      {/* Spec reference header — all specs live here */}
       <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
         <div className="text-xs font-semibold text-gray-500 mb-1.5">Specifications</div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -75,9 +81,9 @@ export default function SectionGrooveSpecs({
         </div>
       </div>
 
-      {/* One chart per measurement */}
+      {/* Data-entry charts — only for items that require measurement */}
       <div className="space-y-3">
-        {items.map(item => {
+        {entryItems.map(item => {
           const row = rowFor(data, item, count)
           const isFail = row.status === 'F'
           const isAccepted = row.status === 'A'
