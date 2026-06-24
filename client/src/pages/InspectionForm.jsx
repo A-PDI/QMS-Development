@@ -347,12 +347,19 @@ export default function InspectionForm() {
     clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(async () => {
       try {
+        // Keep status in sync while editing: once any item has a disposition (but
+        // not all), the inspection is "Partially Complete"; with none it is a
+        // draft. (A fully-dispositioned inspection is only marked 'complete' via
+        // the explicit Complete action, not autosave.)
+        const dispCount = items.filter(it => getItemDisposition(it)).length
+        const autoStatus = dispCount > 0 && dispCount < items.length ? 'partially_complete' : 'draft'
         await update.mutateAsync({
           id,
           section_data: buildSectionDataPayload(),
-          // Inspection-level disposition is derived from the per-item dispositions.
+          // Overall disposition is only set once every item is dispositioned.
           disposition: deriveOverallDisposition(items),
           item_count: items.length,
+          status: autoStatus,
           ...headerInfo,
         })
         setSaveState('saved')
@@ -775,7 +782,7 @@ export default function InspectionForm() {
             <button
               onClick={handleComplete}
               disabled={complete.isPending || completing}
-              title={complete.isPending ? 'Completing…' : (!completion.allComplete ? 'Select a Disposition for every item to complete (saves as Partially Complete otherwise)' : 'Complete Inspection')}
+              title={complete.isPending ? 'Completing…' : (!completion.allComplete ? 'Disposition required on every item' : 'Complete Inspection')}
               className="p-2 rounded text-pdi-teal hover:bg-teal-50 hover:text-teal-700 disabled:opacity-40 transition-colors flex-shrink-0"
             >
               {complete.isPending || completing ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
@@ -836,7 +843,7 @@ export default function InspectionForm() {
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2">
               <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
               <p className="text-sm text-amber-800">
-                Accepted items detected. When you complete this inspection it will go to Pending Review for admin approval before it can be printed or shared.
+                Accepted items require admin approval before this inspection can be printed or shared.
               </p>
             </div>
           )}
@@ -891,13 +898,8 @@ export default function InspectionForm() {
                 Editing <span className="font-semibold text-gray-700">Item {activeItem + 1}</span> of {items.length}
                 {completion.perItem[activeItem] && (
                   completion.perItem[activeItem].isComplete
-                    ? <span className="text-green-600 font-medium"> · Disposition: {completion.perItem[activeItem].disposition}</span>
-                    : <span className="text-orange-500 font-medium"> · no Disposition selected</span>
-                )}. Each item has its own Disposition; the header is shared across all items.
-                {!completion.allComplete && (
-                  <span className="block mt-0.5 text-orange-600">
-                    Every item needs a Disposition before this inspection can be completed.
-                  </span>
+                    ? <span className="text-green-600 font-medium"> · {completion.perItem[activeItem].disposition}</span>
+                    : <span className="text-orange-500 font-medium"> · no Disposition</span>
                 )}
               </p>
             </div>
@@ -1061,9 +1063,7 @@ export default function InspectionForm() {
                 <div className="flex items-start gap-2 rounded-lg bg-orange-50 border border-orange-200 px-3 py-2.5">
                   <AlertTriangle size={16} className="text-orange-500 flex-shrink-0 mt-0.5" />
                   <p className="text-sm text-orange-800">
-                    {completion.incompleteIndexes.length} of {items.length} item{items.length === 1 ? '' : 's'} {completion.incompleteIndexes.length === 1 ? 'has' : 'have'} no Disposition selected
-                    {items.length > 1 && ` (${completion.incompleteIndexes.map(i => `Item ${i + 1}`).slice(0, 4).join(', ')}${completion.incompleteIndexes.length > 4 ? '…' : ''})`}.
-                    Every item needs a Disposition before the inspection can be completed. You can save it as <span className="font-semibold">Partially Complete</span> for now.
+                    {completion.incompleteIndexes.length} of {items.length} item{items.length === 1 ? '' : 's'} still need a Disposition.
                   </p>
                 </div>
               )}
