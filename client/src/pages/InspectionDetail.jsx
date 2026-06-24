@@ -21,6 +21,7 @@ import SectionVacuumTest from '../components/inspection/SectionVacuumTest'
 import FileUploadZone from '../components/FileUploadZone'
 import { formatDate, formatDateTime, formatFileSize } from '../lib/utils'
 import { HEADER_FIELD_LABELS, DISPOSITION_COLORS } from '../lib/constants'
+import { getItemDisposition } from '../lib/itemCompletion'
 
 const SECTION_COMPONENTS = {
   pfn_checklist: SectionReceiving,
@@ -147,6 +148,10 @@ export default function InspectionDetail() {
       if (k.startsWith('__')) continue
       legacy[k] = rawSectionData[k]
     }
+    // Legacy inspections kept disposition at the inspection level; surface it as
+    // item 0's disposition so the per-item view shows it.
+    if (inspection.disposition) legacy.__disposition = inspection.disposition
+    if (inspection.disposition_notes) legacy.__disposition_notes = inspection.disposition_notes
     itemDataList = [legacy]
   }
   // Attachment key for a given item index (mirrors the form/PDF convention).
@@ -412,11 +417,19 @@ export default function InspectionDetail() {
         )}
 
         {/* Section data — rendered per inspected item */}
-        {itemDataList.map((itemData, itemIdx) => (
+        {itemDataList.map((itemData, itemIdx) => {
+          const itemDisp = getItemDisposition(itemData)
+          const itemDispNotes = (itemData && itemData.__disposition_notes) || ''
+          return (
           <div key={`item-${itemIdx}`} className="space-y-3 sm:space-y-4">
             {itemDataList.length > 1 && (
-              <div className="bg-pdi-navy text-white rounded-xl px-4 sm:px-5 py-2.5 text-sm font-semibold shadow-sm">
-                Item {itemIdx + 1} of {itemDataList.length}
+              <div className="bg-pdi-navy text-white rounded-xl px-4 sm:px-5 py-2.5 text-sm font-semibold shadow-sm flex items-center justify-between gap-2">
+                <span>Item {itemIdx + 1} of {itemDataList.length}</span>
+                {itemDisp && (
+                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${DISPOSITION_COLORS[itemDisp] || 'bg-white text-gray-700 border-gray-300'}`}>
+                    {itemDisp}
+                  </span>
+                )}
               </div>
             )}
             {Object.entries(sections || {}).map(([key, section]) => {
@@ -440,22 +453,40 @@ export default function InspectionDetail() {
                 </div>
               )
             })}
-          </div>
-        ))}
 
-        {/* Disposition */}
-        {inspection.disposition && (
+            {/* Per-item disposition */}
+            {itemDisp && (
+              <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+                <div className="px-4 sm:px-5 py-3 border-b border-gray-100 bg-gray-50">
+                  <h2 className="text-sm font-semibold text-gray-700">
+                    {itemDataList.length > 1 ? `Item ${itemIdx + 1} Disposition` : 'Disposition'}
+                  </h2>
+                </div>
+                <div className="p-4 sm:p-5 space-y-2">
+                  <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold border ${DISPOSITION_COLORS[itemDisp] || 'bg-gray-100 text-gray-700 border-gray-300'}`}>
+                    {itemDisp}
+                  </span>
+                  {itemDispNotes && (
+                    <p className="text-sm text-gray-600 mt-2">{itemDispNotes}</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+          )
+        })}
+
+        {/* Overall disposition (multi-item summary) */}
+        {inspection.disposition && itemDataList.length > 1 && (
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
             <div className="px-4 sm:px-5 py-3 border-b border-gray-100 bg-gray-50">
-              <h2 className="text-sm font-semibold text-gray-700">Disposition</h2>
+              <h2 className="text-sm font-semibold text-gray-700">Overall Disposition</h2>
             </div>
             <div className="p-4 sm:p-5 space-y-2">
               <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold border ${DISPOSITION_COLORS[inspection.disposition] || 'bg-gray-100 text-gray-700 border-gray-300'}`}>
                 {inspection.disposition}
               </span>
-              {inspection.disposition_notes && (
-                <p className="text-sm text-gray-600 mt-2">{inspection.disposition_notes}</p>
-              )}
+              <p className="text-xs text-gray-400 mt-1">Derived from the worst-case item disposition.</p>
             </div>
           </div>
         )}
