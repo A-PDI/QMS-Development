@@ -226,6 +226,8 @@ export default function InspectionList() {
               onChange={e => setFilter('status', e.target.value)} value={filters.status || ''}>
               <option value="">All Statuses</option>
               <option value="draft">Draft</option>
+              <option value="partially_complete">Partially Complete</option>
+              <option value="complete">Complete</option>
               <option value="submitted">Submitted</option>
               <option value="approved">Approved</option>
               <option value="rejected">Rejected</option>

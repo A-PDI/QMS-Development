@@ -152,7 +152,7 @@ export default function InspectionDetail() {
   // Attachment key for a given item index (mirrors the form/PDF convention).
   const attKeyFor = (itemIdx, sectionKey) => (itemIdx === 0 ? sectionKey : `item${itemIdx}__${sectionKey}`)
   const headerFields = typeof template.header_schema === 'string' ? JSON.parse(template.header_schema) : template.header_schema
-  const canEdit = inspection.status === 'draft'
+  const canEdit = inspection.status === 'draft' || inspection.status === 'partially_complete'
 
   async function handleReview(createAlert) {
     setReviewSubmitting(true)
@@ -320,11 +320,11 @@ export default function InspectionDetail() {
           {canEdit && (
             <button
               onClick={() => navigate(`/inspections/${id}/edit`)}
-              title="Edit"
+              title={inspection.status === 'partially_complete' ? 'Continue Inspection' : 'Edit'}
               className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light active:bg-pdi-navy min-h-[40px] flex-shrink-0"
             >
               <Edit size={14} />
-              <span className="hidden sm:inline">Edit</span>
+              <span className="hidden sm:inline">{inspection.status === 'partially_complete' ? 'Continue' : 'Edit'}</span>
             </button>
           )}
           {isAdminRole && canEdit && (
