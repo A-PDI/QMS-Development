@@ -267,6 +267,7 @@ export default function InspectionList() {
                     { label: 'Part Number', col: 'part_number' },
                     { label: 'PO Number', col: 'po_number' },
                     { label: 'Lot / Serial', col: 'lot_serial_no' },
+                    { label: 'Items', col: 'item_count' },
                     { label: 'Inspector', col: 'inspector_name' },
                     { label: 'Date Received', col: 'date_received' },
                     { label: 'Date Started', col: 'created_at' },
@@ -297,9 +298,9 @@ export default function InspectionList() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {isLoading ? (
-                  <tr><td colSpan={isAdminRole ? 10 : 9} className="text-center text-gray-400 py-12">Loading…</td></tr>
+                  <tr><td colSpan={isAdminRole ? 11 : 10} className="text-center text-gray-400 py-12">Loading…</td></tr>
                 ) : inspections.length === 0 ? (
-                  <tr><td colSpan={isAdminRole ? 10 : 9} className="text-center text-gray-400 py-12">No inspections found</td></tr>
+                  <tr><td colSpan={isAdminRole ? 11 : 10} className="text-center text-gray-400 py-12">No inspections found</td></tr>
                 ) : inspections.map(insp => (
                   <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-blue-50/50 cursor-pointer">
                     <td className="px-4 py-3">
@@ -309,6 +310,7 @@ export default function InspectionList() {
                     <td className="px-4 py-3 font-mono text-xs">{insp.part_number || '—'}</td>
                     <td className="px-4 py-3 font-mono text-xs">{insp.po_number || '—'}</td>
                     <td className="px-4 py-3 font-mono text-xs">{insp.lot_serial_no || '—'}</td>
+                    <td className="px-4 py-3 text-sm text-center">{insp.item_count || 1}</td>
                     <td className="px-4 py-3 text-sm">{insp.inspector_name || '—'}</td>
                     <td className="px-4 py-3 text-sm text-gray-500">{formatDate(insp.date_received)}</td>
                     <td className="px-4 py-3 text-sm text-gray-500">{formatDate(insp.created_at)}</td>
@@ -372,6 +374,7 @@ export default function InspectionList() {
                     <div className="min-w-0 truncate"><span className="text-gray-400">Part: </span><span className="font-mono text-gray-700">{insp.part_number || '—'}</span></div>
                     <div className="min-w-0 truncate"><span className="text-gray-400">PO: </span><span className="font-mono text-gray-700">{insp.po_number || '—'}</span></div>
                     <div className="min-w-0 truncate"><span className="text-gray-400">Lot/Serial: </span><span className="font-mono text-gray-700">{insp.lot_serial_no || '—'}</span></div>
+                    <div className="min-w-0 truncate"><span className="text-gray-400">Items: </span><span className="text-gray-700">{insp.item_count || 1}</span></div>
                     <div className="min-w-0 truncate"><span className="text-gray-400">By: </span><span className="text-gray-700">{insp.inspector_name || '—'}</span></div>
                     <div className="min-w-0 truncate"><span className="text-gray-400">Received: </span><span className="text-gray-500">{formatDate(insp.date_received)}</span></div>
                   </div>

@@ -129,10 +129,28 @@ export default function InspectionDetail() {
   if (loadingInsp || loadingTpl) return <div className="p-4 sm:p-6 text-gray-400">Loading…</div>
   if (!inspection || !template) return <div className="p-4 sm:p-6 text-red-500">Not found</div>
 
-  const sections = typeof template.sections === 'string' ? JSON.parse(template.sections) : template.sections
-  const sectionData = typeof inspection.section_data === 'string'
+  const rawSectionData = typeof inspection.section_data === 'string'
     ? JSON.parse(inspection.section_data || '{}')
     : (inspection.section_data || {})
+  // Admin section overrides (if any) take priority over the template default.
+  const sections = (rawSectionData.__admin_sections && typeof rawSectionData.__admin_sections === 'object')
+    ? rawSectionData.__admin_sections
+    : (typeof template.sections === 'string' ? JSON.parse(template.sections) : template.sections)
+  // Build the per-item list. New inspections store answers under __items;
+  // legacy inspections keep answers as top-level section keys (= item 0).
+  let itemDataList
+  if (Array.isArray(rawSectionData.__items) && rawSectionData.__items.length > 0) {
+    itemDataList = rawSectionData.__items
+  } else {
+    const legacy = {}
+    for (const k of Object.keys(rawSectionData)) {
+      if (k.startsWith('__')) continue
+      legacy[k] = rawSectionData[k]
+    }
+    itemDataList = [legacy]
+  }
+  // Attachment key for a given item index (mirrors the form/PDF convention).
+  const attKeyFor = (itemIdx, sectionKey) => (itemIdx === 0 ? sectionKey : `item${itemIdx}__${sectionKey}`)
   const headerFields = typeof template.header_schema === 'string' ? JSON.parse(template.header_schema) : template.header_schema
   const canEdit = inspection.status === 'draft'
 
@@ -393,28 +411,37 @@ export default function InspectionDetail() {
           </div>
         )}
 
-        {/* Section data */}
-        {Object.entries(sections || {}).map(([key, section]) => {
-          const SectionComp = SECTION_COMPONENTS[section.section_type]
-          if (!SectionComp) return null
-          return (
-            <div key={key} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-              <div className="px-4 sm:px-5 py-3 border-b border-gray-100 bg-gray-50">
-                <h2 className="text-sm font-semibold text-gray-700">{section.title || key}</h2>
+        {/* Section data — rendered per inspected item */}
+        {itemDataList.map((itemData, itemIdx) => (
+          <div key={`item-${itemIdx}`} className="space-y-3 sm:space-y-4">
+            {itemDataList.length > 1 && (
+              <div className="bg-pdi-navy text-white rounded-xl px-4 sm:px-5 py-2.5 text-sm font-semibold shadow-sm">
+                Item {itemIdx + 1} of {itemDataList.length}
               </div>
-              <div className="p-4 sm:p-5">
-                <SectionComp
-                  section={section}
-                  data={sectionData[key]}
-                  onChange={() => {}}
-                  readOnly={true}
-                  sectionKey={key}
-                  attachments={attachments}
-                />
-              </div>
-            </div>
-          )
-        })}
+            )}
+            {Object.entries(sections || {}).map(([key, section]) => {
+              const SectionComp = SECTION_COMPONENTS[section.section_type]
+              if (!SectionComp) return null
+              return (
+                <div key={key} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+                  <div className="px-4 sm:px-5 py-3 border-b border-gray-100 bg-gray-50">
+                    <h2 className="text-sm font-semibold text-gray-700">{section.title || key}</h2>
+                  </div>
+                  <div className="p-4 sm:p-5">
+                    <SectionComp
+                      section={section}
+                      data={itemData[key]}
+                      onChange={() => {}}
+                      readOnly={true}
+                      sectionKey={attKeyFor(itemIdx, key)}
+                      attachments={attachments}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ))}
 
         {/* Disposition */}
         {inspection.disposition && (
