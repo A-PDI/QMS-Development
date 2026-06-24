@@ -14,7 +14,7 @@ export const COMPONENT_TYPE_LABELS = {
 
 export const STATUS_LABELS = {
   draft:               'Open',
-  partially_complete:  'Partially Complete',
+  partially_complete:  'Partially Completed',
   complete:            'Complete',
   submitted:           'Complete',
   approved:            'Complete',

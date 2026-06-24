@@ -40,11 +40,17 @@ export function getItemsCompletion(items) {
 /**
  * Derive the overall inspection disposition from the per-item dispositions.
  * Worst-case wins: any FAIL → FAIL, else any ACCEPTED → ACCEPTED, else PASS.
- * Returns '' if no item has a disposition yet.
+ *
+ * Returns '' unless EVERY item has a disposition — a partially-completed
+ * inspection has no overall pass/fail result yet, so the list/PDF shouldn't
+ * show one until all items are done.
  */
 export function deriveOverallDisposition(items) {
-  const dispositions = (items || []).map(getItemDisposition).filter(Boolean)
-  if (dispositions.length === 0) return ''
+  const list = items || []
+  if (list.length === 0) return ''
+  const dispositions = list.map(getItemDisposition)
+  // Not all items dispositioned yet → no overall result.
+  if (dispositions.some(d => !d)) return ''
   if (dispositions.includes('FAIL') || dispositions.includes('REJECT')) return 'FAIL'
   if (dispositions.includes('ACCEPTED') || dispositions.includes('CONDITIONAL')) return 'ACCEPTED'
   return 'PASS'
