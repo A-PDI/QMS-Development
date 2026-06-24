@@ -262,6 +262,17 @@ function applyMigrations(db) {
       }
     }
   });
+
+  // ── Migration: multi-item inspection support ──────────────────────────────
+  // Adds an item_count column so a single inspection record can represent
+  // multiple inspected items. Per-item answers live in section_data.__items
+  // (an array); item_count tracks how many items the inspection covers.
+  once('add_item_count_column', () => {
+    const cols = db.all('PRAGMA table_info(inspections)', []).map(c => c.name);
+    if (!cols.includes('item_count')) {
+      db.run('ALTER TABLE inspections ADD COLUMN item_count INTEGER NOT NULL DEFAULT 1');
+    }
+  });
 }
 
 module.exports = { applyMigrations };

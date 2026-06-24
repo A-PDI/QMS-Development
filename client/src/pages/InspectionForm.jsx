@@ -209,7 +209,26 @@ export default function InspectionForm() {
   const uploadFile = useUploadAttachment()
   const deleteFile = useDeleteAttachment()
 
-  const [sectionData, setSectionData] = useState({})
+  // Per-item section data. `items` is an array (one entry per inspected item);
+  // `activeItem` is the index currently being edited. Control flags such as
+  // __dimensional_added / __admin_sections live at the top level (shared across
+  // items) and are stored in `sharedFlags`.
+  const [items, setItems] = useState([{}])
+  const [activeItem, setActiveItem] = useState(0)
+  const [sharedFlags, setSharedFlags] = useState({})
+  // The active item's section data (what the section components read/write).
+  const sectionData = items[activeItem] || {}
+  // Setter scoped to the active item — accepts a value or updater fn, mirroring
+  // the previous setSectionData(d => ...) call sites.
+  const setSectionData = useCallback((updater) => {
+    setItems(prev => {
+      const idx = activeItemRef.current
+      const next = prev.slice()
+      const current = next[idx] || {}
+      next[idx] = typeof updater === 'function' ? updater(current) : updater
+      return next
+    })
+  }, [])
   const [disposition, setDisposition] = useState('')
   const [dispositionNotes, setDispositionNotes] = useState('')
   // Editable inspection header info (part #, PO, lot/serial, date received, inspector)
@@ -227,6 +246,8 @@ export default function InspectionForm() {
   const saveTimer = useRef(null)
   const initialLoad = useRef(true)
   const bulkUploadRef = useRef(null)
+  const activeItemRef = useRef(0)
+  useEffect(() => { activeItemRef.current = activeItem }, [activeItem])
 
   // Admin section-editing state
   const isAdmin = ['admin', 'qc_manager'].includes(currentUser?.role)
@@ -246,11 +267,40 @@ export default function InspectionForm() {
     const sections = typeof template.sections === 'string'
       ? JSON.parse(template.sections)
       : template.sections
-    const fresh = initSectionData(sections)
     const saved = typeof inspection.section_data === 'string'
       ? JSON.parse(inspection.section_data || '{}')
       : (inspection.section_data || {})
-    setSectionData(mergeSectionData(saved, fresh))
+
+    // Extract shared control flags (kept once, applied to all items).
+    const flags = {}
+    if (saved.__dimensional_added) flags.__dimensional_added = true
+    if (saved.__admin_sections) flags.__admin_sections = saved.__admin_sections
+    setSharedFlags(flags)
+
+    // Build the per-item list. New format stores answers under `__items`;
+    // legacy inspections keep answers as top-level section keys (= item 0).
+    let savedItems
+    if (Array.isArray(saved.__items)) {
+      savedItems = saved.__items
+    } else {
+      const legacy = {}
+      for (const k of Object.keys(saved)) {
+        if (k.startsWith('__')) continue
+        legacy[k] = saved[k]
+      }
+      savedItems = [legacy]
+    }
+
+    // Reconcile the item list length with the inspection's item_count, merging
+    // each item's saved answers onto a fresh template so missing keys are filled.
+    const count = Math.max(1, parseInt(inspection.item_count, 10) || savedItems.length || 1)
+    const built = []
+    for (let i = 0; i < count; i++) {
+      built.push(mergeSectionData(savedItems[i] || {}, initSectionData(sections)))
+    }
+    setItems(built)
+    setActiveItem(0)
+
     setDisposition(inspection.disposition || '')
     setDispositionNotes(inspection.disposition_notes || '')
     setHeaderInfo({
@@ -260,9 +310,9 @@ export default function InspectionForm() {
       date_received: (inspection.date_received || '').slice(0, 10),
       inspector_name: inspection.inspector_name || '',
     })
-    if (saved.__dimensional_added) setDimensionalAdded(true)
+    if (flags.__dimensional_added) setDimensionalAdded(true)
     // Restore admin section customisations
-    if (saved.__admin_sections) setCustomSections(saved.__admin_sections)
+    if (flags.__admin_sections) setCustomSections(flags.__admin_sections)
     initialLoad.current = false
   }, [template?.id, inspection?.id])
 
@@ -274,9 +324,10 @@ export default function InspectionForm() {
       try {
         await update.mutateAsync({
           id,
-          section_data: sectionData,
+          section_data: buildSectionDataPayload(),
           disposition,
           disposition_notes: dispositionNotes,
+          item_count: items.length,
           ...headerInfo,
         })
         setSaveState('saved')
@@ -285,15 +336,28 @@ export default function InspectionForm() {
         setSaveState('error')
       }
     }, 600)
-  }, [id, sectionData, disposition, dispositionNotes, headerInfo])
+  }, [id, items, sharedFlags, disposition, dispositionNotes, headerInfo])
 
   useEffect(() => {
     if (!initialLoad.current) debouncedSave()
-  }, [sectionData, disposition, dispositionNotes, headerInfo])
+  }, [items, sharedFlags, disposition, dispositionNotes, headerInfo])
 
   function handleAddDimensional() {
     setDimensionalAdded(true)
-    setSectionData(d => ({ ...d, __dimensional_added: true }))
+    setSharedFlags(f => ({ ...f, __dimensional_added: true }))
+  }
+
+  // Build the persisted section_data blob: shared control flags + the per-item
+  // answers under __items.
+  function buildSectionDataPayload() {
+    return { ...sharedFlags, __items: items }
+  }
+
+  // Attachments are scoped per item. Item 0 keeps the raw section key (so
+  // existing single-item inspections keep their images); items 1+ get a
+  // namespaced key so each item's images stay distinct.
+  function attachmentKeyFor(itemIdx, sectionKey) {
+    return itemIdx === 0 ? sectionKey : `item${itemIdx}__${sectionKey}`
   }
 
   async function handleUpload(files) {
@@ -363,8 +427,8 @@ export default function InspectionForm() {
     setCustomSections(prev => {
       const current = prev ?? rawSections
       const next = updater(current)
-      // Persist into sectionData so auto-save captures it
-      setSectionData(d => ({ ...d, __admin_sections: next }))
+      // Persist into shared flags so auto-save captures it (shared across items)
+      setSharedFlags(f => ({ ...f, __admin_sections: next }))
       return next
     })
   }
@@ -443,23 +507,28 @@ export default function InspectionForm() {
       return
     }
 
-    // Validate: Fail and Accepted items need description + image
+    // Validate: Fail and Accepted items need description + image (across all items)
     const itemErrors = []
-    for (const [key, section] of Object.entries(effectiveSections)) {
-      const sectionArr = Array.isArray(sectionData[key]) ? sectionData[key] : []
-      if (section.section_type === 'pass_fail_checklist' || section.section_type === 'pfn_checklist') {
-        for (const row of sectionArr) {
-          const resultField = row.result !== undefined ? row.result : (row.status || '')
-          const descField = row.notes || row.finding || ''
-          const isFail = resultField === 'F' || row.fail === true
-          const isAcc = resultField === 'A'
-          if (isFail || isAcc) {
-            const hasImg = attachments.some(a => a.section_key === key && String(a.item_id) === String(row.id))
-            if (!hasImg || !descField.trim()) itemErrors.push(`"${section.title}" \u2014 Item #${row.id}`)
+    const multiItem = items.length > 1
+    items.forEach((itemData, itemIdx) => {
+      for (const [key, section] of Object.entries(effectiveSections)) {
+        const sectionArr = Array.isArray(itemData[key]) ? itemData[key] : []
+        if (section.section_type === 'pass_fail_checklist' || section.section_type === 'pfn_checklist') {
+          for (const row of sectionArr) {
+            const resultField = row.result !== undefined ? row.result : (row.status || '')
+            const descField = row.notes || row.finding || ''
+            const isFail = resultField === 'F' || row.fail === true
+            const isAcc = resultField === 'A'
+            if (isFail || isAcc) {
+              const attKey = attachmentKeyFor(itemIdx, key)
+              const hasImg = attachments.some(a => a.section_key === attKey && String(a.item_id) === String(row.id))
+              const itemLabel = multiItem ? `Item ${itemIdx + 1} \u2014 ` : ''
+              if (!hasImg || !descField.trim()) itemErrors.push(`${itemLabel}"${section.title}" \u2014 #${row.id}`)
+            }
           }
         }
       }
-    }
+    })
 
     if (itemErrors.length > 0) {
       const extra = itemErrors.length > 1 ? ` (+${itemErrors.length - 1} more)` : ''
@@ -470,9 +539,11 @@ export default function InspectionForm() {
     setCompleting(true)
     clearTimeout(saveTimer.current)
     try {
-      await update.mutateAsync({ id, section_data: sectionData, disposition, disposition_notes: dispositionNotes, ...headerInfo })
-      const hasAccepted = Object.entries(sectionData).some(([, rows]) =>
-        Array.isArray(rows) && rows.some(r => r.result === 'A' || r.status === 'A')
+      await update.mutateAsync({ id, section_data: buildSectionDataPayload(), disposition, disposition_notes: dispositionNotes, item_count: items.length, ...headerInfo })
+      const hasAccepted = items.some(itemData =>
+        Object.entries(itemData).some(([, rows]) =>
+          Array.isArray(rows) && rows.some(r => r.result === 'A' || r.status === 'A')
+        )
       )
       const result = await complete.mutateAsync(id)
       const wasPendingReview = result?.pending_review === true
@@ -685,11 +756,56 @@ export default function InspectionForm() {
         <div className="max-w-[1440px] mx-auto p-3 sm:p-6 space-y-3 sm:space-y-4">
 
           {/* Accepted items notice for non-admins */}
-          {!isAdminRole && detectAcceptedItems(sectionData) && (
+          {!isAdminRole && items.some(detectAcceptedItems) && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2">
               <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
               <p className="text-sm text-amber-800">
                 Accepted items detected. When you complete this inspection it will go to Pending Review for admin approval before it can be printed or shared.
+              </p>
+            </div>
+          )}
+
+          {/* Item navigation — one tab per inspected item */}
+          {items.length > 1 && (
+            <div className="bg-white rounded-xl border border-gray-200 px-3 py-2.5 sticky top-0 z-[5]">
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide flex-shrink-0 pr-1">
+                  Items ({items.length})
+                </span>
+                {items.map((_, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setActiveItem(idx)}
+                    className={`flex-shrink-0 px-3.5 py-1.5 text-xs font-medium rounded-lg border transition-colors min-h-[34px] ${
+                      activeItem === idx
+                        ? 'bg-pdi-navy text-white border-pdi-navy'
+                        : 'bg-white text-gray-600 border-gray-200 hover:border-pdi-navy/40 hover:bg-pdi-frost'
+                    }`}
+                  >
+                    Item {idx + 1}
+                  </button>
+                ))}
+                <div className="flex-1" />
+                <button
+                  type="button"
+                  disabled={activeItem === 0}
+                  onClick={() => setActiveItem(i => Math.max(0, i - 1))}
+                  className="flex-shrink-0 px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 min-h-[34px]"
+                >
+                  ‹ Prev
+                </button>
+                <button
+                  type="button"
+                  disabled={activeItem === items.length - 1}
+                  onClick={() => setActiveItem(i => Math.min(items.length - 1, i + 1))}
+                  className="flex-shrink-0 px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 min-h-[34px]"
+                >
+                  Next ›
+                </button>
+              </div>
+              <p className="mt-1.5 text-[11px] text-gray-500">
+                Editing <span className="font-semibold text-gray-700">Item {activeItem + 1}</span> of {items.length}. The inspection header is shared across all items.
               </p>
             </div>
           )}
@@ -718,7 +834,7 @@ export default function InspectionForm() {
                   data={sectionData[key]}
                   onChange={val => setSectionData(d => ({ ...d, [key]: val }))}
                   {...(supportsImages ? {
-                    sectionKey: key,
+                    sectionKey: attachmentKeyFor(activeItem, key),
                     attachments,
                     onUploadItem: handleItemUpload,
                     onDeleteItem: handleDeleteFile,

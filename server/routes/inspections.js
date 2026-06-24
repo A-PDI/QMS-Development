@@ -39,7 +39,7 @@ router.get('/', (req, res, next) => {
       limit = 20,
     } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
-    let sql = `SELECT id, template_id, component_type, form_no, part_number, po_number, supplier, lot_serial_no, date_received, inspector_name, lot_size, sample_size, disposition, status, created_at, completed_at, due_date, assigned_to, assigned_at FROM inspections WHERE 1=1`;
+    let sql = `SELECT id, template_id, component_type, form_no, part_number, po_number, supplier, lot_serial_no, date_received, inspector_name, lot_size, sample_size, disposition, status, item_count, created_at, completed_at, due_date, assigned_to, assigned_at FROM inspections WHERE 1=1`;
     const params = [];
     if (status) { sql += ' AND status = ?'; params.push(status); }
     if (component_type) { sql += ' AND component_type = ?'; params.push(component_type); }
@@ -63,6 +63,7 @@ router.get('/', (req, res, next) => {
       created_at: 'created_at',
       status: 'status',
       disposition: 'disposition',
+      item_count: 'item_count',
     };
     const sortCol = SORTABLE[sort_by] || 'created_at';
     const sortDir = String(sort_dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
@@ -79,7 +80,7 @@ router.get('/', (req, res, next) => {
 router.get('/assigned', (req, res, next) => {
   try {
     const inspections = db.all(
-      `SELECT id, template_id, component_type, form_no, part_number, po_number, supplier, lot_serial_no, date_received, inspector_name, lot_size, sample_size, disposition, status, created_at, completed_at, due_date, assigned_to, assigned_at
+      `SELECT id, template_id, component_type, form_no, part_number, po_number, supplier, lot_serial_no, date_received, inspector_name, lot_size, sample_size, disposition, status, item_count, created_at, completed_at, due_date, assigned_to, assigned_at
        FROM inspections
        WHERE assigned_to = ? AND status != 'complete'
        ORDER BY due_date ASC, created_at DESC`,
@@ -94,6 +95,10 @@ router.post('/', (req, res, next) => {
   try {
     const { template_id, part_number, supplier, po_number, description, date_received, inspector_name, lot_size, aql_level, sample_size, lot_serial_no, signature, assigned_to, due_date } = req.body;
     if (!template_id) return next(new AppError('template_id is required', 400, 'VALIDATION_ERROR'));
+    // Number of items being inspected (clamped to a sane range).
+    let itemCount = parseInt(req.body.item_count, 10);
+    if (!Number.isFinite(itemCount) || itemCount < 1) itemCount = 1;
+    if (itemCount > 100) itemCount = 100;
     const template = db.get('SELECT * FROM inspection_templates WHERE id = ?', [template_id]);
     if (!template) return next(new AppError('Template not found', 404, 'NOT_FOUND'));
     if (assigned_to) {
@@ -102,11 +107,11 @@ router.post('/', (req, res, next) => {
     }
     const inspectionId = uuidv4();
     const now = new Date().toISOString();
-    db.run(`INSERT INTO inspections (id, template_id, component_type, form_no, part_number, supplier, po_number, description, date_received, inspector_name, lot_size, aql_level, sample_size, lot_serial_no, signature, status, created_by, assigned_to, assigned_at, assigned_by, due_date, created_at, updated_at, section_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    db.run(`INSERT INTO inspections (id, template_id, component_type, form_no, part_number, supplier, po_number, description, date_received, inspector_name, lot_size, aql_level, sample_size, lot_serial_no, signature, status, item_count, created_by, assigned_to, assigned_at, assigned_by, due_date, created_at, updated_at, section_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [inspectionId, template_id, template.component_type, template.form_no,
        part_number || null, supplier || null, po_number || null, description || null,
        date_received || null, inspector_name || null, lot_size || null, aql_level || null,
-       sample_size || null, lot_serial_no || null, signature || null,
+       sample_size || null, lot_serial_no || null, signature || null, itemCount,
        req.user.id, assigned_to || null, assigned_to ? now : null,
        assigned_to ? req.user.id : null, due_date || null, now, now, JSON.stringify({})]
     );
@@ -165,7 +170,7 @@ router.patch('/:id', (req, res, next) => {
     const scalarFields = [
       'part_number', 'supplier', 'po_number', 'description', 'date_received',
       'inspector_name', 'lot_size', 'aql_level', 'sample_size', 'lot_serial_no',
-      'signature', 'disposition', 'status', 'due_date',
+      'signature', 'disposition', 'status', 'due_date', 'item_count',
     ];
     for (const f of scalarFields) {
       if (req.body[f] !== undefined) { updates.push(`${f} = ?`); values.push(req.body[f]); }

@@ -30,7 +30,7 @@ export default function NewInspection() {
   })()
   const canCreateNew = isAdminRole || !userPerms || (Array.isArray(userPerms?.tabs) && userPerms.tabs.includes('new_inspection'))
   const [templateId, setTemplateId] = useState('')
-  const [form, setForm] = useState({ inspector_name: currentUser?.name || '' })
+  const [form, setForm] = useState({ inspector_name: currentUser?.name || '', item_count: 1 })
   const [submitting, setSubmitting] = useState(false)
   // Tracks which fields were auto-filled from a known part number (for hints).
   const [autoFilled, setAutoFilled] = useState({ description: false, template: false })
@@ -77,7 +77,8 @@ export default function NewInspection() {
     }
     setSubmitting(true)
     try {
-      const inspection = await create.mutateAsync({ template_id: templateId, ...form })
+      const itemCount = Math.min(100, Math.max(1, parseInt(form.item_count, 10) || 1))
+      const inspection = await create.mutateAsync({ template_id: templateId, ...form, item_count: itemCount })
       navigate(`/inspections/${inspection.id}/edit`)
     } catch (err) {
       showToast(err?.response?.data?.error || err.message || 'Failed to create inspection', 'error')
@@ -188,6 +189,29 @@ export default function NewInspection() {
               </button>
             </div>
           )}
+
+          {/* Number of Items — how many items this inspection covers */}
+          <div>
+            <label htmlFor="field-item_count" className="block text-xs font-semibold text-gray-700 mb-1">
+              Number of Items <span className="text-red-400">*</span>
+            </label>
+            <input
+              id="field-item_count"
+              type="number"
+              min={1}
+              max={100}
+              step={1}
+              required
+              value={form.item_count}
+              onChange={e => setForm(f => ({ ...f, item_count: e.target.value }))}
+              onBlur={e => {
+                const n = Math.min(100, Math.max(1, parseInt(e.target.value, 10) || 1))
+                setForm(f => ({ ...f, item_count: n }))
+              }}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pdi-navy min-h-[40px]"
+            />
+            <p className="mt-1 text-[11px] text-gray-500">A separate inspection form is created for each item; the header stays the same.</p>
+          </div>
 
           {/* Remaining header fields — single column on mobile, two columns on sm+ */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

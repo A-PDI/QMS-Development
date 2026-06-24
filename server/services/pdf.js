@@ -48,42 +48,71 @@ function generateInspectionPdf(inspection, template, attachments = []) {
 
       // ── Sections ──────────────────────────────────────────────────────────
       const sd      = inspection.section_data || {};
-      const secDefs = template.sections        || {};
-      const itemAtts    = attachments.filter(a => a.section_key);
       const generalAtts = attachments.filter(a => !a.section_key);
 
-      for (const [key, def] of Object.entries(secDefs)) {
-        if (key === '__dimensional_added') continue;
-        if (def.optional && !sd.__dimensional_added) continue;
+      // Resolve admin section overrides (stored in shared flags).
+      const secDefs = (sd.__admin_sections && typeof sd.__admin_sections === 'object')
+        ? sd.__admin_sections
+        : (template.sections || {});
 
-        const data     = sd[key];
-        const secAtts  = itemAtts.filter(a => a.section_key === key);
-
-        switch (def.section_type) {
-          case 'pfn_checklist':
-            renderPfnChecklist(doc, def, data, secAtts); break;
-          case 'pfn_visual':
-            renderPfnVisual(doc, def, data, secAtts); break;
-          case 'dimensional':
-            renderDimensional(doc, def, data, secAtts); break;
-          case 'pass_fail_checklist':
-            renderPassFail(doc, def, data, secAtts); break;
-          case 'general_measurements':
-            renderGeneralMeasurements(doc, def, data, secAtts); break;
-          case 'groove_specs':
-            renderGrooveSpecs(doc, def, data, secAtts); break;
-          case 'camshaft_bore':
-            renderCamshaftBore(doc, def, data, secAtts); break;
-          case 'fire_ring_protrusion':
-            renderFireRing(doc, def, data, secAtts); break;
-          case 'valve_recession':
-            renderValveRecession(doc, def, data, secAtts); break;
-          case 'vacuum_test':
-            renderVacuumTest(doc, def, data, secAtts); break;
-          default: break;
+      // Build the per-item list. New inspections store answers under __items;
+      // legacy inspections keep answers as top-level section keys (= item 0).
+      let itemList;
+      if (Array.isArray(sd.__items) && sd.__items.length > 0) {
+        itemList = sd.__items;
+      } else {
+        const legacy = {};
+        for (const k of Object.keys(sd)) {
+          if (k.startsWith('__')) continue;
+          legacy[k] = sd[k];
         }
-        vspace(doc, 8);
+        itemList = [legacy];
       }
+      const dimensionalAdded = !!sd.__dimensional_added;
+
+      itemList.forEach((itemData, itemIdx) => {
+        // Each item after the first starts on a fresh page with its own header.
+        if (itemIdx > 0) doc.addPage();
+        if (itemList.length > 1) {
+          renderItemBanner(doc, itemIdx + 1, itemList.length);
+        }
+
+        for (const [key, def] of Object.entries(secDefs)) {
+          if (key.startsWith('__')) continue;
+          if (def.optional && !dimensionalAdded) continue;
+
+          const data    = (itemData && typeof itemData === 'object') ? itemData[key] : undefined;
+          // Attachments are scoped per item: item 0 uses the raw key, items 1+
+          // use the namespaced `item{N}__{key}` form (mirrors the client).
+          const attKey  = itemIdx === 0 ? key : `item${itemIdx}__${key}`;
+          const secAtts = attachments.filter(a => a.section_key === attKey);
+
+          switch (def.section_type) {
+            case 'pfn_checklist':
+              renderPfnChecklist(doc, def, data, secAtts); break;
+            case 'pfn_visual':
+              renderPfnVisual(doc, def, data, secAtts); break;
+            case 'dimensional':
+              renderDimensional(doc, def, data, secAtts); break;
+            case 'pass_fail_checklist':
+              renderPassFail(doc, def, data, secAtts); break;
+            case 'general_measurements':
+              renderGeneralMeasurements(doc, def, data, secAtts); break;
+            case 'groove_specs':
+              renderGrooveSpecs(doc, def, data, secAtts); break;
+            case 'camshaft_bore':
+              renderCamshaftBore(doc, def, data, secAtts); break;
+            case 'fire_ring_protrusion':
+              renderFireRing(doc, def, data, secAtts); break;
+            case 'valve_recession':
+              renderValveRecession(doc, def, data, secAtts); break;
+            case 'vacuum_test':
+              renderVacuumTest(doc, def, data, secAtts); break;
+            default: break;
+          }
+          vspace(doc, 8);
+        }
+      });
 
       // ── Final disposition ─────────────────────────────────────────────────
       if (inspection.disposition) {
@@ -339,6 +368,19 @@ function renderInfoGrid(doc, inspection) {
   });
 
   doc.y = startY + rows * rowH + 2;
+}
+
+/**
+ * Render an item banner (e.g. "ITEM 2 OF 5") at the top of a multi-item page.
+ */
+function renderItemBanner(doc, itemNo, totalItems) {
+  const h = 22;
+  const y = doc.y;
+  doc.rect(M, y, PW, h).fillColor(NAVY).fill();
+  doc.fontSize(10).font('Helvetica-Bold').fillColor(WHITE);
+  put(doc, `ITEM ${itemNo} OF ${totalItems}`, M + 10, y + 6, {
+    width: PW - 20, lineBreak: false,
+  }, y + h + 6);
 }
 
 /**
