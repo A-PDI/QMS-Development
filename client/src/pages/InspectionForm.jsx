@@ -22,7 +22,7 @@ import SectionGrooveSpecs from '../components/inspection/SectionGrooveSpecs'
 import FileUploadZone from '../components/FileUploadZone'
 import AuthImage from '../components/AuthImage'
 import { initSectionData, mergeSectionData, formatFileSize } from '../lib/utils'
-import { getItemsCompletion } from '../lib/itemCompletion'
+import { getItemsCompletion, deriveOverallDisposition, getItemDisposition, ITEM_DISPOSITION_KEY } from '../lib/itemCompletion'
 import { DISPOSITION_COLORS, HEADER_FIELD_LABELS, COMPONENT_TYPE_LABELS } from '../lib/constants'
 
 // Statuses that are still editable in the inspection form (not yet finalized).
@@ -233,8 +233,17 @@ export default function InspectionForm() {
       return next
     })
   }, [])
-  const [disposition, setDisposition] = useState('')
-  const [dispositionNotes, setDispositionNotes] = useState('')
+  // Disposition is now PER ITEM. The active item's disposition + notes are read
+  // from its section_data (__disposition / __disposition_notes) and written back
+  // via these setters. An item is "complete" once its disposition is selected.
+  const disposition = sectionData[ITEM_DISPOSITION_KEY] || ''
+  const dispositionNotes = sectionData.__disposition_notes || ''
+  const setDisposition = useCallback((val) => {
+    setSectionData(d => ({ ...d, [ITEM_DISPOSITION_KEY]: val }))
+  }, [setSectionData])
+  const setDispositionNotes = useCallback((val) => {
+    setSectionData(d => ({ ...d, __disposition_notes: val }))
+  }, [setSectionData])
   // Editable inspection header info (part #, PO, lot/serial, date received, inspector)
   const [headerInfo, setHeaderInfo] = useState({
     part_number: '', po_number: '', lot_serial_no: '', date_received: '', inspector_name: '',
@@ -300,13 +309,25 @@ export default function InspectionForm() {
     const count = Math.max(1, parseInt(inspection.item_count, 10) || savedItems.length || 1)
     const built = []
     for (let i = 0; i < count; i++) {
-      built.push(mergeSectionData(savedItems[i] || {}, initSectionData(sections)))
+      const savedItem = savedItems[i] || {}
+      const merged = mergeSectionData(savedItem, initSectionData(sections))
+      // Preserve each item's own disposition + notes (control keys, not template
+      // sections, so they aren't included by mergeSectionData).
+      if (savedItem[ITEM_DISPOSITION_KEY] !== undefined) merged[ITEM_DISPOSITION_KEY] = savedItem[ITEM_DISPOSITION_KEY]
+      if (savedItem.__disposition_notes !== undefined) merged.__disposition_notes = savedItem.__disposition_notes
+      built.push(merged)
+    }
+    // Backward compat: if item 0 has no disposition yet but the inspection has a
+    // legacy inspection-level disposition, seed it onto item 0.
+    if (built[0] && !built[0][ITEM_DISPOSITION_KEY] && inspection.disposition) {
+      built[0][ITEM_DISPOSITION_KEY] = inspection.disposition
+      if (inspection.disposition_notes && !built[0].__disposition_notes) {
+        built[0].__disposition_notes = inspection.disposition_notes
+      }
     }
     setItems(built)
     setActiveItem(0)
 
-    setDisposition(inspection.disposition || '')
-    setDispositionNotes(inspection.disposition_notes || '')
     setHeaderInfo({
       part_number: inspection.part_number || '',
       po_number: inspection.po_number || '',
@@ -329,8 +350,8 @@ export default function InspectionForm() {
         await update.mutateAsync({
           id,
           section_data: buildSectionDataPayload(),
-          disposition,
-          disposition_notes: dispositionNotes,
+          // Inspection-level disposition is derived from the per-item dispositions.
+          disposition: deriveOverallDisposition(items),
           item_count: items.length,
           ...headerInfo,
         })
@@ -340,11 +361,11 @@ export default function InspectionForm() {
         setSaveState('error')
       }
     }, 600)
-  }, [id, items, sharedFlags, disposition, dispositionNotes, headerInfo])
+  }, [id, items, sharedFlags, headerInfo])
 
   useEffect(() => {
     if (!initialLoad.current) debouncedSave()
-  }, [items, sharedFlags, disposition, dispositionNotes, headerInfo])
+  }, [items, sharedFlags, headerInfo])
 
   function handleAddDimensional() {
     setDimensionalAdded(true)
@@ -508,13 +529,12 @@ export default function InspectionForm() {
       await update.mutateAsync({
         id,
         section_data: buildSectionDataPayload(),
-        disposition,
-        disposition_notes: dispositionNotes,
+        disposition: deriveOverallDisposition(items),
         item_count: items.length,
         status: 'partially_complete',
         ...headerInfo,
       })
-      showToast('Saved as Partially Complete — finish the remaining items to complete the inspection.', 'info')
+      showToast('Saved as Partially Complete — set a Disposition on the remaining items to complete the inspection.', 'info')
       navigate(`/inspections/${id}`)
     } catch (err) {
       showToast(err?.response?.data?.error || err.message || 'Save failed', 'error')
@@ -524,28 +544,38 @@ export default function InspectionForm() {
   }
 
   async function handleComplete() {
-    // Gate 1: every item must be fully filled in. If not, the inspection cannot
-    // be completed — it is saved as "Partially Complete" instead.
-    const itemCompletion = getItemsCompletion(items, effectiveSections, dimensionalAdded)
+    // Gate 1: every item must have a Disposition selected. If any item is
+    // missing one, the inspection is saved as "Partially Complete" instead.
+    const itemCompletion = getItemsCompletion(items)
     if (!itemCompletion.allComplete) {
       const labels = itemCompletion.incompleteIndexes.map(i => `Item ${i + 1}`)
       const shown = labels.slice(0, 3).join(', ')
       const extra = labels.length > 3 ? ` (+${labels.length - 3} more)` : ''
-      showToast(
-        `Cannot complete: ${shown}${extra} ${labels.length === 1 ? 'is' : 'are'} not finished. Saving as Partially Complete.`,
-        'error'
-      )
+      const verb = items.length > 1 ? `${shown}${extra} ${labels.length === 1 ? 'has' : 'have'} no Disposition selected` : 'No Disposition selected'
+      showToast(`Cannot complete: ${verb}. Saving as Partially Complete.`, 'error')
       await handleSavePartial()
       return
     }
 
-    if (!disposition) {
-      showToast('Please set a Final Result before completing', 'error')
-      return
-    }
-
-    if ((disposition === 'FAIL' || disposition === 'ACCEPTED') && (!dispositionNotes.trim() || generalAttachments.length === 0)) {
-      showToast('This result requires an explanation and at least one attachment', 'error')
+    // Each item's disposition that requires attention (FAIL/ACCEPTED) needs notes
+    // and at least one attachment on that item.
+    const dispErrors = []
+    items.forEach((itemData, itemIdx) => {
+      const d = getItemDisposition(itemData)
+      if (d === 'FAIL' || d === 'ACCEPTED') {
+        const notes = (itemData.__disposition_notes || '').trim()
+        const itemAtts = attachments.filter(a => {
+          if (itemIdx === 0) return !a.section_key || !/^item\d+__/.test(a.section_key)
+          return (a.section_key || '').startsWith(`item${itemIdx}__`)
+        })
+        if (!notes || itemAtts.length === 0) {
+          dispErrors.push(items.length > 1 ? `Item ${itemIdx + 1}` : 'This inspection')
+        }
+      }
+    })
+    if (dispErrors.length > 0) {
+      const extra = dispErrors.length > 1 ? ` (+${dispErrors.length - 1} more)` : ''
+      showToast(`${dispErrors[0]}${extra}: a FAIL/ACCEPTED result requires notes and at least one attachment.`, 'error')
       return
     }
 
@@ -581,8 +611,9 @@ export default function InspectionForm() {
     setCompleting(true)
     clearTimeout(saveTimer.current)
     try {
-      await update.mutateAsync({ id, section_data: buildSectionDataPayload(), disposition, disposition_notes: dispositionNotes, item_count: items.length, ...headerInfo })
+      await update.mutateAsync({ id, section_data: buildSectionDataPayload(), disposition: deriveOverallDisposition(items), item_count: items.length, ...headerInfo })
       const hasAccepted = items.some(itemData =>
+        getItemDisposition(itemData) === 'ACCEPTED' ||
         Object.entries(itemData).some(([, rows]) =>
           Array.isArray(rows) && rows.some(r => r.result === 'A' || r.status === 'A')
         )
@@ -641,7 +672,7 @@ export default function InspectionForm() {
   const requiresDispositionAttention = disposition === 'FAIL' || disposition === 'ACCEPTED'
 
   // Per-item completion state — drives the tab badges and the Complete gate.
-  const completion = getItemsCompletion(items, effectiveSections, dimensionalAdded)
+  const completion = getItemsCompletion(items)
 
   return (
     <div className="flex flex-col h-full">
@@ -743,8 +774,8 @@ export default function InspectionForm() {
             </button>
             <button
               onClick={handleComplete}
-              disabled={!disposition || complete.isPending || completing}
-              title={complete.isPending ? 'Completing…' : (!completion.allComplete ? 'Finish all items to complete (saves as Partially Complete otherwise)' : 'Complete Inspection')}
+              disabled={complete.isPending || completing}
+              title={complete.isPending ? 'Completing…' : (!completion.allComplete ? 'Select a Disposition for every item to complete (saves as Partially Complete otherwise)' : 'Complete Inspection')}
               className="p-2 rounded text-pdi-teal hover:bg-teal-50 hover:text-teal-700 disabled:opacity-40 transition-colors flex-shrink-0"
             >
               {complete.isPending || completing ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
@@ -815,7 +846,7 @@ export default function InspectionForm() {
             <div className="bg-white rounded-xl border border-gray-200 px-3 py-2.5 sticky top-0 z-[5]">
               <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                 <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide flex-shrink-0 pr-1">
-                  Items ({completion.perItem.filter(c => c.isComplete).length}/{items.length} done)
+                  Items ({completion.perItem.filter(c => c.isComplete).length}/{items.length} dispositioned)
                 </span>
                 {items.map((_, idx) => {
                   const done = completion.perItem[idx]?.isComplete
@@ -824,7 +855,7 @@ export default function InspectionForm() {
                       key={idx}
                       type="button"
                       onClick={() => setActiveItem(idx)}
-                      title={done ? `Item ${idx + 1} — finished` : `Item ${idx + 1} — not finished`}
+                      title={done ? `Item ${idx + 1} — disposition set (${completion.perItem[idx].disposition})` : `Item ${idx + 1} — no disposition selected`}
                       className={`flex-shrink-0 inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-lg border transition-colors min-h-[34px] ${
                         activeItem === idx
                           ? 'bg-pdi-navy text-white border-pdi-navy'
@@ -858,16 +889,14 @@ export default function InspectionForm() {
               </div>
               <p className="mt-1.5 text-[11px] text-gray-500">
                 Editing <span className="font-semibold text-gray-700">Item {activeItem + 1}</span> of {items.length}
-                {completion.perItem[activeItem] && completion.perItem[activeItem].total > 0 && (
-                  <span> · {completion.perItem[activeItem].done}/{completion.perItem[activeItem].total} fields filled
-                    {completion.perItem[activeItem].isComplete
-                      ? <span className="text-green-600 font-medium"> · finished</span>
-                      : <span className="text-orange-500 font-medium"> · not finished</span>}
-                  </span>
-                )}. The inspection header is shared across all items.
+                {completion.perItem[activeItem] && (
+                  completion.perItem[activeItem].isComplete
+                    ? <span className="text-green-600 font-medium"> · Disposition: {completion.perItem[activeItem].disposition}</span>
+                    : <span className="text-orange-500 font-medium"> · no Disposition selected</span>
+                )}. Each item has its own Disposition; the header is shared across all items.
                 {!completion.allComplete && (
                   <span className="block mt-0.5 text-orange-600">
-                    All items must be finished before this inspection can be completed.
+                    Every item needs a Disposition before this inspection can be completed.
                   </span>
                 )}
               </p>
@@ -990,7 +1019,14 @@ export default function InspectionForm() {
           {/* Disposition + Complete */}
           {EDITABLE_STATUSES.has(inspection.status) && (
             <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 space-y-4">
-              <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Disposition</h3>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                  Disposition{items.length > 1 ? ` — Item ${activeItem + 1}` : ''}
+                </h3>
+                {items.length > 1 && (
+                  <span className="text-[11px] text-gray-400">Set a Disposition for each item</span>
+                )}
+              </div>
               <div className="flex flex-wrap gap-2">
                 {dispositionOptions.map(opt => (
                   <button
@@ -1025,9 +1061,9 @@ export default function InspectionForm() {
                 <div className="flex items-start gap-2 rounded-lg bg-orange-50 border border-orange-200 px-3 py-2.5">
                   <AlertTriangle size={16} className="text-orange-500 flex-shrink-0 mt-0.5" />
                   <p className="text-sm text-orange-800">
-                    {completion.incompleteIndexes.length} of {items.length} item{items.length === 1 ? '' : 's'} {completion.incompleteIndexes.length === 1 ? 'is' : 'are'} not finished
+                    {completion.incompleteIndexes.length} of {items.length} item{items.length === 1 ? '' : 's'} {completion.incompleteIndexes.length === 1 ? 'has' : 'have'} no Disposition selected
                     {items.length > 1 && ` (${completion.incompleteIndexes.map(i => `Item ${i + 1}`).slice(0, 4).join(', ')}${completion.incompleteIndexes.length > 4 ? '…' : ''})`}.
-                    All items must be finished before the inspection can be completed. You can save it as <span className="font-semibold">Partially Complete</span> for now.
+                    Every item needs a Disposition before the inspection can be completed. You can save it as <span className="font-semibold">Partially Complete</span> for now.
                   </p>
                 </div>
               )}
@@ -1035,9 +1071,9 @@ export default function InspectionForm() {
               <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
                 <button
                   type="button"
-                  disabled={!disposition || completing || !completion.allComplete}
+                  disabled={completing || !completion.allComplete}
                   onClick={handleComplete}
-                  title={!completion.allComplete ? 'Finish all items before completing' : undefined}
+                  title={!completion.allComplete ? 'Select a Disposition for every item before completing' : undefined}
                   className="flex items-center justify-center gap-2 w-full sm:w-auto px-6 py-2.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-40 font-medium min-h-[44px]"
                 >
                   {completing ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}

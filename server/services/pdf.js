@@ -112,12 +112,39 @@ function generateInspectionPdf(inspection, template, attachments = []) {
           }
           vspace(doc, 8);
         }
+
+        // ── Per-item disposition ───────────────────────────────────────────
+        // New inspections store the disposition per item (__disposition). Fall
+        // back to the inspection-level disposition for item 0 of legacy data.
+        let itemDisp = (itemData && itemData.__disposition) || '';
+        let itemDispNotes = (itemData && itemData.__disposition_notes) || '';
+        if (!itemDisp && itemIdx === 0 && !(Array.isArray(sd.__items) && sd.__items.length > 0)) {
+          itemDisp = inspection.disposition || '';
+          itemDispNotes = inspection.disposition_notes || '';
+        }
+        if (itemDisp) {
+          ensureSpace(doc, 60);
+          renderSectionTitle(doc, itemList.length > 1 ? `Item ${itemIdx + 1} — Disposition` : 'Final Result');
+          const color = ['FAIL', 'REJECT'].includes(itemDisp) ? RED
+            : ['PASS', 'ACCEPT'].includes(itemDisp) ? GREEN : AMBER;
+          const bY = doc.y;
+          doc.roundedRect(M, bY, PW, 32, 3).fillColor(color).fill();
+          const tY = bY + (32 - 12) / 2;
+          doc.fontSize(12).font('Helvetica-Bold').fillColor(WHITE)
+            .text(itemDisp, M, tY, { width: PW, align: 'center', lineBreak: false });
+          doc.y = bY + 32 + 6;
+          if (itemDispNotes) {
+            doc.fontSize(9).font('Helvetica').fillColor(DGRAY)
+              .text(itemDispNotes, M, doc.y, { width: PW });
+            doc.y += 4;
+          }
+        }
       });
 
-      // ── Final disposition ─────────────────────────────────────────────────
-      if (inspection.disposition) {
+      // ── Overall disposition (multi-item summary only) ─────────────────────
+      if (inspection.disposition && Array.isArray(sd.__items) && sd.__items.length > 1) {
         ensureSpace(doc, 60);
-        renderSectionTitle(doc, 'Final Result');
+        renderSectionTitle(doc, 'Overall Disposition');
 
         const color = ['FAIL', 'REJECT'].includes(inspection.disposition) ? RED
           : ['PASS', 'ACCEPT'].includes(inspection.disposition) ? GREEN : AMBER;
