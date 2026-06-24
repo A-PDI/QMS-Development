@@ -10,6 +10,20 @@ export const COMPONENT_TYPE_LABELS = {
   oil_cooler: 'Oil Cooler',
   turbocharger: 'Turbocharger',
   fuel_injector: 'Fuel Injector',
+  cylinder_block: 'Cylinder Block',
+  crankshaft: 'Crankshaft',
+  dampener: 'Dampener',
+  exhaust_manifold_spacer: 'Exhaust Manifold Spacer',
+  piston_oiler: 'Piston Oiler',
+  piston_oiler_bolt: 'Piston Oiler Bolt',
+  rocker_shaft: 'Rocker Shaft',
+  connecting_rod_bearing: 'Connecting Rod Bearing',
+  spacer_plate: 'Spacer Plate',
+  thermostat: 'Thermostat',
+  thrust_washer: 'Thrust Washer',
+  water_pump: 'Water Pump',
+  flywheel: 'Flywheel',
+  stud_kit: 'Stud Kit',
 }
 
 export const STATUS_LABELS = {
