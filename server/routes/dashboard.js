@@ -7,7 +7,8 @@ const db = require('../db/adapter');
 router.get('/stats', (req, res, next) => {
   try {
     const total_inspections = db.get('SELECT COUNT(*) as count FROM inspections', []).count;
-    const open_inspections = db.get("SELECT COUNT(*) as count FROM inspections WHERE status = 'draft'", []).count;
+    // Open = not yet finalized: drafts plus partially-complete inspections.
+    const open_inspections = db.get("SELECT COUNT(*) as count FROM inspections WHERE status IN ('draft', 'partially_complete')", []).count;
 
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);

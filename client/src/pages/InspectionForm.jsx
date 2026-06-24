@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { Save, CheckSquare, ChevronDown, ChevronUp, Paperclip, PlusCircle, X, Printer, Mail, Loader2, AlertTriangle, Bell, ImagePlus, Trash2, Pencil } from 'lucide-react'
+import { Save, CheckSquare, ChevronDown, ChevronUp, Paperclip, PlusCircle, X, Printer, Mail, Loader2, AlertTriangle, Bell, ImagePlus, Trash2, Pencil, Check, Circle } from 'lucide-react'
 import api from '../lib/api'
 import { getUser } from '../lib/auth'
 import { useInspection } from '../hooks/useInspections'
@@ -22,7 +22,11 @@ import SectionGrooveSpecs from '../components/inspection/SectionGrooveSpecs'
 import FileUploadZone from '../components/FileUploadZone'
 import AuthImage from '../components/AuthImage'
 import { initSectionData, mergeSectionData, formatFileSize } from '../lib/utils'
+import { getItemsCompletion } from '../lib/itemCompletion'
 import { DISPOSITION_COLORS, HEADER_FIELD_LABELS, COMPONENT_TYPE_LABELS } from '../lib/constants'
+
+// Statuses that are still editable in the inspection form (not yet finalized).
+const EDITABLE_STATUSES = new Set(['draft', 'partially_complete'])
 
 const SECTION_COMPONENTS = {
   pfn_checklist: SectionReceiving,
@@ -496,7 +500,45 @@ export default function InspectionForm() {
     }
   }
 
+  // Save the current work and mark the inspection "Partially Complete".
+  async function handleSavePartial() {
+    setCompleting(true)
+    clearTimeout(saveTimer.current)
+    try {
+      await update.mutateAsync({
+        id,
+        section_data: buildSectionDataPayload(),
+        disposition,
+        disposition_notes: dispositionNotes,
+        item_count: items.length,
+        status: 'partially_complete',
+        ...headerInfo,
+      })
+      showToast('Saved as Partially Complete — finish the remaining items to complete the inspection.', 'info')
+      navigate(`/inspections/${id}`)
+    } catch (err) {
+      showToast(err?.response?.data?.error || err.message || 'Save failed', 'error')
+    } finally {
+      setCompleting(false)
+    }
+  }
+
   async function handleComplete() {
+    // Gate 1: every item must be fully filled in. If not, the inspection cannot
+    // be completed — it is saved as "Partially Complete" instead.
+    const itemCompletion = getItemsCompletion(items, effectiveSections, dimensionalAdded)
+    if (!itemCompletion.allComplete) {
+      const labels = itemCompletion.incompleteIndexes.map(i => `Item ${i + 1}`)
+      const shown = labels.slice(0, 3).join(', ')
+      const extra = labels.length > 3 ? ` (+${labels.length - 3} more)` : ''
+      showToast(
+        `Cannot complete: ${shown}${extra} ${labels.length === 1 ? 'is' : 'are'} not finished. Saving as Partially Complete.`,
+        'error'
+      )
+      await handleSavePartial()
+      return
+    }
+
     if (!disposition) {
       showToast('Please set a Final Result before completing', 'error')
       return
@@ -579,7 +621,7 @@ export default function InspectionForm() {
     return <div className="p-6 text-red-500">Inspection not found</div>
   }
 
-  if (inspection.status !== 'draft') {
+  if (!EDITABLE_STATUSES.has(inspection.status)) {
     navigate(`/inspections/${id}`)
     return null
   }
@@ -597,6 +639,9 @@ export default function InspectionForm() {
   const itemAttachmentCount = attachments.filter(a => a.section_key).length
   const generalAttachments = attachments.filter(a => !a.section_key)
   const requiresDispositionAttention = disposition === 'FAIL' || disposition === 'ACCEPTED'
+
+  // Per-item completion state — drives the tab badges and the Complete gate.
+  const completion = getItemsCompletion(items, effectiveSections, dimensionalAdded)
 
   return (
     <div className="flex flex-col h-full">
@@ -698,11 +743,11 @@ export default function InspectionForm() {
             </button>
             <button
               onClick={handleComplete}
-              disabled={!disposition || complete.isPending}
-              title={complete.isPending ? 'Completing…' : 'Complete Inspection'}
+              disabled={!disposition || complete.isPending || completing}
+              title={complete.isPending ? 'Completing…' : (!completion.allComplete ? 'Finish all items to complete (saves as Partially Complete otherwise)' : 'Complete Inspection')}
               className="p-2 rounded text-pdi-teal hover:bg-teal-50 hover:text-teal-700 disabled:opacity-40 transition-colors flex-shrink-0"
             >
-              {complete.isPending ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
+              {complete.isPending || completing ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
             </button>
             <div className="w-px h-5 bg-gray-200 mx-1 flex-shrink-0" />
             <button
@@ -770,22 +815,29 @@ export default function InspectionForm() {
             <div className="bg-white rounded-xl border border-gray-200 px-3 py-2.5 sticky top-0 z-[5]">
               <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                 <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide flex-shrink-0 pr-1">
-                  Items ({items.length})
+                  Items ({completion.perItem.filter(c => c.isComplete).length}/{items.length} done)
                 </span>
-                {items.map((_, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => setActiveItem(idx)}
-                    className={`flex-shrink-0 px-3.5 py-1.5 text-xs font-medium rounded-lg border transition-colors min-h-[34px] ${
-                      activeItem === idx
-                        ? 'bg-pdi-navy text-white border-pdi-navy'
-                        : 'bg-white text-gray-600 border-gray-200 hover:border-pdi-navy/40 hover:bg-pdi-frost'
-                    }`}
-                  >
-                    Item {idx + 1}
-                  </button>
-                ))}
+                {items.map((_, idx) => {
+                  const done = completion.perItem[idx]?.isComplete
+                  return (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setActiveItem(idx)}
+                      title={done ? `Item ${idx + 1} — finished` : `Item ${idx + 1} — not finished`}
+                      className={`flex-shrink-0 inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-lg border transition-colors min-h-[34px] ${
+                        activeItem === idx
+                          ? 'bg-pdi-navy text-white border-pdi-navy'
+                          : 'bg-white text-gray-600 border-gray-200 hover:border-pdi-navy/40 hover:bg-pdi-frost'
+                      }`}
+                    >
+                      {done
+                        ? <Check size={13} className={activeItem === idx ? 'text-green-300' : 'text-green-600'} strokeWidth={3} />
+                        : <Circle size={11} className={activeItem === idx ? 'text-orange-200' : 'text-orange-400'} strokeWidth={3} />}
+                      Item {idx + 1}
+                    </button>
+                  )
+                })}
                 <div className="flex-1" />
                 <button
                   type="button"
@@ -805,7 +857,19 @@ export default function InspectionForm() {
                 </button>
               </div>
               <p className="mt-1.5 text-[11px] text-gray-500">
-                Editing <span className="font-semibold text-gray-700">Item {activeItem + 1}</span> of {items.length}. The inspection header is shared across all items.
+                Editing <span className="font-semibold text-gray-700">Item {activeItem + 1}</span> of {items.length}
+                {completion.perItem[activeItem] && completion.perItem[activeItem].total > 0 && (
+                  <span> · {completion.perItem[activeItem].done}/{completion.perItem[activeItem].total} fields filled
+                    {completion.perItem[activeItem].isComplete
+                      ? <span className="text-green-600 font-medium"> · finished</span>
+                      : <span className="text-orange-500 font-medium"> · not finished</span>}
+                  </span>
+                )}. The inspection header is shared across all items.
+                {!completion.allComplete && (
+                  <span className="block mt-0.5 text-orange-600">
+                    All items must be finished before this inspection can be completed.
+                  </span>
+                )}
               </p>
             </div>
           )}
@@ -924,7 +988,7 @@ export default function InspectionForm() {
           )}
 
           {/* Disposition + Complete */}
-          {inspection.status === 'draft' && (
+          {EDITABLE_STATUSES.has(inspection.status) && (
             <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 space-y-4">
               <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Disposition</h3>
               <div className="flex flex-wrap gap-2">
@@ -955,15 +1019,42 @@ export default function InspectionForm() {
                   />
                 </div>
               )}
-              <button
-                type="button"
-                disabled={!disposition || completing}
-                onClick={handleComplete}
-                className="flex items-center justify-center gap-2 w-full sm:w-auto px-6 py-2.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-40 font-medium min-h-[44px]"
-              >
-                {completing ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
-                {completing ? 'Completing…' : 'Complete Inspection'}
-              </button>
+
+              {/* Completion gate notice */}
+              {!completion.allComplete && (
+                <div className="flex items-start gap-2 rounded-lg bg-orange-50 border border-orange-200 px-3 py-2.5">
+                  <AlertTriangle size={16} className="text-orange-500 flex-shrink-0 mt-0.5" />
+                  <p className="text-sm text-orange-800">
+                    {completion.incompleteIndexes.length} of {items.length} item{items.length === 1 ? '' : 's'} {completion.incompleteIndexes.length === 1 ? 'is' : 'are'} not finished
+                    {items.length > 1 && ` (${completion.incompleteIndexes.map(i => `Item ${i + 1}`).slice(0, 4).join(', ')}${completion.incompleteIndexes.length > 4 ? '…' : ''})`}.
+                    All items must be finished before the inspection can be completed. You can save it as <span className="font-semibold">Partially Complete</span> for now.
+                  </p>
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
+                <button
+                  type="button"
+                  disabled={!disposition || completing || !completion.allComplete}
+                  onClick={handleComplete}
+                  title={!completion.allComplete ? 'Finish all items before completing' : undefined}
+                  className="flex items-center justify-center gap-2 w-full sm:w-auto px-6 py-2.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-40 font-medium min-h-[44px]"
+                >
+                  {completing ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
+                  {completing ? 'Saving…' : 'Complete Inspection'}
+                </button>
+                {!completion.allComplete && (
+                  <button
+                    type="button"
+                    disabled={completing}
+                    onClick={handleSavePartial}
+                    className="flex items-center justify-center gap-2 w-full sm:w-auto px-6 py-2.5 text-sm border border-orange-300 bg-orange-50 text-orange-700 rounded-lg hover:bg-orange-100 disabled:opacity-40 font-medium min-h-[44px]"
+                  >
+                    {completing ? <Loader2 size={16} className="animate-spin" /> : <Circle size={15} strokeWidth={3} />}
+                    Save as Partially Complete
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
