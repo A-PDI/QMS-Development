@@ -1,21 +1,30 @@
 'use strict';
 /**
  * Client + sync engine for the third-party injector flow-test-bench API
- * (cloudx.carbonzapp.com). One bench "report" covers one or more physical
- * injectors tested in the same session (one per test slot); we split each
- * report into individual injector rows (injector_test_results) so they can
- * be listed, selected, and turned into inspection records independently.
+ * (cloudx.carbonzapp.com). A "report" can cover more than one physical
+ * injector tested together; we split it into individual injector rows
+ * (injector_test_results) so they can be listed, selected, and turned into
+ * inspection records independently.
  *
- * NOTE on SlotsData / AllTests mapping: the vendor's field-level doc
- * describes SlotsData as a single object with position/sn/codes, but the
- * app supports multi-slot machines (see `single_slot_machine`), so
- * SlotsData is treated as either one slot object or a map of slot objects
- * keyed by index. Each AllTests entry carries PrimaryTank/SecondaryTank
- * readings with a `tank_position` — that's used to route a test's results
- * back to the matching slot. This is a best-effort interpretation (no raw
- * sample response was available); the full raw payload is always stored in
- * injector_test_reports.raw_json / injector_test_results.raw_slot_json so
- * the mapping can be corrected without losing data if it's wrong.
+ * NOTE on the array shape (confirmed against a live sample response):
+ * `getReports` returns a flat array where **each element already
+ * represents one tested injector**, not one element per report. Multiple
+ * elements share the same `_id` when a report covers more than one
+ * injector — each such element's own `SlotsData` is a flat single-slot
+ * object (enabled/fd/new_code/old_code/position/sn/statuscolor) describing
+ * that specific injector. (An earlier pass mis-read `SlotsData` as a map of
+ * many slots keyed by index — that was actually just the 7-key flat object
+ * being reported as "dict, len 7"; there was no multi-slot map.) Sibling
+ * elements (same `_id`) are grouped back into one injector_test_reports
+ * row; each element's own AllTests still carries both PrimaryTank and
+ * SecondaryTank readings per test (shared context for both injectors in
+ * that pairing), so which tank belongs to which injector is resolved by
+ * ranking siblings by their own SlotsData.position — first (lowest
+ * position) → PrimaryTank, second → SecondaryTank. This is confirmed
+ * correct via a real sample for the 2-injector case; the full raw payload
+ * is always stored (injector_test_reports.raw_json /
+ * injector_test_results.raw_slot_json) so it can be corrected without
+ * losing data if a 3+-injector report ever turns up.
  */
 
 const { v4: uuidv4 } = require('uuid');
@@ -102,17 +111,7 @@ function extractReportsArray(json) {
   return [];
 }
 
-// ── Normalization: SlotsData / AllTests → per-injector rows ────────────────
-
-function extractSlots(rawSlotsData) {
-  if (!rawSlotsData || typeof rawSlotsData !== 'object') return [];
-  if ('sn' in rawSlotsData || 'position' in rawSlotsData) {
-    return [normalizeSlot(rawSlotsData, 0)];
-  }
-  return Object.entries(rawSlotsData)
-    .filter(([, v]) => v && typeof v === 'object')
-    .map(([key, v]) => normalizeSlot(v, key));
-}
+// ── Normalization: row.SlotsData / row.AllTests → per-injector data ────────
 
 /**
  * Field types are inconsistent across this API (e.g. vdo_auth is a string
@@ -125,15 +124,28 @@ function toBool(v) {
   return false;
 }
 
-function normalizeSlot(v, fallbackKey) {
+/** This API uses the literal string "-" as a "not set" placeholder in
+ * several fields (customer_name, SlotsData.new_code/old_code, ...) —
+ * confirmed in a live sample (`new_code: "-"`). Treat it as empty so it
+ * never gets used as a real value (e.g. a literal "-" part number). */
+function cleanPlaceholder(v) {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  return (s === '' || s === '-') ? null : v;
+}
+
+/** Each getReports row already represents one injector — SlotsData is a
+ * flat single-slot object for that row. */
+function extractRowSlot(row) {
+  const sd = row.SlotsData;
+  if (!sd || typeof sd !== 'object') return null;
   return {
-    enabled: toBool(v.enabled),
-    new_code: v.new_code ?? null,
-    old_code: v.old_code ?? null,
-    position: v.position !== undefined && v.position !== null ? Number(v.position) : (Number(fallbackKey) || 0),
-    sn: v.sn ?? null,
-    statuscolor: v.statuscolor,
-    raw: v,
+    enabled: toBool(sd.enabled),
+    new_code: cleanPlaceholder(sd.new_code),
+    old_code: cleanPlaceholder(sd.old_code),
+    position: sd.position !== undefined && sd.position !== null ? Number(sd.position) : 0,
+    sn: cleanPlaceholder(sd.sn),
+    raw: sd,
   };
 }
 
@@ -175,37 +187,28 @@ function buildTestRow(t, tank) {
 }
 
 /**
- * Bucket AllTests entries onto the slot (injector) they belong to.
- *
- * A confirmed live sample showed PrimaryTank/SecondaryTank.tank_position
- * values of 1 and 2 even though SlotsData held 7 total slot entries (most
- * disabled/unloaded) — i.e. tank_position looks like a fixed "1st tank /
- * 2nd tank" channel number, not a reference to a specific slot's own
- * `position` field, and only two tanks are ever populated per test
- * regardless of how many slots exist. So rather than trying to match
- * tank_position against a slot's position value (unverified and, per that
- * sample, likely wrong), Primary always maps to the first *enabled* slot
- * and Secondary to the second, ranked by slot position.
+ * Extract this injector's own test rows from a (possibly shared) AllTests
+ * array. `rank` is this injector's position within its report group (0 =
+ * first by SlotsData.position, 1 = second) — PrimaryTank is read for rank
+ * 0, SecondaryTank for rank 1, each falling back to the other tank field if
+ * its own is missing (covers both the case where sibling rows share one
+ * AllTests array, and the case where each row's AllTests already carries
+ * only its own tank data).
  */
-function attachTestsToSlots(slots, allTests) {
-  const ordered = [...slots].sort((a, b) => a.position - b.position);
-  const bucket = new Map(slots.map(s => [s.position, []]));
-
+function buildTestsForRank(allTests, rank) {
+  const rows = [];
   for (const t of (Array.isArray(allTests) ? allTests : [])) {
     if (!t || (t.TestInfo && Number(t.TestInfo.status) === 1)) continue; // skip SKIPPED tests
     const primary = t.PrimaryTank;
     const secondary = t.SecondaryTank;
-    if (primary && ordered[0]) {
-      bucket.get(ordered[0].position).push(buildTestRow(t, primary));
-    } else if (!primary && t.RspResults && ordered[0]) {
-      bucket.get(ordered[0].position).push(buildTestRow(t, null));
-    }
-    if (secondary) {
-      const slot = ordered[1] || ordered[0];
-      if (slot) bucket.get(slot.position).push(buildTestRow(t, secondary));
+    const tank = rank === 0 ? (primary || secondary) : (secondary || primary);
+    if (tank) {
+      rows.push(buildTestRow(t, tank));
+    } else if (rank === 0 && t.RspResults) {
+      rows.push(buildTestRow(t, null));
     }
   }
-  return bucket;
+  return rows.sort((a, b) => a.test_order - b.test_order);
 }
 
 function computeOverallResult(tests) {
@@ -222,25 +225,28 @@ function extractJobNumber(job) {
 
 // ── Persistence ──────────────────────────────────────────────────────────────
 
-function syncReportToDb(raw) {
-  if (!raw || raw._id === undefined || raw._id === null) {
-    throw new Error('Report is missing _id');
-  }
-  const externalId = String(raw._id);
+/**
+ * `rows` are the one-or-more getReports array elements sharing one `_id`
+ * (one bench report, one or more tested injectors). Report-level fields are
+ * taken from the first row (identical across siblings); each row
+ * contributes its own injector_test_results row via its own SlotsData.
+ */
+function syncReportGroupToDb(externalId, rows) {
+  const first = rows[0];
   const now = new Date().toISOString();
-  const jobNumber = extractJobNumber(raw.job);
-  const brand = raw.actuator_Brand || raw.actuator_brand || null;
+  const jobNumber = extractJobNumber(first.job);
+  const brand = first.actuator_Brand || first.actuator_brand || null;
 
   const existingReport = db.get('SELECT id FROM injector_test_reports WHERE external_id = ?', [externalId]);
   const reportId = existingReport ? existingReport.id : uuidv4();
 
   const reportCols = [
-    raw.coding_name || null, raw.issuer_name || null, raw.machine_name || null, raw.machine_sn || null,
-    raw.drs_id || null, raw.workshop_info || null, raw.customer_name || null, raw.customer_phone || null,
-    raw.customer_mail || null, raw.customer_notes || null, raw.actuator_code || null, brand,
-    raw.actuator_type || null, raw.pump_code || null, raw.notes || null, raw.machine_details || null,
-    jobNumber, raw.status !== undefined ? Number(raw.status) : null, raw.datetime || null,
-    raw.created_at || null, JSON.stringify(raw), now,
+    first.coding_name || null, first.issuer_name || null, first.machine_name || null, first.machine_sn || null,
+    first.drs_id || null, first.workshop_info || null, first.customer_name || null, first.customer_phone || null,
+    first.customer_mail || null, first.customer_notes || null, first.actuator_code || null, brand,
+    first.actuator_type || null, first.pump_code || null, first.notes || null, first.machine_details || null,
+    jobNumber, first.status !== undefined ? Number(first.status) : null, first.datetime || null,
+    first.created_at || null, JSON.stringify(rows), now,
   ];
 
   if (existingReport) {
@@ -265,15 +271,16 @@ function syncReportToDb(raw) {
     );
   }
 
-  // Only slots actually loaded/tested (SlotsData.enabled) become injector
-  // rows — a report's SlotsData can list every physical slot the bench has
-  // (a confirmed live sample had 7), most of them idle. If the enabled flag
-  // doesn't resolve to true for anything (unexpected shape), fall back to
-  // all slots rather than silently syncing zero injectors.
-  const allSlots = extractSlots(raw.SlotsData);
-  const enabledSlots = allSlots.filter(s => s.enabled);
-  const slots = enabledSlots.length > 0 ? enabledSlots : allSlots;
-  const testBuckets = attachTestsToSlots(slots, raw.AllTests);
+  // Pair each row with its own slot identity; drop rows with no SlotsData
+  // at all, and prefer explicitly-enabled rows (falling back to all of them
+  // if the enabled flag doesn't resolve true for anything, rather than
+  // silently syncing zero injectors on an unexpected shape).
+  const candidates = rows
+    .map(row => ({ row, slot: extractRowSlot(row) }))
+    .filter(x => x.slot);
+  const enabledOnes = candidates.filter(x => x.slot.enabled);
+  const ranked = (enabledOnes.length > 0 ? enabledOnes : candidates)
+    .sort((a, b) => a.slot.position - b.slot.position);
 
   const existingResults = db.all(
     'SELECT id, slot_position FROM injector_test_results WHERE report_id = ?',
@@ -282,16 +289,16 @@ function syncReportToDb(raw) {
   const existingByPos = new Map(existingResults.map(r => [r.slot_position, r.id]));
 
   let injectorCount = 0;
-  for (const slot of slots) {
-    const testsForSlot = (testBuckets.get(slot.position) || []).sort((a, b) => a.test_order - b.test_order);
-    const overall = computeOverallResult(testsForSlot);
-    const partNumber = slot.new_code || slot.old_code || raw.actuator_code || null;
+  ranked.forEach(({ row, slot }, rank) => {
+    const testsForRank = buildTestsForRank(row.AllTests, rank);
+    const overall = computeOverallResult(testsForRank);
+    const partNumber = slot.new_code || slot.old_code || first.actuator_code || null;
     const existingId = existingByPos.get(slot.position);
     const resultId = existingId || uuidv4();
 
     const resultCols = [
-      slot.sn || null, partNumber, slot.old_code || null, brand, raw.actuator_type || null,
-      overall, JSON.stringify(testsForSlot), JSON.stringify(slot.raw),
+      slot.sn || null, partNumber, slot.old_code || null, brand, first.actuator_type || null,
+      overall, JSON.stringify(testsForRank), JSON.stringify(slot.raw),
     ];
 
     if (existingId) {
@@ -310,12 +317,34 @@ function syncReportToDb(raw) {
       );
     }
     injectorCount++;
-  }
+  });
 
   return { reportId, injectorCount };
 }
 
 // ── Sync orchestration ───────────────────────────────────────────────────────
+
+/** Group raw getReports rows by `_id` (one report can span multiple rows,
+ * one per injector) and persist each group as one report + N injectors. */
+function persistRows(rawRows) {
+  const groups = new Map();
+  let maxId = null;
+  for (const raw of rawRows) {
+    if (!raw || raw._id === undefined || raw._id === null) continue;
+    const id = String(raw._id);
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(raw);
+    if (!maxId || id > maxId) maxId = id;
+  }
+  let reportsSynced = 0;
+  let injectorsSynced = 0;
+  for (const [externalId, rows] of groups) {
+    const { injectorCount } = syncReportGroupToDb(externalId, rows);
+    reportsSynced++;
+    injectorsSynced += injectorCount;
+  }
+  return { reportsSynced, injectorsSynced, maxId };
+}
 
 async function syncNow() {
   const startedAt = new Date().toISOString();
@@ -330,29 +359,25 @@ async function syncNow() {
       const lookbackDays = parseInt(process.env.INJECTOR_SYNC_INITIAL_LOOKBACK_DAYS, 10) || 30;
       const dateFrom = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const json = await callGetReports({ date_from: dateFrom });
-      const reports = extractReportsArray(json);
-      reportsFetched = reports.length;
-      for (const raw of reports) {
-        const { injectorCount } = syncReportToDb(raw);
-        reportsSynced++;
-        injectorsSynced += injectorCount;
-        if (raw._id && String(raw._id) > String(maxSeenId || '')) maxSeenId = raw._id;
-      }
+      const rawRows = extractReportsArray(json);
+      reportsFetched = rawRows.length;
+      const result = persistRows(rawRows);
+      reportsSynced += result.reportsSynced;
+      injectorsSynced += result.injectorsSynced;
+      if (result.maxId && result.maxId > String(maxSeenId || '')) maxSeenId = result.maxId;
     } else {
       let loops = 0;
       let cursor = cursorId;
       while (loops < PAGE_GUARD) {
         const json = await callGetReports({ id_from: cursor });
-        const reports = extractReportsArray(json);
-        if (reports.length === 0) break;
-        reportsFetched += reports.length;
-        for (const raw of reports) {
-          const { injectorCount } = syncReportToDb(raw);
-          reportsSynced++;
-          injectorsSynced += injectorCount;
-          if (raw._id && String(raw._id) > String(maxSeenId || '')) maxSeenId = raw._id;
-        }
-        if (reports.length < 50 || maxSeenId === cursor) break; // caught up
+        const rawRows = extractReportsArray(json);
+        if (rawRows.length === 0) break;
+        reportsFetched += rawRows.length;
+        const result = persistRows(rawRows);
+        reportsSynced += result.reportsSynced;
+        injectorsSynced += result.injectorsSynced;
+        if (result.maxId && result.maxId > String(maxSeenId || '')) maxSeenId = result.maxId;
+        if (rawRows.length < 50 || result.maxId === cursor) break; // caught up
         cursor = maxSeenId;
         loops++;
       }
@@ -454,5 +479,5 @@ module.exports = {
   buildDimensionalSectionFromTests,
   buildSharedDimensionalSection,
   // exported for testing / inspection only
-  _internal: { extractSlots, attachTestsToSlots, computeOverallResult, extractReportsArray, extractJobNumber },
+  _internal: { extractRowSlot, buildTestsForRank, computeOverallResult, extractReportsArray, extractJobNumber, persistRows },
 };
