@@ -998,8 +998,8 @@ function generateInjectorComparisonPdf(injectors = []) {
             rowMap.set(pKey, {
               label: pLabel,
               params,
-              target: t.primary.target || '',
-              tolerance: t.primary.tolerance || '',
+              // Specification shown = green-band spec (e.g. "8.5 +/- 4.5 mm3/STRK").
+              spec: t.primary.spec || '',
               unit: t.primary.unit || '',
             });
             rowOrder.push(pKey);
@@ -1011,8 +1011,7 @@ function generateInjectorComparisonPdf(injectors = []) {
               rowMap.set(sKey, {
                 label: sLabel,
                 params,
-                target: t.secondary.target || '',
-                tolerance: t.secondary.tolerance || '',
+                spec: t.secondary.spec || '',
                 unit: t.secondary.unit || '',
               });
               rowOrder.push(sKey);
@@ -1070,64 +1069,61 @@ function generateInjectorComparisonPdf(injectors = []) {
       doc.text(genInfo.toUpperCase(), titleX, top + 30, { width: titleW, align: 'center', lineBreak: false });
 
       // ── Column geometry ───────────────────────────────────────────────────
-      // Fixed columns: Test Step + Specification. Remaining width is split
-      // evenly across the injector columns, scaling down if there are many.
+      // Fixed columns: Test Step (multi-line) + Specification (narrow). The
+      // remaining width is split evenly across the injector columns.
       const tableTop = top + bannerH + 10;
       const n = Math.max(list.length, 1);
-      let stepW = Math.max(150, Math.min(220, usableW * 0.24));
-      let specW = Math.max(96, Math.min(150, usableW * 0.16));
+      // Test Step is the widest fixed column (holds Step Name + Pressure/Pulse/
+      // Strk lines). Specification is deliberately narrow with centered values.
+      let stepW = Math.max(150, Math.min(210, usableW * 0.22));
+      let specW = Math.max(70, Math.min(96, usableW * 0.12));
       const MIN_INJ_COL = 44;
       let injColW = (usableW - stepW - specW) / n;
       if (injColW < MIN_INJ_COL) {
         // Shrink the fixed columns to guarantee everything fits on one page.
         const need = MIN_INJ_COL * n;
         const leftover = usableW - need;
-        stepW = Math.max(120, leftover * 0.6);
-        specW = Math.max(80, leftover * 0.4);
+        stepW = Math.max(120, leftover * 0.62);
+        specW = Math.max(64, leftover * 0.38);
         injColW = (usableW - stepW - specW) / n;
       }
       const col1X = LM;
       const col2X = LM + stepW;
       const injStartX = LM + stepW + specW;
 
-      const headerRowH = 30;
-      const availH = pageH - LM - tableTop - headerRowH - 4;
+      // The Test Step cell needs up to 4 lines (name + 3 params); reserve a
+      // taller minimum row height so it isn't cramped.
+      const headerRowH = 22;
+      const resultRowH = 20; // Pass/Fail summary row at the bottom
+      const availH = pageH - LM - tableTop - headerRowH - resultRowH - 6;
       const dataRowCount = rowOrder.length || 1;
-      // Auto-scale row height so all rows fit on one page.
       let rowH = Math.floor(availH / dataRowCount);
-      rowH = Math.max(12, Math.min(rowH, 24));
-      const nameFont = rowH >= 16 ? 7.5 : (rowH >= 13 ? 6.8 : 6);
-      const subFont = Math.max(5, nameFont - 1.5);
-      const valFont = rowH >= 16 ? 8 : (rowH >= 13 ? 7 : 6);
+      rowH = Math.max(30, Math.min(rowH, 44)); // room for the 4-line test step
+      // If min row height overflows the page, fall back to the largest that fits.
+      if (rowH * dataRowCount > availH) rowH = Math.max(24, Math.floor(availH / dataRowCount));
+      const nameFont = rowH >= 38 ? 8 : (rowH >= 30 ? 7 : 6.2);
+      const subFont = Math.max(5.2, nameFont - 1.6);
+      const valFont = rowH >= 38 ? 8.5 : (rowH >= 30 ? 7.5 : 6.5);
 
       // ── Draw table header row ─────────────────────────────────────────────
       let y = tableTop;
       doc.rect(LM, y, usableW, headerRowH).fillColor(NAVY).fill();
 
       doc.fontSize(8).font('Helvetica-Bold').fillColor(WHITE);
-      doc.text('TEST STEP', col1X + 4, y + 11, { width: stepW - 8, height: headerRowH - 6, lineBreak: false });
-      doc.text('SPECIFICATION', col2X + 4, y + 11, { width: specW - 8, height: headerRowH - 6, lineBreak: false });
+      doc.text('TEST STEP', col1X + 4, y + 7, { width: stepW - 8, height: headerRowH - 6, lineBreak: false });
+      doc.text('SPECIFICATION', col2X + 3, y + 7, { width: specW - 6, height: headerRowH - 6, align: 'center', lineBreak: false });
 
       // Header column separators
       doc.strokeColor('#3A4A6B').lineWidth(0.4).moveTo(col2X, y).lineTo(col2X, y + headerRowH).stroke();
       doc.strokeColor('#3A4A6B').lineWidth(0.4).moveTo(injStartX, y).lineTo(injStartX, y + headerRowH).stroke();
 
+      // Injector column headers — SERIAL NUMBER ONLY.
       let x = injStartX;
       list.forEach((inj) => {
         doc.strokeColor('#3A4A6B').lineWidth(0.4).moveTo(x, y).lineTo(x, y + headerRowH).stroke();
-        doc.fontSize(injColW < 58 ? 6 : 7).font('Helvetica-Bold').fillColor(WHITE);
+        doc.fontSize(injColW < 58 ? 6.5 : 7.5).font('Helvetica-Bold').fillColor(WHITE);
         const sn = inj.serial_number || '—';
-        doc.text(sn, x + 3, y + 3, { width: injColW - 6, align: 'center', lineBreak: false, ellipsis: true });
-        doc.fontSize(injColW < 58 ? 5 : 6).font('Helvetica').fillColor('#A5B4C8');
-        const sub = inj.part_number || partNo;
-        doc.text(sub, x + 3, y + 14, { width: injColW - 6, align: 'center', lineBreak: false, ellipsis: true });
-        // Overall pass/fail badge line
-        doc.fontSize(injColW < 58 ? 5 : 6).font('Helvetica-Bold');
-        const scored = (inj.tests || []).filter(t => t.primary && t.status !== 'skip');
-        const failed = scored.filter(t => t.status === 'fail').length;
-        const overall = scored.length === 0 ? '—' : (failed === 0 ? 'PASS' : 'FAIL');
-        doc.fillColor(overall === 'FAIL' ? '#F1948A' : (overall === 'PASS' ? '#7DCEA0' : '#A5B4C8'));
-        doc.text(overall, x + 3, y + 22, { width: injColW - 6, align: 'center', lineBreak: false });
+        doc.text(sn, x + 3, y + 7, { width: injColW - 6, height: headerRowH - 8, align: 'center', lineBreak: false, ellipsis: true });
         x += injColW;
       });
 
@@ -1140,30 +1136,30 @@ function generateInjectorComparisonPdf(injectors = []) {
         doc.rect(LM, y, usableW, rowH).fillColor(bg).fill();
         doc.strokeColor(BORDER).lineWidth(0.3).moveTo(LM, y + rowH).lineTo(LM + usableW, y + rowH).stroke();
 
-        // ── Column 1: Test Step — name (bold) + parameters sub-line ─────────
-        doc.fontSize(nameFont).font('Helvetica-Bold').fillColor(BLACK);
-        doc.text(row.label, col1X + 4, y + 1.5, { width: stepW - 8, height: rowH / 2, lineBreak: false, ellipsis: true });
+        // ── Column 1: Test Step — Step Name + Pressure/Pulse/Strk lines ─────
         const p = row.params || {};
-        const paramParts = [];
-        if (p.rail_pressure) paramParts.push(`Rail Pressure ${p.rail_pressure}`);
-        if (p.pulse_width) paramParts.push(`Pulse Width ${p.pulse_width}`);
-        if (p.strk) paramParts.push(`Strk ${p.strk}`);
-        if (paramParts.length) {
-          doc.fontSize(subFont).font('Helvetica').fillColor(MGRAY);
-          doc.text(paramParts.join('  ·  '), col1X + 4, y + rowH / 2 + 0.5, { width: stepW - 8, height: rowH / 2, lineBreak: false, ellipsis: true });
-        }
+        const stepLines = [
+          { t: row.label, bold: true },
+          { t: `Pressure: ${p.rail_pressure || '—'}`, bold: false },
+          { t: `Pulse: ${p.pulse_width || '—'}`, bold: false },
+          { t: `Strk: ${p.strk || '—'}`, bold: false },
+        ];
+        const lineH = Math.min((rowH - 4) / stepLines.length, nameFont + 2.5);
+        let ly = y + 2;
+        stepLines.forEach((ln, li) => {
+          doc.fontSize(li === 0 ? nameFont : subFont)
+             .font(ln.bold ? 'Helvetica-Bold' : 'Helvetica')
+             .fillColor(li === 0 ? BLACK : DGRAY);
+          doc.text(ln.t, col1X + 4, ly, { width: stepW - 8, height: lineH + 1, lineBreak: false, ellipsis: true });
+          ly += lineH;
+        });
 
-        // ── Column 2: Specification — Target +/- range Units ────────────────
-        const specParts = [];
-        if (row.target !== '') specParts.push(row.target);
-        if (row.tolerance !== '') specParts.push(`± ${row.tolerance}`);
-        const specStr = specParts.join(' ');
+        // ── Column 2: Specification — green-band spec, CENTERED ─────────────
+        const specStr = row.spec || (row.unit ? row.unit : '—');
         doc.fontSize(nameFont).font('Helvetica').fillColor(DGRAY);
-        doc.text(specStr || '—', col2X + 4, y + 1.5, { width: specW - 8, height: rowH / 2, lineBreak: false, ellipsis: true });
-        if (row.unit) {
-          doc.fontSize(subFont).font('Helvetica').fillColor(MGRAY);
-          doc.text(row.unit, col2X + 4, y + rowH / 2 + 0.5, { width: specW - 8, height: rowH / 2, lineBreak: false, ellipsis: true });
-        }
+        doc.text(specStr || '—', col2X + 2, y + (rowH - nameFont) / 2 - 1, {
+          width: specW - 4, height: rowH - 2, align: 'center', lineBreak: false, ellipsis: true,
+        });
 
         // Fixed-column separators
         doc.strokeColor(BORDER).lineWidth(0.3).moveTo(col2X, y).lineTo(col2X, y + rowH).stroke();
@@ -1188,11 +1184,34 @@ function generateInjectorComparisonPdf(injectors = []) {
         y += rowH;
       });
 
+      // ── Result row (overall Pass/Fail per injector) at the bottom ─────────
+      const resultTop = y;
+      doc.rect(LM, y, usableW, resultRowH).fillColor('#EDF1F7').fill();
+      doc.fontSize(8).font('Helvetica-Bold').fillColor(NAVY);
+      doc.text('RESULT', col1X + 4, y + (resultRowH - 8) / 2, { width: stepW - 8, height: resultRowH - 4, lineBreak: false });
+      doc.text('', col2X + 2, y + 4, { width: specW - 4, align: 'center', lineBreak: false });
+      doc.strokeColor(BORDER).lineWidth(0.3).moveTo(col2X, y).lineTo(col2X, y + resultRowH).stroke();
+      doc.strokeColor(BORDER).lineWidth(0.3).moveTo(injStartX, y).lineTo(injStartX, y + resultRowH).stroke();
+      let rx = injStartX;
+      list.forEach((inj) => {
+        doc.strokeColor(BORDER).lineWidth(0.3).moveTo(rx, y).lineTo(rx, y + resultRowH).stroke();
+        const scored = (inj.tests || []).filter(t => t.primary && t.status !== 'skip');
+        const failed = scored.filter(t => t.status === 'fail').length;
+        const overall = scored.length === 0 ? '—' : (failed === 0 ? 'PASS' : 'FAIL');
+        doc.fontSize(injColW < 58 ? 8 : 9).font('Helvetica-Bold')
+           .fillColor(overall === 'FAIL' ? RED : (overall === 'PASS' ? GREEN : DGRAY));
+        doc.text(overall, rx + 2, y + (resultRowH - 9) / 2, { width: injColW - 4, align: 'center', lineBreak: false });
+        rx += injColW;
+      });
+      y += resultRowH;
+
       // ── Outer border ──────────────────────────────────────────────────────
       const tableBottom = y;
       doc.strokeColor(BORDER).lineWidth(0.6).rect(LM, tableTop, usableW, tableBottom - tableTop).stroke();
       doc.strokeColor(BORDER).lineWidth(0.4).moveTo(col2X, tableTop).lineTo(col2X, tableBottom).stroke();
       doc.strokeColor(BORDER).lineWidth(0.4).moveTo(injStartX, tableTop).lineTo(injStartX, tableBottom).stroke();
+      // Line above the result row.
+      doc.strokeColor(NAVY).lineWidth(0.8).moveTo(LM, resultTop).lineTo(LM + usableW, resultTop).stroke();
 
       // ── Footer ────────────────────────────────────────────────────────────
       const footY = pageH - LM - 8;
