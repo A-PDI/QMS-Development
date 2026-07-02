@@ -68,6 +68,16 @@ router.put('/settings', requireAdmin, (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── Test connection ─────────────────────────────────────────────────────────
+router.post('/test-connection', requireAdmin, async (req, res, next) => {
+  try {
+    const result = await carbonzapp.testConnection({});
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    return mapCarbonzappError(err, next);
+  }
+});
+
 // ── Sync Now ──────────────────────────────────────────────────────────────
 router.post('/sync', requireAdmin, async (req, res, next) => {
   try {
@@ -75,11 +85,24 @@ router.post('/sync', requireAdmin, async (req, res, next) => {
     const result = await carbonzapp.syncNow({ fullResync: !!full_resync });
     res.json({ ok: true, ...result });
   } catch (err) {
-    if (err.code === 'NO_API_KEY') return next(new AppError(err.message, 400, 'NO_API_KEY'));
-    if (err.code === 'CARBONZAPP_HTTP_ERROR') return next(new AppError(err.message, 502, 'CARBONZAPP_ERROR'));
-    next(err);
+    return mapCarbonzappError(err, next);
   }
 });
+
+// Translate CarbonZapp service errors into clean HTTP responses with a code
+// the client can act on.
+function mapCarbonzappError(err, next) {
+  console.error('[InjectorTests] CarbonZapp error:', err.code || '', err.message);
+  const map = {
+    NO_API_KEY: 400,
+    CARBONZAPP_HTTP_ERROR: 502,
+    CARBONZAPP_TIMEOUT: 504,
+    CARBONZAPP_NETWORK: 502,
+    CARBONZAPP_BAD_RESPONSE: 502,
+  };
+  const status = map[err.code] || 500;
+  return next(new AppError(err.message, status, err.code || 'CARBONZAPP_ERROR'));
+}
 
 // ── Custom comparison report (landscape PDF) ───────────────────────────────
 router.post('/report', requireAdmin, async (req, res, next) => {
