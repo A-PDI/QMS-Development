@@ -273,6 +273,119 @@ function applyMigrations(db) {
       db.run('ALTER TABLE inspections ADD COLUMN item_count INTEGER NOT NULL DEFAULT 1');
     }
   });
+
+  // ── Migration: repair injector_test_reports schema ────────────────────────
+  // Some early deployments created an `injector_test_reports` table with an
+  // incomplete schema (missing `report_ext_id` and the other CarbonZapp
+  // columns), so `CREATE TABLE IF NOT EXISTS` in sqlite.js was a no-op and the
+  // Sync failed with "no such column: report_ext_id".
+  //
+  // This migration brings the table up to the expected shape. Missing columns
+  // are added in-place via ALTER TABLE where possible. If the table is present
+  // but so far off that it can't be patched (e.g. missing the NOT NULL
+  // report_ext_id that the unique index needs), it is rebuilt — the table only
+  // holds a cache of test-bench data that is re-fetchable from CarbonZapp on the
+  // next Sync, so dropping it is safe.
+  once('repair_injector_test_reports_schema', () => {
+    const info = db.all("PRAGMA table_info(injector_test_reports)", []);
+    // Table doesn't exist yet — sqlite.js will have created it correctly. Skip.
+    if (!info || info.length === 0) return;
+
+    const existing = new Set(info.map(c => c.name));
+
+    // Columns that can be safely added in place (nullable / defaulted).
+    const addable = [
+      ['slot_position', "INTEGER NOT NULL DEFAULT 0"],
+      ['part_number',   'TEXT'],
+      ['serial_number', 'TEXT'],
+      ['job_number',    'TEXT'],
+      ['brand',         'TEXT'],
+      ['injector_type', 'TEXT'],
+      ['machine_name',  'TEXT'],
+      ['machine_sn',    'TEXT'],
+      ['test_datetime', 'TEXT'],
+      ['ext_status',    'INTEGER'],
+      ['overall_pass',  'INTEGER'],
+      ['steps_total',   'INTEGER DEFAULT 0'],
+      ['steps_passed',  'INTEGER DEFAULT 0'],
+      ['steps_failed',  'INTEGER DEFAULT 0'],
+      ['report_json',   "TEXT NOT NULL DEFAULT '{}'"],
+      ['inspection_id', 'TEXT'],
+      ['synced_at',     "TEXT NOT NULL DEFAULT (datetime('now'))"],
+      ['created_at',    "TEXT NOT NULL DEFAULT (datetime('now'))"],
+    ];
+
+    // `report_ext_id` is NOT NULL with no default and is part of the unique
+    // index, so it can't be added to a table that already has rows. If it's
+    // missing we rebuild the whole table.
+    const needsRebuild = !existing.has('report_ext_id') || !existing.has('id');
+
+    if (needsRebuild) {
+      db.exec('DROP TABLE IF EXISTS injector_test_reports');
+      db.exec(`CREATE TABLE injector_test_reports (
+        id TEXT PRIMARY KEY,
+        report_ext_id TEXT NOT NULL,
+        slot_position INTEGER NOT NULL DEFAULT 0,
+        part_number TEXT,
+        serial_number TEXT,
+        job_number TEXT,
+        brand TEXT,
+        injector_type TEXT,
+        machine_name TEXT,
+        machine_sn TEXT,
+        test_datetime TEXT,
+        ext_status INTEGER,
+        overall_pass INTEGER,
+        steps_total INTEGER DEFAULT 0,
+        steps_passed INTEGER DEFAULT 0,
+        steps_failed INTEGER DEFAULT 0,
+        report_json TEXT NOT NULL DEFAULT '{}',
+        inspection_id TEXT REFERENCES inspections(id) ON DELETE SET NULL,
+        synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+    } else {
+      // Table has the key columns — just add any that are still missing.
+      for (const [name, decl] of addable) {
+        if (!existing.has(name)) {
+          try {
+            db.run(`ALTER TABLE injector_test_reports ADD COLUMN ${name} ${decl}`);
+          } catch (e) {
+            console.error(`[Migration] could not add column ${name}:`, e.message);
+          }
+        }
+      }
+    }
+
+    // (Re)create the indexes — no-ops if they already exist.
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_injector_reports_unique ON injector_test_reports(report_ext_id, slot_position)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_injector_reports_datetime ON injector_test_reports(test_datetime DESC)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_injector_reports_serial ON injector_test_reports(serial_number)');
+  });
+
+  // ── Migration: ensure app_settings table exists with the right shape ──────
+  // Guards against an early deployment that created app_settings without the
+  // expected columns (used to store the CarbonZapp API key + last sync time).
+  once('repair_app_settings_schema', () => {
+    const info = db.all("PRAGMA table_info(app_settings)", []);
+    if (!info || info.length === 0) {
+      db.exec(`CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      return;
+    }
+    const existing = new Set(info.map(c => c.name));
+    if (!existing.has('value')) {
+      try { db.run('ALTER TABLE app_settings ADD COLUMN value TEXT'); }
+      catch (e) { console.error('[Migration] could not add app_settings.value:', e.message); }
+    }
+    if (!existing.has('updated_at')) {
+      try { db.run("ALTER TABLE app_settings ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'))"); }
+      catch (e) { console.error('[Migration] could not add app_settings.updated_at:', e.message); }
+    }
+  });
 }
 
 module.exports = { applyMigrations };
