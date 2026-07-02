@@ -45,6 +45,7 @@ const adminRoutes     = require('./routes/admin');
 const drawingsRoutes = require('./routes/drawings');
 const qualityAlertsRoutes = require('./routes/quality-alerts');
 const reportsRoutes = require('./routes/reports');
+const injectorTestsRoutes = require('./routes/injector-tests');
 
 const app        = express();
 const PORT       = process.env.PORT || 3001;
@@ -130,6 +131,7 @@ app.use('/api/admin',       authMiddleware, adminRoutes);
 app.use('/api/drawings', authMiddleware, drawingsRoutes);
 app.use('/api/quality-alerts', authMiddleware, qualityAlertsRoutes);
 app.use('/api/reports', authMiddleware, reportsRoutes);
+app.use('/api/injector-tests', authMiddleware, injectorTestsRoutes);
 
 // Users list
 app.get('/api/users', authMiddleware, (req, res, next) => {
@@ -193,5 +195,28 @@ app.listen(PORT, () => {
     applyMigrations(db);
   } catch (err) {
     console.error('[Startup] Migration error:', err.message);
+  }
+
+  // ── Injector test bench periodic sync ───────────────────────────────────
+  // Polls the third-party API for new test reports on an interval, in
+  // addition to the "Sync Now" button in Admin → Injector Tests. Skipped
+  // entirely if no API key is configured.
+  if (process.env.INJECTOR_API_KEY) {
+    const { syncNow } = require('./services/injectorTestBench');
+    const intervalMinutes = parseInt(process.env.INJECTOR_SYNC_INTERVAL_MINUTES, 10) || 15;
+    const runSync = () => {
+      syncNow()
+        .then(({ reportsSynced, injectorsSynced }) => {
+          if (reportsSynced > 0) {
+            console.log(`[InjectorSync] Synced ${reportsSynced} report(s), ${injectorsSynced} injector(s).`);
+          }
+        })
+        .catch(err => console.error('[InjectorSync] Sync failed:', err.message));
+    };
+    setTimeout(runSync, 10 * 1000); // initial sync shortly after boot
+    setInterval(runSync, intervalMinutes * 60 * 1000);
+    console.log(`[Startup] Injector test bench sync enabled (every ${intervalMinutes}m).`);
+  } else {
+    console.log('[Startup] INJECTOR_API_KEY not set — injector test bench sync disabled.');
   }
 });

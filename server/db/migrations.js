@@ -273,6 +273,95 @@ function applyMigrations(db) {
       db.run('ALTER TABLE inspections ADD COLUMN item_count INTEGER NOT NULL DEFAULT 1');
     }
   });
+
+  // ── Migration: injector flow test bench integration ───────────────────────
+  // Tables for synced injector-flow-test-bench reports. A single bench report
+  // covers one or more physical injectors (test slots); each slot becomes one
+  // row in injector_test_results, linked back to its parent report.
+  once('injector_test_bench_schema', () => {
+    db.exec(`CREATE TABLE IF NOT EXISTS injector_test_reports (
+      id TEXT PRIMARY KEY,
+      external_id TEXT UNIQUE NOT NULL,
+      coding_name TEXT,
+      issuer_name TEXT,
+      machine_name TEXT,
+      machine_sn TEXT,
+      drs_id TEXT,
+      workshop_info TEXT,
+      customer_name TEXT,
+      customer_phone TEXT,
+      customer_mail TEXT,
+      customer_notes TEXT,
+      actuator_code TEXT,
+      actuator_brand TEXT,
+      actuator_type TEXT,
+      pump_code TEXT,
+      notes TEXT,
+      machine_details TEXT,
+      job_number TEXT,
+      report_status INTEGER,
+      report_datetime TEXT,
+      source_created_at TEXT,
+      raw_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+
+    db.exec(`CREATE TABLE IF NOT EXISTS injector_test_results (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES injector_test_reports(id) ON DELETE CASCADE,
+      slot_position INTEGER NOT NULL DEFAULT 0,
+      serial_number TEXT,
+      part_number TEXT,
+      old_code TEXT,
+      injector_brand TEXT,
+      injector_type TEXT,
+      overall_result TEXT,
+      tests_json TEXT NOT NULL DEFAULT '[]',
+      raw_slot_json TEXT,
+      inspection_id TEXT REFERENCES inspections(id) ON DELETE SET NULL,
+      inspection_item_index INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_injector_results_report ON injector_test_results(report_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_injector_results_serial ON injector_test_results(serial_number)');
+
+    // Small key/value table for non-secret app config (currently just the
+    // injector-bench sync cursor). No existing precedent for this in the
+    // codebase — secrets stay in env vars, this is only for cursor state.
+    db.exec(`CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  });
+
+  // ── Migration: Fuel Injector Dimensional Inspection section ───────────────
+  // PDI-IQI-012 (Fuel Injector) originally shipped with only Receiving +
+  // Visual sections. Add a "C. DIMENSIONAL INSPECTION — Flow Test" section
+  // (standard `dimensional` renderer) so synced test-bench results have a
+  // place to land. Starts with an empty items array; rows are populated
+  // per-inspection (via section_data.__admin_sections) when an inspection is
+  // auto-created from synced injector data — see injectorTestBench.js.
+  once('fuel_injector_dimensional_section', () => {
+    const rows = db.all("SELECT id, sections FROM inspection_templates WHERE form_no = 'PDI-IQI-012'", []);
+    for (const row of rows) {
+      let sections;
+      try {
+        sections = JSON.parse(row.sections);
+      } catch {
+        continue;
+      }
+      if (sections.dimensional) continue;
+      sections.dimensional = {
+        title: 'C. DIMENSIONAL INSPECTION — Flow Test',
+        section_type: 'dimensional',
+        items: [],
+      };
+      db.run('UPDATE inspection_templates SET sections = ? WHERE id = ?', [JSON.stringify(sections), row.id]);
+    }
+  });
 }
 
 module.exports = { applyMigrations };

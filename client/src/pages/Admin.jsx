@@ -1,16 +1,17 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Printer, Search, Save, X, ChevronDown, ChevronUp, Users, FileImage, Download, AlertTriangle, Loader2, ClipboardCheck, UserCheck, Mail, Upload, FileSpreadsheet, DownloadCloud } from 'lucide-react'
+import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Printer, Search, Save, X, ChevronDown, ChevronUp, Users, FileImage, Download, AlertTriangle, Loader2, ClipboardCheck, UserCheck, Mail, Upload, FileSpreadsheet, DownloadCloud, RefreshCw, FilePlus2, Gauge } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '../lib/api'
 import { useInspections, useDeleteInspection, useCreateInspection, useAssignInspection } from '../hooks/useInspections'
 import { usePartSpecs, useAllPartSpecs, useCreatePartSpec, useUpdatePartSpec, useDeletePartSpec, useImportPartSpecs, useImportPartsFromInspections } from '../hooks/usePartSpecs'
 import { useDrawings, useUploadDrawing, useSetCurrentDrawing, useDeleteDrawing } from '../hooks/useDrawings'
+import { useInjectorTests, useInjectorSyncStatus, useSyncInjectorTests, useCreateInjectorInspection, downloadInjectorComparisonPdf } from '../hooks/useInjectorTests'
 import { useToast } from '../hooks/useToast'
 import { getUser } from '../lib/auth'
 import { useTemplates, useDeleteTemplate } from '../hooks/useTemplates'
 import { formatDate } from '../lib/utils'
-import { COMPONENT_TYPE_LABELS, STATUS_LABELS, STATUS_COLORS } from '../lib/constants'
+import { COMPONENT_TYPE_LABELS, STATUS_LABELS, STATUS_COLORS, DISPOSITION_COLORS } from '../lib/constants'
 import StatusBadge from '../components/StatusBadge'
 
 const TABS = [
@@ -21,6 +22,7 @@ const TABS = [
   { id: 'drawings', label: 'Engineering Drawings', shortLabel: 'Drawings', icon: FileImage },
   { id: 'assign',   label: 'Assignments',         shortLabel: 'Assign',  icon: ClipboardCheck },
   { id: 'data',     label: 'Inspection Data',    shortLabel: 'Data',    icon: Database },
+  { id: 'injector-tests', label: 'Injector Tests', shortLabel: 'Injectors', icon: Gauge },
 ]
 
 const SECTION_TYPES = [
@@ -1268,6 +1270,211 @@ function InspectionDataTab({ showToast }) {
   )
 }
 
+// ── Injector Tests Tab ────────────────────────────────────────────────────────
+
+function InjectorTestsTab({ showToast }) {
+  const navigate = useNavigate()
+  const [filters, setFilters] = useState({ page: 1, limit: 100 })
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState(() => new Set())
+
+  const { data, isLoading } = useInjectorTests(filters)
+  const { data: syncStatus } = useInjectorSyncStatus()
+  const syncNow = useSyncInjectorTests()
+  const createInspection = useCreateInjectorInspection()
+  const [reportBusy, setReportBusy] = useState(false)
+  const [createBusy, setCreateBusy] = useState(false)
+
+  const injectors = data?.injectors || []
+  const total = data?.total || 0
+
+  function applySearch(e) {
+    e.preventDefault()
+    setFilters(f => ({ ...f, q: search, page: 1 }))
+  }
+
+  function toggle(id) {
+    setSelected(s => {
+      const next = new Set(s)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  function toggleAll() {
+    setSelected(s => (s.size === injectors.length ? new Set() : new Set(injectors.map(i => i.id))))
+  }
+
+  async function handleSyncNow() {
+    try {
+      const result = await syncNow.mutateAsync()
+      showToast(`Synced ${result.reportsSynced} report(s), ${result.injectorsSynced} injector(s)`, 'success')
+    } catch (err) {
+      showToast(err?.response?.data?.error || err.message || 'Sync failed', 'error')
+    }
+  }
+
+  async function handleCustomReport() {
+    setReportBusy(true)
+    try {
+      await downloadInjectorComparisonPdf([...selected])
+    } catch (err) {
+      showToast(err?.response?.data?.error || 'Report generation failed', 'error')
+    } finally {
+      setReportBusy(false)
+    }
+  }
+
+  async function handleCreateInspection() {
+    setCreateBusy(true)
+    try {
+      const result = await createInspection.mutateAsync([...selected])
+      const skipped = result.skippedAlreadyLinked?.length || 0
+      showToast(
+        `Created ${result.created.length} inspection(s)${skipped ? `, ${skipped} already linked` : ''}`,
+        'success'
+      )
+      setSelected(new Set())
+    } catch (err) {
+      showToast(err?.response?.data?.error || 'Inspection creation failed', 'error')
+    } finally {
+      setCreateBusy(false)
+    }
+  }
+
+  const hasSelection = selected.size > 0
+
+  return (
+    <div className="space-y-3 sm:space-y-4">
+      <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <button
+              onClick={handleSyncNow}
+              disabled={syncNow.isPending}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px]"
+            >
+              <RefreshCw size={15} className={syncNow.isPending ? 'animate-spin' : ''} />
+              {syncNow.isPending ? 'Syncing…' : 'Sync Now'}
+            </button>
+            {syncStatus && !syncStatus.configured && (
+              <p className="text-xs text-amber-600 mt-1.5 flex items-center gap-1">
+                <AlertTriangle size={12} /> INJECTOR_API_KEY not configured on the server.
+              </p>
+            )}
+            {syncStatus?.lastStatus === 'error' && (
+              <p className="text-xs text-red-600 mt-1.5">Last sync failed: {syncStatus.lastError}</p>
+            )}
+          </div>
+          <div className="text-xs text-gray-500 text-right">
+            {syncStatus?.lastRunAt && <div>Last synced: {formatDate(syncStatus.lastRunAt)} {new Date(syncStatus.lastRunAt).toLocaleTimeString()}</div>}
+            <div>{syncStatus?.totalInjectors ?? 0} injectors from {syncStatus?.totalReports ?? 0} report(s)</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-4">
+        <div className="flex flex-wrap gap-2 sm:gap-3 items-center justify-between">
+          <form onSubmit={applySearch} className="flex gap-2 flex-1 sm:flex-none min-w-0">
+            <div className="relative flex-1 sm:flex-none">
+              <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input type="text" placeholder="Part #, serial #, job #…"
+                className="w-full sm:w-56 pl-8 pr-3 py-2 sm:py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px] sm:min-h-0"
+                value={search} onChange={e => setSearch(e.target.value)} />
+            </div>
+            <button type="submit" className="px-3 py-2 sm:py-1.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[40px] sm:min-h-0">Search</button>
+          </form>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">{total} injector(s){hasSelection ? ` · ${selected.size} selected` : ''}</span>
+            <button
+              onClick={handleCreateInspection}
+              disabled={!hasSelection || createBusy}
+              className="flex items-center gap-1.5 px-3 sm:px-4 py-2 text-sm border border-pdi-navy text-pdi-navy rounded-lg hover:bg-pdi-navy/5 disabled:opacity-40 disabled:cursor-not-allowed min-h-[40px]"
+            >
+              <FilePlus2 size={15} /> Create Inspection
+            </button>
+            <button
+              onClick={handleCustomReport}
+              disabled={!hasSelection || reportBusy}
+              className="flex items-center gap-1.5 px-3 sm:px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-40 disabled:cursor-not-allowed min-h-[40px]"
+            >
+              <Printer size={15} /> {reportBusy ? 'Generating…' : 'Custom Report'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="hidden md:block overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="px-4 py-3 w-10">
+                  <input type="checkbox" checked={injectors.length > 0 && selected.size === injectors.length} onChange={toggleAll} />
+                </th>
+                {['Part Number', 'Serial Number', 'Job Number', 'Flow Results', 'Inspection'].map(h => (
+                  <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {injectors.map(inj => (
+                <tr key={inj.id} className={`hover:bg-gray-50 ${selected.has(inj.id) ? 'bg-pdi-navy/5' : ''}`}>
+                  <td className="px-4 py-3">
+                    <input type="checkbox" checked={selected.has(inj.id)} onChange={() => toggle(inj.id)} />
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{inj.part_number || '—'}</td>
+                  <td className="px-4 py-3 text-sm">{inj.serial_number || '—'}</td>
+                  <td className="px-4 py-3 text-sm text-gray-500">{inj.job_number || '—'}</td>
+                  <td className="px-4 py-3">
+                    {inj.overall_result ? (
+                      <span className={`px-2 py-0.5 rounded text-xs font-semibold border ${DISPOSITION_COLORS[inj.overall_result] || 'bg-gray-100 text-gray-500 border-gray-300'}`}>
+                        {inj.overall_result}
+                      </span>
+                    ) : <span className="text-xs text-gray-400">—</span>}
+                  </td>
+                  <td className="px-4 py-3">
+                    {inj.inspection_id ? (
+                      <button onClick={() => navigate(`/inspections/${inj.inspection_id}`)} className="text-xs text-pdi-navy hover:underline">View</button>
+                    ) : <span className="text-xs text-gray-400">—</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="md:hidden divide-y divide-gray-100">
+          {injectors.map(inj => (
+            <div key={inj.id} className="px-3 py-3 flex items-start gap-2">
+              <input type="checkbox" className="mt-1" checked={selected.has(inj.id)} onChange={() => toggle(inj.id)} />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-mono text-xs font-bold text-pdi-navy">{inj.part_number || '—'}</span>
+                  {inj.overall_result && (
+                    <span className={`px-2 py-0.5 rounded text-xs font-semibold border ${DISPOSITION_COLORS[inj.overall_result] || 'bg-gray-100 text-gray-500 border-gray-300'}`}>
+                      {inj.overall_result}
+                    </span>
+                  )}
+                </div>
+                <div className="text-sm text-gray-800 mt-0.5">SN: {inj.serial_number || '—'}</div>
+                <div className="text-xs text-gray-500 mt-0.5">Job: {inj.job_number || '—'}</div>
+                {inj.inspection_id && (
+                  <button onClick={() => navigate(`/inspections/${inj.inspection_id}`)} className="text-xs text-pdi-navy hover:underline mt-1">View Inspection</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        {!isLoading && injectors.length === 0 && (
+          <div className="text-center text-gray-400 py-10 text-sm">
+            No synced injectors yet. Click "Sync Now" to fetch reports from the test bench.
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Users Tab ────────────────────────────────────────────────────────────────
 
 function UsersTab({ showToast }) {
@@ -1710,6 +1917,7 @@ export default function Admin() {
     drawings: <DrawingsTab showToast={showToast} />,
     assign:   <InspectionDataTab showToast={showToast} />,
     data:     <InspectionDataTab showToast={showToast} />,
+    'injector-tests': <InjectorTestsTab showToast={showToast} />,
   }
 
   return (
