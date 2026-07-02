@@ -89,6 +89,17 @@ router.post('/sync', requireAdmin, async (req, res, next) => {
   }
 });
 
+// ── Clear all synced reports + auto-created inspections ─────────────────────
+// Removes every synced injector row and the inspections that were auto-created
+// from the bench (manually-completed inspections are preserved). Resets the
+// last-sync marker so the next sync is a full re-import.
+router.delete('/', requireAdmin, (req, res, next) => {
+  try {
+    const result = carbonzapp.clearAllReports();
+    res.json({ ok: true, ...result });
+  } catch (err) { next(err); }
+});
+
 // Translate CarbonZapp service errors into clean HTTP responses with a code
 // the client can act on.
 function mapCarbonzappError(err, next) {
