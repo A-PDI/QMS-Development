@@ -114,9 +114,20 @@ function extractSlots(rawSlotsData) {
     .map(([key, v]) => normalizeSlot(v, key));
 }
 
+/**
+ * Field types are inconsistent across this API (e.g. vdo_auth is a string
+ * "0"/"1", single_slot_machine is an int, result_pass has been observed as
+ * 1 AND 2). Coerce loosely rather than trusting a single JS type.
+ */
+function toBool(v) {
+  if (v === true || v === 1) return true;
+  if (typeof v === 'string') return v === '1' || v.toLowerCase() === 'true';
+  return false;
+}
+
 function normalizeSlot(v, fallbackKey) {
   return {
-    enabled: v.enabled === true || v.enabled === 1,
+    enabled: toBool(v.enabled),
     new_code: v.new_code ?? null,
     old_code: v.old_code ?? null,
     position: v.position !== undefined && v.position !== null ? Number(v.position) : (Number(fallbackKey) || 0),
@@ -124,12 +135,6 @@ function normalizeSlot(v, fallbackKey) {
     statuscolor: v.statuscolor,
     raw: v,
   };
-}
-
-function matchPosition(tankPosition, positions, fallbackIdx) {
-  const p = Number(tankPosition);
-  if (Number.isFinite(p) && positions.includes(p)) return p;
-  return positions[fallbackIdx] ?? positions[0];
 }
 
 function buildTestRow(t, tank) {
@@ -143,7 +148,10 @@ function buildTestRow(t, tank) {
   if (tank) {
     spec = [tank.text_green, tank.tank_unit].filter(Boolean).join(' ');
     actual = tank.results || '';
-    pass = tank.result_pass === true || tank.result_pass === 1 || tank.result_color === 5;
+    // Observed result_pass values: 1 (pass), 2 (fail) — treat anything that
+    // isn't an explicit pass flag as a fail, but corroborate with
+    // result_color (5 = green = pass) since the two have been seen to agree.
+    pass = toBool(tank.result_pass) || Number(tank.result_color) === 5;
   } else if (rsp.result !== undefined) {
     spec = 'Visual Pass';
     actual = String(rsp.result);
@@ -166,24 +174,35 @@ function buildTestRow(t, tank) {
   };
 }
 
-/** Bucket AllTests entries onto the slot (injector) they belong to, by tank_position. */
+/**
+ * Bucket AllTests entries onto the slot (injector) they belong to.
+ *
+ * A confirmed live sample showed PrimaryTank/SecondaryTank.tank_position
+ * values of 1 and 2 even though SlotsData held 7 total slot entries (most
+ * disabled/unloaded) — i.e. tank_position looks like a fixed "1st tank /
+ * 2nd tank" channel number, not a reference to a specific slot's own
+ * `position` field, and only two tanks are ever populated per test
+ * regardless of how many slots exist. So rather than trying to match
+ * tank_position against a slot's position value (unverified and, per that
+ * sample, likely wrong), Primary always maps to the first *enabled* slot
+ * and Secondary to the second, ranked by slot position.
+ */
 function attachTestsToSlots(slots, allTests) {
+  const ordered = [...slots].sort((a, b) => a.position - b.position);
   const bucket = new Map(slots.map(s => [s.position, []]));
-  const positions = slots.map(s => s.position);
+
   for (const t of (Array.isArray(allTests) ? allTests : [])) {
     if (!t || (t.TestInfo && Number(t.TestInfo.status) === 1)) continue; // skip SKIPPED tests
     const primary = t.PrimaryTank;
     const secondary = t.SecondaryTank;
-    if (primary) {
-      const pos = matchPosition(primary.tank_position, positions, 0);
-      if (bucket.has(pos)) bucket.get(pos).push(buildTestRow(t, primary));
-    } else if (t.RspResults) {
-      const pos = positions[0];
-      if (bucket.has(pos)) bucket.get(pos).push(buildTestRow(t, null));
+    if (primary && ordered[0]) {
+      bucket.get(ordered[0].position).push(buildTestRow(t, primary));
+    } else if (!primary && t.RspResults && ordered[0]) {
+      bucket.get(ordered[0].position).push(buildTestRow(t, null));
     }
     if (secondary) {
-      const pos = matchPosition(secondary.tank_position, positions, 1);
-      if (bucket.has(pos)) bucket.get(pos).push(buildTestRow(t, secondary));
+      const slot = ordered[1] || ordered[0];
+      if (slot) bucket.get(slot.position).push(buildTestRow(t, secondary));
     }
   }
   return bucket;
@@ -246,7 +265,14 @@ function syncReportToDb(raw) {
     );
   }
 
-  const slots = extractSlots(raw.SlotsData);
+  // Only slots actually loaded/tested (SlotsData.enabled) become injector
+  // rows — a report's SlotsData can list every physical slot the bench has
+  // (a confirmed live sample had 7), most of them idle. If the enabled flag
+  // doesn't resolve to true for anything (unexpected shape), fall back to
+  // all slots rather than silently syncing zero injectors.
+  const allSlots = extractSlots(raw.SlotsData);
+  const enabledSlots = allSlots.filter(s => s.enabled);
+  const slots = enabledSlots.length > 0 ? enabledSlots : allSlots;
   const testBuckets = attachTestsToSlots(slots, raw.AllTests);
 
   const existingResults = db.all(
