@@ -222,6 +222,40 @@ function migrateSchema() {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`,
+    // Application-wide key/value settings (e.g. CarbonZapp API key, last sync time)
+    `CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    // Injector test-bench results synced from the CarbonZapp test bench.
+    // One row = one physical injector (a report groups >1 injector by slot).
+    // Unique key = report_ext_id + slot_position.
+    `CREATE TABLE IF NOT EXISTS injector_test_reports (
+      id TEXT PRIMARY KEY,
+      report_ext_id TEXT NOT NULL,
+      slot_position INTEGER NOT NULL DEFAULT 0,
+      part_number TEXT,
+      serial_number TEXT,
+      job_number TEXT,
+      brand TEXT,
+      injector_type TEXT,
+      machine_name TEXT,
+      machine_sn TEXT,
+      test_datetime TEXT,
+      ext_status INTEGER,
+      overall_pass INTEGER,
+      steps_total INTEGER DEFAULT 0,
+      steps_passed INTEGER DEFAULT 0,
+      steps_failed INTEGER DEFAULT 0,
+      report_json TEXT NOT NULL DEFAULT '{}',
+      inspection_id TEXT REFERENCES inspections(id) ON DELETE SET NULL,
+      synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_injector_reports_unique ON injector_test_reports(report_ext_id, slot_position)`,
+    `CREATE INDEX IF NOT EXISTS idx_injector_reports_datetime ON injector_test_reports(test_datetime DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_injector_reports_serial ON injector_test_reports(serial_number)`,
   ];
   for (const sql of tableMigrations) {
     try { rawDb.exec(sql); } catch (_) {}
@@ -333,6 +367,12 @@ const NEW_TEMPLATES = [
       { id: 6, name: 'O-Rings & Seals',        requirement: 'O-rings, seals, or visible sealing elements are present, seated correctly, and free from cuts, twists, flattening, or contamination.' },
       { id: 7, name: 'Filter Screen / Inlet',  requirement: 'Filter screen or inlet area, where visible, is clean and free from metal chips, dirt, or obstruction.' },
       { id: 8, name: 'External Surfaces',      requirement: 'External surfaces show no oil, grease, rust, preservative buildup, or foreign material that could affect installation or cleanliness.' },
+    ],
+    // The Dimensional Inspection for the Fuel Injector is populated from the
+    // CarbonZapp injector test-bench report (flow / response results). These
+    // placeholder rows are replaced per-inspection by the synced test steps.
+    dimensional_items: [
+      { id: 1, measurement: 'Test Bench Results', location: 'Flow / response measurements are populated automatically from the linked CarbonZapp injector test report.', spec: '' },
     ],
   },
 

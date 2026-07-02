@@ -362,6 +362,15 @@ const TEMPLATES = [
           { id: 8, name: 'External Surfaces',          requirement: 'External surfaces show no oil, grease, rust, preservative buildup, or foreign material that could affect installation or cleanliness.' },
         ],
       },
+      // The Dimensional Inspection for the Fuel Injector holds the CarbonZapp
+      // test-bench results. These placeholder rows are replaced per-inspection
+      // by the synced test steps when a report is imported.
+      dimensional: {
+        title: 'C. DIMENSIONAL INSPECTION', section_type: 'dimensional',
+        items: [
+          { id: 1, measurement: 'Test Bench Results', location: 'Flow / response measurements are populated automatically from the linked CarbonZapp injector test report.', spec: '' },
+        ],
+      },
     },
   },
 

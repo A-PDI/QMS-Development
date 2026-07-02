@@ -45,6 +45,7 @@ const adminRoutes     = require('./routes/admin');
 const drawingsRoutes = require('./routes/drawings');
 const qualityAlertsRoutes = require('./routes/quality-alerts');
 const reportsRoutes = require('./routes/reports');
+const injectorTestsRoutes = require('./routes/injector-tests');
 
 const app        = express();
 const PORT       = process.env.PORT || 3001;
@@ -130,6 +131,7 @@ app.use('/api/admin',       authMiddleware, adminRoutes);
 app.use('/api/drawings', authMiddleware, drawingsRoutes);
 app.use('/api/quality-alerts', authMiddleware, qualityAlertsRoutes);
 app.use('/api/reports', authMiddleware, reportsRoutes);
+app.use('/api/injector-tests', authMiddleware, injectorTestsRoutes);
 
 // Users list
 app.get('/api/users', authMiddleware, (req, res, next) => {
