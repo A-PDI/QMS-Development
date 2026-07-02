@@ -54,12 +54,45 @@ const PASS = 'pass';
 const FAIL = 'fail';
 const SKIP = 'skip';
 
+/**
+ * Determine PASS / FAIL / SKIP for a tank.
+ *
+ * IMPORTANT — pass/fail is judged against the GREEN acceptance band
+ * (min_green … max_green), which is exactly the spec shown to the operator as
+ * `text_green` (e.g. "8.5 +/- 4.5" → 4.0 … 13.0). The bench's own
+ * `result_pass` / `result_color` fields instead reflect the much tighter BLUE
+ * *target* band (min_blue … max_blue), so relying on them makes in-spec
+ * injectors show up as FAIL. We therefore compute status from AvrResult vs the
+ * green band and only fall back to result_pass when the green bounds are
+ * unavailable.
+ */
 function tankStatus(tank) {
   if (!tank) return null;
+
+  const avr = toNum(tank.AvrResult);
+  const lo = toNum(tank.min_green);
+  const hi = toNum(tank.max_green);
+
+  // Preferred path: green acceptance band + a measured average.
+  if (avr != null && (lo != null || hi != null)) {
+    const okLo = lo == null || avr >= lo - EPS;
+    const okHi = hi == null || avr <= hi + EPS;
+    return okLo && okHi ? PASS : FAIL;
+  }
+
+  // Fallback: no green band available — trust the bench's own flag.
   const p = Number(tank.result_pass);
   if (p === 1) return PASS;
   if (p === 2) return FAIL;
-  return SKIP; // 4 / anything else
+  return SKIP; // 4 / anything else / no data
+}
+
+// Small helpers for numeric tolerance comparison.
+const EPS = 1e-6;
+function toNum(v) {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -98,16 +131,21 @@ function normaliseTests(report) {
       const specText = tank.text_green != null && tank.text_green !== ''
         ? `${tank.text_green}${tank.tank_unit ? ' ' + tank.tank_unit : ''}`
         : (tank.tank_unit || '');
+      const avr = toNum(tank.AvrResult);
       return {
         tank_name: tank.tank_name || '',
         unit: tank.tank_unit || '',
+        // Human-readable green-band spec, e.g. "8.5 +/- 4.5 mm3/STRK".
         spec: specText,
         // Structured specification pieces for the comparison report columns.
         target: tank.target_blue != null ? String(tank.target_blue) : '',
         tolerance: tank.tol_blue != null ? String(tank.tol_blue) : '',
+        // Green acceptance band (the true pass/fail range).
+        min_green: toNum(tank.min_green),
+        max_green: toNum(tank.max_green),
         results: tank.results != null ? String(tank.results) : '',
         // The single "flow" value reported per injector = the average reading.
-        average: tank.AvrResult != null ? String(tank.AvrResult) : '',
+        average: avr != null ? String(avr) : '',
         status: tankStatus(tank),
       };
     }
@@ -291,6 +329,20 @@ async function testConnection({ apiKey } = {}) {
 }
 
 /**
+ * Turn a stored injector_test_reports DB row back into the shape the
+ * inspection auto-fill expects (with a parsed `tests` array).
+ */
+function hydrateInjectorRow(row) {
+  let rj = {};
+  try { rj = row.report_json ? JSON.parse(row.report_json) : {}; } catch (_) { rj = {}; }
+  return {
+    ...row,
+    tests: Array.isArray(rj.tests) ? rj.tests : [],
+    report_json: rj,
+  };
+}
+
+/**
  * Persist a list of raw CarbonZapp report objects. Dedupes on
  * (report_ext_id, slot_position): existing rows are updated, new ones inserted.
  * Returns { imported, updated, injectors: [row...] }.
@@ -373,12 +425,26 @@ async function syncNow({ apiKey, fullResync = false } = {}) {
   console.log(`[CarbonZapp] Fetched ${raw.length} report object(s) from the bench.`);
   const result = upsertReports(raw);
 
-  // Auto-create/fill inspections for each injector.
-  const { autoFillInjectorInspection } = require('./injectorInspection');
-  let inspectionsCreated = 0;
+  // Auto-create/fill inspections — ONE inspection per test report, grouping all
+  // injectors that share the same report_ext_id into a single multi-item form.
+  const { autoFillReportInspection } = require('./injectorInspection');
+  const byReport = new Map();
   for (const inj of result.injectors) {
+    const key = inj.report_ext_id;
+    if (!byReport.has(key)) byReport.set(key, []);
+    byReport.get(key).push(inj);
+  }
+  let inspectionsCreated = 0;
+  for (const [reportExtId] of byReport) {
     try {
-      const created = autoFillInjectorInspection(inj);
+      // Load ALL injectors for this report from the DB (not just the ones that
+      // changed in this sync) so an incremental sync never drops sibling
+      // injectors from the multi-item inspection.
+      const rows = db.all(
+        'SELECT * FROM injector_test_reports WHERE report_ext_id = ? ORDER BY slot_position',
+        [reportExtId]
+      ).map(hydrateInjectorRow);
+      const created = autoFillReportInspection(reportExtId, rows);
       if (created) inspectionsCreated += 1;
     } catch (err) {
       console.error('[CarbonZapp] auto-fill inspection failed:', err.message);
@@ -407,6 +473,7 @@ module.exports = {
   testConnection,
   mapReportToInjector,
   normaliseTests,
+  hydrateInjectorRow,
   upsertReports,
   syncNow,
   PASS,

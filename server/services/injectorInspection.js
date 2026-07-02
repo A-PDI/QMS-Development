@@ -1,22 +1,26 @@
 'use strict';
 /**
- * Auto-create / auto-fill a Fuel Injector (PDI-IQI-012) inspection from a
- * synced CarbonZapp injector test report.
+ * Auto-create / auto-fill a Fuel Injector (PDI-IQI-012) inspection from synced
+ * CarbonZapp injector test reports.
  *
- * The test-bench results become the DIMENSIONAL INSPECTION section of the
- * fuel-injector form. Once populated, the inspection behaves like any other
- * inspection in the app (review, complete, PDF, etc.).
+ * MODEL: one INSPECTION per physical TEST REPORT (grouped by report_ext_id).
+ * A single test report may contain several injectors (one per bench slot); each
+ * injector becomes ONE ITEM inside the inspection (section_data.__items[]).
  *
- * section_data shape produced (matches what the client / PDF renderer expect):
+ * For every item:
+ *   • DIMENSIONAL section  = that injector's flow / response test-bench steps.
+ *   • RECEIVING & VISUAL   = auto-marked PASS ('P') when the injector passed all
+ *                            of its flow tests; left OPEN ('') when it failed,
+ *                            so a QC reviewer must inspect a failing injector.
+ *
+ * section_data shape produced (matches the client / PDF renderer):
  *   {
- *     __items: [ { <sectionKey>: <answer>, __disposition, __disposition_notes } ],
+ *     __items: [ { receiving:[...], visual:[...], dimensional:[...],
+ *                  __disposition, __disposition_notes }, ... ],
  *     __dimensional_added: true,
- *     __admin_sections: { ...template.sections, dimensional: {items: [...]} },
- *     __injector_source: { report_ext_id, slot_position }
+ *     __admin_sections: { ...template.sections, dimensional: {items:[...]} },
+ *     __injector_source: { report_ext_id, injectors:[{id, slot_position, serial}] }
  *   }
- * The dimensional answer is an array of { id, actual1, status } rows keyed to
- * the (per-inspection) dimensional item ids, so renderDimensional() shows the
- * measured flow result and a pass/fail glyph for each test step.
  */
 
 const crypto = require('crypto');
@@ -25,7 +29,6 @@ const db = require('../db/adapter');
 const FUEL_INJECTOR_FORM = 'PDI-IQI-012';
 
 function getFuelInjectorTemplate() {
-  // Prefer the active template for the fuel_injector component type.
   return db.get(
     `SELECT * FROM inspection_templates
        WHERE form_no = ? AND active = 1
@@ -38,9 +41,14 @@ function getFuelInjectorTemplate() {
  * Build the dimensional section definition (items) + the per-item answer rows
  * from an injector's normalised test steps.
  *
- * Returns { items, answers }:
- *   items:   [ { id, measurement, location, spec } ]  (one per scored test step)
- *   answers: [ { id, actual1, actual2, actual3, status } ]
+ * The user-facing test-results layout is: Test Point | Specification | Value |
+ * Pass/Fail. We store:
+ *   item.measurement = test-step name (Test Point)
+ *   item.spec        = green-band spec, flow tests only (e.g. "8.5 +/- 4.5 …")
+ *   answer.actual1   = the AVERAGE reading only (Value)
+ *   answer.status    = pass / fail / na (Pass/Fail)
+ *
+ * Returns { items, answers }.
  */
 function buildDimensionalFromTests(tests) {
   const items = [];
@@ -48,36 +56,31 @@ function buildDimensionalFromTests(tests) {
   let id = 0;
 
   for (const t of tests) {
-    // Skip steps that were skipped and have no measurable result.
-    if (t.skipped && !t.primary) continue;
-    if (!t.primary) continue;
+    if (!t.primary) continue;            // no measurable result (skipped steps)
 
     id += 1;
     const p = t.primary;
-    const specParts = [];
-    if (p.spec) specParts.push(p.spec);
-    if (t.conditions) specParts.push(`(${t.conditions})`);
-
-    // Map internal status → the checklist glyph value used by the PDF/UI.
-    // renderDimensional expects a status string; the app treats 'pass'/'fail'.
+    // Show the flow spec (green band) only; do NOT append bench conditions here
+    // — the user asked for Specification = flow spec only.
+    const spec = p.spec || '';
     const statusVal = t.status === 'fail' ? 'fail' : (t.status === 'pass' ? 'pass' : 'na');
 
     items.push({
       id,
       measurement: t.name || t.raw_name || `Step ${id}`,
-      location: p.tank_name ? `Tank ${p.tank_name}` : '',
-      spec: specParts.join(' '),
+      location: '',
+      spec,
     });
     answers.push({
       id,
-      actual1: p.results || p.average || '',
+      actual1: p.average || '',          // AVERAGE value only
       actual2: '',
       actual3: '',
       status: statusVal,
       __unit: p.unit || '',
     });
 
-    // If there is a secondary tank, add it as its own row.
+    // Secondary tank (if any) gets its own row.
     if (t.secondary) {
       id += 1;
       const s = t.secondary;
@@ -85,12 +88,12 @@ function buildDimensionalFromTests(tests) {
       items.push({
         id,
         measurement: `${t.name || t.raw_name} — ${s.tank_name || 'Secondary'}`,
-        location: s.tank_name ? `Tank ${s.tank_name}` : '',
+        location: '',
         spec: s.spec || '',
       });
       answers.push({
         id,
-        actual1: s.results || s.average || '',
+        actual1: s.average || '',
         actual2: '',
         actual3: '',
         status: sStatusVal,
@@ -102,82 +105,134 @@ function buildDimensionalFromTests(tests) {
   return { items, answers };
 }
 
+// Normalised test steps for an injector row (from live sync or DB report_json).
+function testsFor(inj) {
+  if (Array.isArray(inj.tests)) return inj.tests;
+  if (inj.report_json) {
+    const rj = typeof inj.report_json === 'string'
+      ? safeParse(inj.report_json)
+      : inj.report_json;
+    if (rj && Array.isArray(rj.tests)) return rj.tests;
+  }
+  return [];
+}
+
+function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
+
 /**
- * Create or update a Fuel Injector inspection for a single synced injector row.
- * `inj` is the mapped injector object from carbonzapp.mapReportToInjector
- * (must include `id`, `tests`, and header fields).
- *
- * Returns true if a NEW inspection was created, false if an existing one was
- * updated (or nothing needed doing).
+ * Build the per-item section_data (checklists + dimensional) for one injector.
+ * Receiving & Visual auto-pass when the injector passed all flow tests.
  */
-function autoFillInjectorInspection(inj) {
+function buildItemForInjector(inj, templateSections) {
+  const tests = testsFor(inj);
+  const { answers } = buildDimensionalFromTests(tests);
+
+  const passed = inj.overall_pass === 1;
+  const failed = inj.overall_pass === 0;
+
+  // Receiving (pfn_checklist) and Visual (pass_fail_checklist) both use the
+  // unified {id, result} shape. Auto-mark 'P' on a pass, leave '' on a fail.
+  const checklistResult = passed ? 'P' : '';
+  const item = {};
+
+  for (const [key, section] of Object.entries(templateSections)) {
+    if (key === 'dimensional') continue; // handled below
+    if (section.section_type === 'pfn_checklist' || section.section_type === 'pass_fail_checklist') {
+      const srcItems = Array.isArray(section.items) ? section.items : [];
+      item[key] = srcItems.map((it) => ({ id: it.id, result: checklistResult, notes: '', finding: '' }));
+    }
+  }
+
+  item.dimensional = answers;
+  item.__disposition = inj.overall_pass == null ? '' : (failed ? 'fail' : 'pass');
+  item.__disposition_notes = '';
+  return item;
+}
+
+/**
+ * Create or update ONE Fuel Injector inspection for a whole test report.
+ *
+ * @param {string} reportExtId  the CarbonZapp report _id
+ * @param {Array}  injectorRows mapped injector objects that belong to that
+ *                              report (each with id, slot_position, tests, …)
+ * Returns true if a NEW inspection was created.
+ */
+function autoFillReportInspection(reportExtId, injectorRows) {
+  if (!reportExtId || !Array.isArray(injectorRows) || injectorRows.length === 0) return false;
+
   const template = getFuelInjectorTemplate();
   if (!template) {
     console.warn('[InjectorInspection] Fuel Injector template (PDI-IQI-012) not found — skipping auto-fill.');
     return false;
   }
-
   const templateSections = JSON.parse(template.sections || '{}');
-  const tests = Array.isArray(inj.tests)
-    ? inj.tests
-    : (inj.report_json && Array.isArray(inj.report_json.tests) ? inj.report_json.tests : []);
 
-  const { items, answers } = buildDimensionalFromTests(tests);
+  // Stable ordering: by slot position, then serial.
+  const injectors = [...injectorRows].sort((a, b) => {
+    const s = (a.slot_position || 0) - (b.slot_position || 0);
+    if (s !== 0) return s;
+    return String(a.serial_number || '').localeCompare(String(b.serial_number || ''));
+  });
 
-  // Per-inspection section overrides: replace the placeholder dimensional
-  // section items with the actual test-step rows.
+  // The dimensional section item list is per-injector; the client applies
+  // __admin_sections to ALL items, so use the first injector's steps to define
+  // the row labels/specs. (All injectors on a report run the same test plan.)
+  const { items: dimItems } = buildDimensionalFromTests(testsFor(injectors[0]));
   const adminSections = JSON.parse(JSON.stringify(templateSections));
   adminSections.dimensional = {
     title: 'C. DIMENSIONAL INSPECTION — INJECTOR TEST BENCH RESULTS',
     section_type: 'dimensional',
-    items,
+    items: dimItems,
   };
 
-  const overallFail = inj.overall_pass === 0;
-  const disposition = inj.overall_pass == null ? '' : (overallFail ? 'fail' : 'pass');
+  const __items = injectors.map((inj) => buildItemForInjector(inj, adminSections));
 
   const sectionData = {
-    __items: [
-      {
-        dimensional: answers,
-        __disposition: disposition,
-        __disposition_notes: '',
-      },
-    ],
+    __items,
     __dimensional_added: true,
     __admin_sections: adminSections,
     __injector_source: {
-      report_ext_id: inj.report_ext_id,
-      slot_position: inj.slot_position,
-      injector_report_id: inj.id,
+      report_ext_id: reportExtId,
+      injectors: injectors.map((i) => ({
+        id: i.id, slot_position: i.slot_position, serial: i.serial_number,
+      })),
     },
   };
 
+  // Overall disposition: pass only if every injector passed; fail if any failed.
+  const anyFail = injectors.some((i) => i.overall_pass === 0);
+  const allScored = injectors.every((i) => i.overall_pass != null);
+  const disposition = !allScored ? '' : (anyFail ? 'fail' : 'pass');
+
+  // Header info from the first injector (shared across the report).
+  const head = injectors[0];
+  const serials = injectors.map((i) => i.serial_number).filter(Boolean).join(', ');
   const now = new Date().toISOString();
 
-  // Has an inspection already been created for this injector?
-  const existingLink = db.get(
-    'SELECT inspection_id FROM injector_test_reports WHERE id = ?',
-    [inj.id]
-  );
+  // Is there already an inspection for this report? (Any injector row that is
+  // already linked points at it.)
+  let inspectionId = null;
+  for (const inj of injectors) {
+    const link = db.get('SELECT inspection_id FROM injector_test_reports WHERE id = ?', [inj.id]);
+    if (link && link.inspection_id) { inspectionId = link.inspection_id; break; }
+  }
 
-  if (existingLink && existingLink.inspection_id) {
-    const insp = db.get('SELECT id, status FROM inspections WHERE id = ?', [existingLink.inspection_id]);
+  if (inspectionId) {
+    const insp = db.get('SELECT id, status FROM inspections WHERE id = ?', [inspectionId]);
     if (insp) {
-      // Only refresh inspections that haven't been manually completed, so we
-      // don't clobber a QC sign-off.
       if (insp.status !== 'complete') {
         db.run(
           `UPDATE inspections SET
              part_number = ?, lot_serial_no = ?, po_number = ?, description = ?,
-             date_received = ?, section_data = ?, disposition = ?, updated_at = ?
+             date_received = ?, item_count = ?, section_data = ?, disposition = ?, updated_at = ?
            WHERE id = ?`,
           [
-            inj.part_number || null,
-            inj.serial_number || null,
-            inj.job_number || null,
-            [inj.brand, inj.injector_type].filter(Boolean).join(' ') || null,
-            (inj.test_datetime || now).slice(0, 10),
+            head.part_number || null,
+            serials || null,
+            head.job_number || null,
+            [head.brand, head.injector_type].filter(Boolean).join(' ') || null,
+            (head.test_datetime || now).slice(0, 10),
+            injectors.length,
             JSON.stringify(sectionData),
             disposition || null,
             now,
@@ -185,30 +240,35 @@ function autoFillInjectorInspection(inj) {
           ]
         );
       }
+      // Ensure every injector row on this report links to the inspection.
+      for (const inj of injectors) {
+        db.run('UPDATE injector_test_reports SET inspection_id = ? WHERE id = ?', [insp.id, inj.id]);
+      }
       return false;
     }
   }
 
-  // Create a fresh inspection.
-  const inspectionId = crypto.randomUUID();
+  // Create a fresh inspection for the whole report.
+  inspectionId = crypto.randomUUID();
   db.run(
     `INSERT INTO inspections
        (id, template_id, component_type, form_no, part_number, supplier, po_number, description,
         date_received, inspector_name, lot_serial_no, status, item_count, section_data,
         disposition, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 1, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)`,
     [
       inspectionId,
       template.id,
       template.component_type,
       template.form_no,
-      inj.part_number || null,
-      inj.brand || null,
-      inj.job_number || null,
-      [inj.brand, inj.injector_type].filter(Boolean).join(' ') || null,
-      (inj.test_datetime || now).slice(0, 10),
+      head.part_number || null,
+      head.brand || null,
+      head.job_number || null,
+      [head.brand, head.injector_type].filter(Boolean).join(' ') || null,
+      (head.test_datetime || now).slice(0, 10),
       'Injector Test Bench',
-      inj.serial_number || null,
+      serials || null,
+      injectors.length,
       JSON.stringify(sectionData),
       disposition || null,
       now,
@@ -216,8 +276,9 @@ function autoFillInjectorInspection(inj) {
     ]
   );
 
-  // Link the injector row to the inspection.
-  db.run('UPDATE injector_test_reports SET inspection_id = ? WHERE id = ?', [inspectionId, inj.id]);
+  for (const inj of injectors) {
+    db.run('UPDATE injector_test_reports SET inspection_id = ? WHERE id = ?', [inspectionId, inj.id]);
+  }
 
   try {
     db.run(
@@ -234,5 +295,6 @@ module.exports = {
   FUEL_INJECTOR_FORM,
   getFuelInjectorTemplate,
   buildDimensionalFromTests,
-  autoFillInjectorInspection,
+  buildItemForInjector,
+  autoFillReportInspection,
 };
