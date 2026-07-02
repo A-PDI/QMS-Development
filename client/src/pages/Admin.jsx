@@ -1709,6 +1709,8 @@ function InjectorTestsTab({ showToast }) {
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [savingKey, setSavingKey] = useState(false)
   const [testing, setTesting] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
   const [statusMsg, setStatusMsg] = useState(null) // { type:'error'|'success'|'info', text }
 
   const { data, isLoading, refetch } = useQuery({
@@ -1742,14 +1744,25 @@ function InjectorTestsTab({ showToast }) {
     })
   }
 
-  const handleSync = async () => {
+  const handleSync = async (fullResync = false) => {
     setSyncing(true)
-    setStatusMsg({ type: 'info', text: 'Syncing with the test bench…' })
+    setStatusMsg({ type: 'info', text: fullResync ? 'Full resync — fetching the complete report set from the test bench…' : 'Syncing with the test bench…' })
     try {
-      const { data: res } = await api.post('/injector-tests/sync', {})
-      const summary = `Synced ${res.fetched} report object(s): ${res.imported} new, ${res.updated} updated, ${res.inspectionsCreated} inspection(s) created.`
-      if (res.fetched === 0) {
-        setStatusMsg({ type: 'info', text: 'Sync succeeded, but the bench returned no new reports since the last sync.' })
+      const { data: res } = await api.post('/injector-tests/sync', fullResync ? { full_resync: true } : {})
+      let summary = `Synced ${res.fetched} report object(s): ${res.imported} new, ${res.updated} updated, ${res.inspectionsCreated} inspection(s) created.`
+      // On a full resync, the backend reconciles deletions against the complete set.
+      const delReports = res.reportsDeleted || 0
+      const delInsp = res.inspectionsDeleted || 0
+      const keptInsp = res.inspectionsKept || 0
+      if (fullResync && (delReports || delInsp || keptInsp)) {
+        summary += ` Removed ${delReports} report(s) no longer on the bench` +
+          (delInsp ? `, deleted ${delInsp} auto-inspection(s)` : '') +
+          (keptInsp ? `; kept ${keptInsp} completed inspection(s)` : '') + '.'
+      }
+      if (res.fetched === 0 && !delReports && !delInsp) {
+        setStatusMsg({ type: 'info', text: fullResync
+          ? 'Full resync succeeded, but the bench returned no reports.'
+          : 'Sync succeeded, but the bench returned no new reports since the last sync.' })
       } else {
         setStatusMsg({ type: 'success', text: summary })
       }
@@ -1768,6 +1781,28 @@ function InjectorTestsTab({ showToast }) {
         showToast(`Sync failed: ${msg}`, 'error')
       }
     } finally { setSyncing(false) }
+  }
+
+  const handleClearAll = async () => {
+    setClearing(true)
+    setConfirmClear(false)
+    setStatusMsg({ type: 'info', text: 'Clearing all synced reports…' })
+    try {
+      const { data: res } = await api.delete('/injector-tests')
+      const kept = res.inspectionsKept || 0
+      const summary = `Cleared ${res.reportsDeleted || 0} report(s) and ${res.inspectionsDeleted || 0} auto-inspection(s)` +
+        (kept ? `; kept ${kept} completed inspection(s)` : '') +
+        '. You can now run a fresh sync.'
+      setStatusMsg({ type: 'success', text: summary })
+      showToast('Synced reports cleared', 'success')
+      setSelected(new Set())
+      qc.invalidateQueries({ queryKey: ['injector-tests'] })
+      qc.invalidateQueries({ queryKey: ['injector-tests-settings'] })
+    } catch (err) {
+      const msg = err?.response?.data?.error || err.message || 'Unknown error'
+      setStatusMsg({ type: 'error', text: msg })
+      showToast(`Clear failed: ${msg}`, 'error')
+    } finally { setClearing(false) }
   }
 
   const handleTestConnection = async () => {
@@ -1823,15 +1858,25 @@ function InjectorTestsTab({ showToast }) {
     <div className="space-y-4">
       {/* Top action bar: Sync Now + Settings */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <button onClick={handleSync} disabled={syncing}
+        <div className="flex flex-wrap items-center gap-2">
+          <button onClick={() => handleSync(false)} disabled={syncing || clearing}
             className="flex items-center gap-2 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px] font-medium">
             <RefreshCw size={15} className={syncing ? 'animate-spin' : ''} />
             {syncing ? 'Syncing…' : 'Sync Now'}
           </button>
+          <button onClick={() => handleSync(true)} disabled={syncing || clearing}
+            title="Fetch the complete report set and reconcile any reports deleted from the test bench"
+            className="flex items-center gap-1.5 px-3 py-2 text-sm border border-pdi-navy/30 text-pdi-navy rounded-lg hover:bg-pdi-navy/5 disabled:opacity-50 min-h-[40px] font-medium">
+            <RefreshCw size={14} /> Full Resync
+          </button>
           <button onClick={() => setShowSettings(s => !s)}
             className="flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">
             <Settings size={15} /> Settings
+          </button>
+          <button onClick={() => setConfirmClear(true)} disabled={syncing || clearing}
+            title="Delete all synced reports and their auto-created inspections (completed inspections are kept)"
+            className="flex items-center gap-1.5 px-3 py-2 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50 min-h-[40px]">
+            <Trash2 size={14} className={clearing ? 'animate-pulse' : ''} /> {clearing ? 'Clearing…' : 'Clear All'}
           </button>
         </div>
         <div className="text-xs text-gray-500">
@@ -1853,6 +1898,33 @@ function InjectorTestsTab({ showToast }) {
             : <Loader2 size={16} className="mt-0.5 flex-shrink-0 animate-spin" />}
           <span className="flex-1">{statusMsg.text}</span>
           <button onClick={() => setStatusMsg(null)} className="text-current opacity-50 hover:opacity-100"><X size={14} /></button>
+        </div>
+      )}
+
+      {/* Clear-all confirmation */}
+      {confirmClear && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={18} className="mt-0.5 flex-shrink-0 text-red-600" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-red-800">Clear all synced reports?</p>
+              <p className="mt-1 text-xs text-red-700">
+                This deletes every report imported from the test bench and any auto-created inspections that
+                have not been completed. Inspections you have already <strong>completed will be kept</strong> (just
+                detached from the report). Afterwards, run <strong>Sync Now</strong> or <strong>Full Resync</strong> to re-import fresh data.
+              </p>
+              <div className="mt-3 flex items-center gap-2">
+                <button onClick={handleClearAll} disabled={clearing}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 min-h-[36px] font-medium">
+                  <Trash2 size={14} /> {clearing ? 'Clearing…' : 'Yes, clear all'}
+                </button>
+                <button onClick={() => setConfirmClear(false)} disabled={clearing}
+                  className="px-3 py-1.5 text-sm border border-gray-300 bg-white rounded-lg hover:bg-gray-50 min-h-[36px]">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

@@ -404,8 +404,102 @@ function upsertReports(rawReports) {
 }
 
 /**
+ * Delete a Fuel Injector inspection that was auto-created from the bench,
+ * UNLESS it has been manually completed (we never destroy a QC sign-off).
+ * Returns 'deleted' | 'kept' | 'missing'.
+ */
+function deleteAutoInspection(inspectionId) {
+  if (!inspectionId) return 'missing';
+  const insp = db.get('SELECT id, status FROM inspections WHERE id = ?', [inspectionId]);
+  if (!insp) return 'missing';
+  if (insp.status === 'complete') return 'kept';
+  // Detach any injector rows still pointing here, then remove dependent rows.
+  db.run('UPDATE injector_test_reports SET inspection_id = NULL WHERE inspection_id = ?', [inspectionId]);
+  try { db.run('DELETE FROM inspection_activity_log WHERE inspection_id = ?', [inspectionId]); } catch (_) {}
+  try { db.run('DELETE FROM inspection_attachments WHERE inspection_id = ?', [inspectionId]); } catch (_) {}
+  try { db.run('DELETE FROM inspection_notes WHERE inspection_id = ?', [inspectionId]); } catch (_) {}
+  db.run('DELETE FROM inspections WHERE id = ?', [inspectionId]);
+  return 'deleted';
+}
+
+/**
+ * Remove ALL synced injector reports and their auto-created inspections, then
+ * reset the last-sync marker so the next sync is a full re-import.
+ * Manually-completed inspections are preserved (only detached).
+ * Returns { reportsDeleted, inspectionsDeleted, inspectionsKept }.
+ */
+function clearAllReports() {
+  const inspectionIds = db.all(
+    'SELECT DISTINCT inspection_id FROM injector_test_reports WHERE inspection_id IS NOT NULL', []
+  ).map(r => r.inspection_id);
+
+  let inspectionsDeleted = 0;
+  let inspectionsKept = 0;
+  for (const id of inspectionIds) {
+    const outcome = deleteAutoInspection(id);
+    if (outcome === 'deleted') inspectionsDeleted += 1;
+    else if (outcome === 'kept') inspectionsKept += 1;
+  }
+
+  const before = db.get('SELECT COUNT(*) AS c FROM injector_test_reports', []);
+  db.run('DELETE FROM injector_test_reports', []);
+  const reportsDeleted = before ? before.c : 0;
+
+  // Force the next sync to be a full re-import.
+  db.run("DELETE FROM app_settings WHERE key = 'carbonzapp_last_sync'", []);
+
+  console.log(`[CarbonZapp] Cleared ${reportsDeleted} injector row(s); deleted ${inspectionsDeleted} inspection(s), kept ${inspectionsKept} completed.`);
+  return { reportsDeleted, inspectionsDeleted, inspectionsKept };
+}
+
+/**
+ * Reconcile deletions after a FULL fetch. `presentExtIds` is the set of
+ * report_ext_id values the bench returned. Any injector row (and its
+ * auto-created inspection) whose report is no longer on the bench is removed.
+ * Only safe to call when the fetch returned the COMPLETE report set
+ * (i.e. a full resync with no date_from filter).
+ * Returns { reportsDeleted, inspectionsDeleted, inspectionsKept }.
+ */
+function reconcileDeletions(presentExtIds) {
+  const present = new Set([...presentExtIds].map(String));
+  const dbReports = db.all('SELECT DISTINCT report_ext_id FROM injector_test_reports', []);
+  const staleReportIds = dbReports
+    .map(r => String(r.report_ext_id))
+    .filter(id => id && !present.has(id));
+
+  let reportsDeleted = 0;
+  let inspectionsDeleted = 0;
+  let inspectionsKept = 0;
+
+  for (const extId of staleReportIds) {
+    // Gather the inspection(s) linked to this report before deleting rows.
+    const linked = db.all(
+      'SELECT DISTINCT inspection_id FROM injector_test_reports WHERE report_ext_id = ? AND inspection_id IS NOT NULL',
+      [extId]
+    ).map(r => r.inspection_id);
+
+    const del = db.run('DELETE FROM injector_test_reports WHERE report_ext_id = ?', [extId]);
+    reportsDeleted += del && del.changes ? del.changes : 0;
+
+    for (const id of linked) {
+      const outcome = deleteAutoInspection(id);
+      if (outcome === 'deleted') inspectionsDeleted += 1;
+      else if (outcome === 'kept') inspectionsKept += 1;
+    }
+  }
+
+  if (staleReportIds.length) {
+    console.log(`[CarbonZapp] Reconciled deletions: ${reportsDeleted} injector row(s) from ${staleReportIds.length} removed report(s); ${inspectionsDeleted} inspection(s) deleted, ${inspectionsKept} kept.`);
+  }
+  return { reportsDeleted, inspectionsDeleted, inspectionsKept };
+}
+
+/**
  * Full sync: fetch new reports since last sync, persist them, auto-create/fill
  * a Fuel Injector inspection for each, and record the sync timestamp.
+ *
+ * When `fullResync` is true the entire report set is fetched (no date filter)
+ * and reports that no longer exist on the bench are pruned (deletion handling).
  */
 async function syncNow({ apiKey, fullResync = false } = {}) {
   const lastSync = fullResync ? null : getSetting('carbonzapp_last_sync');
@@ -451,15 +545,31 @@ async function syncNow({ apiKey, fullResync = false } = {}) {
     }
   }
 
+  // Deletion handling: a normal incremental sync only returns RECENT reports,
+  // so a missing report does NOT imply deletion. Only a full resync fetches the
+  // complete set, so only then can we safely prune reports the bench no longer
+  // has.
+  let deletion = { reportsDeleted: 0, inspectionsDeleted: 0, inspectionsKept: 0 };
+  if (fullResync) {
+    const presentExtIds = raw
+      .filter(r => r && r._id != null)
+      .map(r => String(r._id));
+    deletion = reconcileDeletions(presentExtIds);
+  }
+
   const now = new Date().toISOString();
   setSetting('carbonzapp_last_sync', now);
-  console.log(`[CarbonZapp] Sync complete: ${result.imported} new, ${result.updated} updated, ${inspectionsCreated} inspection(s) created.`);
+  console.log(`[CarbonZapp] Sync complete: ${result.imported} new, ${result.updated} updated, ${inspectionsCreated} inspection(s) created, ${deletion.reportsDeleted} pruned.`);
 
   return {
     fetched: raw.length,
     imported: result.imported,
     updated: result.updated,
     inspectionsCreated,
+    reportsDeleted: deletion.reportsDeleted,
+    inspectionsDeleted: deletion.inspectionsDeleted,
+    inspectionsKept: deletion.inspectionsKept,
+    fullResync: !!fullResync,
     lastSync: now,
   };
 }
@@ -476,6 +586,9 @@ module.exports = {
   hydrateInjectorRow,
   upsertReports,
   syncNow,
+  clearAllReports,
+  reconcileDeletions,
+  deleteAutoInspection,
   PASS,
   FAIL,
   SKIP,
