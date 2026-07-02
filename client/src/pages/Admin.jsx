@@ -1708,6 +1708,8 @@ function InjectorTestsTab({ showToast }) {
   const [showSettings, setShowSettings] = useState(false)
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [savingKey, setSavingKey] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [statusMsg, setStatusMsg] = useState(null) // { type:'error'|'success'|'info', text }
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['injector-tests'],
@@ -1742,20 +1744,45 @@ function InjectorTestsTab({ showToast }) {
 
   const handleSync = async () => {
     setSyncing(true)
+    setStatusMsg({ type: 'info', text: 'Syncing with the test bench…' })
     try {
       const { data: res } = await api.post('/injector-tests/sync', {})
-      showToast(`Synced: ${res.imported} new, ${res.updated} updated, ${res.inspectionsCreated} inspection(s) created`, 'success')
+      const summary = `Synced ${res.fetched} report object(s): ${res.imported} new, ${res.updated} updated, ${res.inspectionsCreated} inspection(s) created.`
+      if (res.fetched === 0) {
+        setStatusMsg({ type: 'info', text: 'Sync succeeded, but the bench returned no new reports since the last sync.' })
+      } else {
+        setStatusMsg({ type: 'success', text: summary })
+      }
+      showToast(summary, 'success')
       qc.invalidateQueries({ queryKey: ['injector-tests'] })
       qc.invalidateQueries({ queryKey: ['injector-tests-settings'] })
     } catch (err) {
-      const msg = err?.response?.data?.error || err.message
-      if (err?.response?.data?.code === 'NO_API_KEY') {
+      const msg = err?.response?.data?.error || err.message || 'Unknown error'
+      const code = err?.response?.data?.code
+      if (code === 'NO_API_KEY') {
+        setStatusMsg({ type: 'error', text: 'No API key configured — open Settings and add your CarbonZapp API key.' })
         showToast('No API key configured — open Settings to add it.', 'error')
         setShowSettings(true)
       } else {
+        setStatusMsg({ type: 'error', text: msg })
         showToast(`Sync failed: ${msg}`, 'error')
       }
     } finally { setSyncing(false) }
+  }
+
+  const handleTestConnection = async () => {
+    setTesting(true)
+    setStatusMsg({ type: 'info', text: 'Testing connection to the test bench…' })
+    try {
+      const { data: res } = await api.post('/injector-tests/test-connection', {})
+      const text = `Connection OK — the bench returned ${res.count} report object(s)${res.sampleDate ? ` (latest ${String(res.sampleDate).slice(0, 10)})` : ''}.`
+      setStatusMsg({ type: 'success', text })
+      showToast('Connection successful', 'success')
+    } catch (err) {
+      const msg = err?.response?.data?.error || err.message || 'Unknown error'
+      setStatusMsg({ type: 'error', text: msg })
+      showToast('Connection failed', 'error')
+    } finally { setTesting(false) }
   }
 
   const handleSaveKey = async () => {
@@ -1815,6 +1842,20 @@ function InjectorTestsTab({ showToast }) {
         </div>
       </div>
 
+      {/* Status / result banner — persists so the outcome is never missed */}
+      {statusMsg && (
+        <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm
+          ${statusMsg.type === 'error' ? 'bg-red-50 border-red-200 text-red-700'
+            : statusMsg.type === 'success' ? 'bg-green-50 border-green-200 text-green-700'
+            : 'bg-blue-50 border-blue-200 text-blue-700'}`}>
+          {statusMsg.type === 'error' ? <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+            : statusMsg.type === 'success' ? <CheckCircle2 size={16} className="mt-0.5 flex-shrink-0" />
+            : <Loader2 size={16} className="mt-0.5 flex-shrink-0 animate-spin" />}
+          <span className="flex-1">{statusMsg.text}</span>
+          <button onClick={() => setStatusMsg(null)} className="text-current opacity-50 hover:opacity-100"><X size={14} /></button>
+        </div>
+      )}
+
       {/* Settings panel */}
       {showSettings && (
         <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
@@ -1841,6 +1882,14 @@ function InjectorTestsTab({ showToast }) {
               </div>
             </>
           )}
+          {/* Test connection works whether the key is from env or saved here */}
+          <div className="pt-1 border-t border-gray-100">
+            <button onClick={handleTestConnection} disabled={testing || !settings?.hasApiKey}
+              className="flex items-center justify-center gap-1.5 px-3 py-2 text-sm border border-pdi-navy text-pdi-navy rounded-lg hover:bg-pdi-navy/5 disabled:opacity-40 min-h-[40px]">
+              <RefreshCw size={14} className={testing ? 'animate-spin' : ''} /> {testing ? 'Testing…' : 'Test Connection'}
+            </button>
+            <p className="text-xs text-gray-400 mt-1">Verifies the key can reach the bench without importing anything.</p>
+          </div>
         </div>
       )}
 

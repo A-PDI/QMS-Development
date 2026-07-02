@@ -199,36 +199,95 @@ async function fetchReports({ apiKey, dateFrom, id, idFrom } = {}) {
     throw err;
   }
 
-  const body = {};
+  // Send the key BOTH as a Bearer header and as `api_key` in the JSON body.
+  // Both forms have been observed to authenticate successfully against the
+  // bench; sending both maximises compatibility across deployments.
+  const body = { api_key: key };
   if (dateFrom) body.date_from = dateFrom;
   if (id) body.id = id;
   if (idFrom) body.id_from = idFrom;
 
-  const resp = await fetch(CARBONZAPP_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${key}`,
-    },
-    body: JSON.stringify(body),
-  });
+  // Abort the request if the bench doesn't respond in time so the UI never
+  // hangs silently ("nothing happened").
+  const controller = new AbortController();
+  const timeoutMs = Number(process.env.CARBONZAPP_TIMEOUT_MS) || 30000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => '');
-    const err = new Error(`CarbonZapp API returned HTTP ${resp.status}${text ? ': ' + text.slice(0, 200) : ''}`);
+  let resp;
+  try {
+    resp = await fetch(CARBONZAPP_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    if (e.name === 'AbortError') {
+      const err = new Error(`CarbonZapp did not respond within ${Math.round(timeoutMs / 1000)}s. Check the bench connection and try again.`);
+      err.code = 'CARBONZAPP_TIMEOUT';
+      throw err;
+    }
+    const err = new Error(`Could not reach CarbonZapp (${e.message}). Check the server's network/firewall access to cloudx.carbonzapp.com.`);
+    err.code = 'CARBONZAPP_NETWORK';
+    throw err;
+  }
+  clearTimeout(timer);
+
+  const rawText = await resp.text().catch(() => '');
+  const looksLikeHtml = /^\s*<(?:!doctype|html)/i.test(rawText) || /auth0|<title>/i.test(rawText);
+
+  if (!resp.ok || looksLikeHtml) {
+    // An HTML/Auth0 body almost always means the API key was rejected.
+    let friendly;
+    if (looksLikeHtml || resp.status === 400 || resp.status === 401 || resp.status === 403 || resp.status === 302) {
+      friendly = `CarbonZapp rejected the request (HTTP ${resp.status}). This usually means the API key is invalid or expired — open Settings and re-enter a freshly generated key.`;
+    } else {
+      friendly = `CarbonZapp API returned HTTP ${resp.status}${rawText ? ': ' + rawText.replace(/\s+/g, ' ').slice(0, 160) : ''}`;
+    }
+    const err = new Error(friendly);
     err.code = 'CARBONZAPP_HTTP_ERROR';
     err.status = resp.status;
     throw err;
   }
 
-  const data = await resp.json();
+  let data;
+  try {
+    data = JSON.parse(rawText);
+  } catch (_) {
+    const err = new Error('CarbonZapp returned a non-JSON response. The API key may be invalid, or the endpoint has changed.');
+    err.code = 'CARBONZAPP_BAD_RESPONSE';
+    throw err;
+  }
+
   if (!Array.isArray(data)) {
     // Some deployments wrap the array in { data: [...] } / { reports: [...] }.
     if (data && Array.isArray(data.data)) return data.data;
     if (data && Array.isArray(data.reports)) return data.reports;
+    if (data && Array.isArray(data.results)) return data.results;
+    // A single object → treat as one report.
+    if (data && data._id) return [data];
     throw new Error('CarbonZapp API returned an unexpected (non-array) response.');
   }
   return data;
+}
+
+/**
+ * Lightweight connectivity/auth test that doesn't persist anything.
+ * Returns { ok, count, sampleDate }.
+ */
+async function testConnection({ apiKey } = {}) {
+  const reports = await fetchReports({ apiKey });
+  const dates = reports.map(r => r && (r.datetime || r.created_at)).filter(Boolean).sort();
+  return {
+    ok: true,
+    count: reports.length,
+    sampleDate: dates.length ? dates[dates.length - 1] : null,
+  };
 }
 
 /**
@@ -309,7 +368,9 @@ async function syncNow({ apiKey, fullResync = false } = {}) {
     }
   }
 
+  console.log(`[CarbonZapp] Sync starting (fullResync=${fullResync}, dateFrom=${dateFrom || 'none'})`);
   const raw = await fetchReports({ apiKey, dateFrom });
+  console.log(`[CarbonZapp] Fetched ${raw.length} report object(s) from the bench.`);
   const result = upsertReports(raw);
 
   // Auto-create/fill inspections for each injector.
@@ -326,6 +387,7 @@ async function syncNow({ apiKey, fullResync = false } = {}) {
 
   const now = new Date().toISOString();
   setSetting('carbonzapp_last_sync', now);
+  console.log(`[CarbonZapp] Sync complete: ${result.imported} new, ${result.updated} updated, ${inspectionsCreated} inspection(s) created.`);
 
   return {
     fetched: raw.length,
@@ -342,6 +404,7 @@ module.exports = {
   setSetting,
   getApiKey,
   fetchReports,
+  testConnection,
   mapReportToInjector,
   normaliseTests,
   upsertReports,
