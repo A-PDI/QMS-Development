@@ -947,4 +947,268 @@ function renderVacuumTest(doc, section, data, secAtts = []) {
   }
 }
 
-module.exports = { generateInspectionPdf };
+// ─────────────────────────────────────────────────────────────────────────────
+// Injector Test Bench — custom side-by-side comparison report (LANDSCAPE)
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Generate a landscape PDF comparing one or more selected injectors side by
+ * side. Columns:
+ *   1. Test Step   — step name + Rail Pressure / Pulse Width / Strk parameters
+ *   2. Specification — Target, +/- range, Units
+ *   3+. one column per injector (serial #) holding the AVERAGE flow value,
+ *       coloured green (pass) / red (fail).
+ * Everything is scaled to fit on a single landscape page.
+ *
+ * injectors: array of {
+ *   part_number, serial_number, job_number, brand, injector_type,
+ *   machine_name, machine_sn, test_datetime,
+ *   tests: [ { name, params:{rail_pressure,pulse_width,strk}, status,
+ *              primary:{unit,target,tolerance,average,status}, secondary:{...}|null } ]
+ * }
+ */
+function generateInjectorComparisonPdf(injectors = []) {
+  return new Promise((resolve, reject) => {
+    try {
+      const LM = 28; // landscape margin
+      const doc = new PDFDocument({ bufferPages: true, margin: LM, size: 'Letter', layout: 'landscape' });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+
+      const pageW = 792;             // Letter landscape width
+      const pageH = 612;             // Letter landscape height
+      const usableW = pageW - LM * 2;
+      const list = Array.isArray(injectors) ? injectors : [];
+
+      // ── Build the unified list of test-step rows across all injectors ─────
+      // Each row = one test step (+ optional secondary tank). Rows are keyed by
+      // a stable label so the same step lines up across injectors.
+      const rowOrder = [];
+      const rowMap = new Map(); // key -> { label, params, target, tolerance, unit }
+      function rowKey(label) { return label.toLowerCase(); }
+
+      for (const inj of list) {
+        for (const t of (inj.tests || [])) {
+          if (!t.primary) continue;
+          const params = t.params || {};
+          const pLabel = t.name || t.raw_name || 'Step';
+          const pKey = rowKey(pLabel + '|1');
+          if (!rowMap.has(pKey)) {
+            rowMap.set(pKey, {
+              label: pLabel,
+              params,
+              target: t.primary.target || '',
+              tolerance: t.primary.tolerance || '',
+              unit: t.primary.unit || '',
+            });
+            rowOrder.push(pKey);
+          }
+          if (t.secondary) {
+            const sLabel = `${pLabel} — ${t.secondary.tank_name || 'Secondary'}`;
+            const sKey = rowKey(sLabel + '|2');
+            if (!rowMap.has(sKey)) {
+              rowMap.set(sKey, {
+                label: sLabel,
+                params,
+                target: t.secondary.target || '',
+                tolerance: t.secondary.tolerance || '',
+                unit: t.secondary.unit || '',
+              });
+              rowOrder.push(sKey);
+            }
+          }
+        }
+      }
+
+      // Per-injector lookup: key -> { value(=average flow), status }
+      const injValues = list.map((inj) => {
+        const m = new Map();
+        for (const t of (inj.tests || [])) {
+          if (!t.primary) continue;
+          const pLabel = t.name || t.raw_name || 'Step';
+          m.set(rowKey(pLabel + '|1'), {
+            value: t.primary.average || '',
+            status: t.primary.status,
+          });
+          if (t.secondary) {
+            const sLabel = `${pLabel} — ${t.secondary.tank_name || 'Secondary'}`;
+            m.set(rowKey(sLabel + '|2'), {
+              value: t.secondary.average || '',
+              status: t.secondary.status,
+            });
+          }
+        }
+        return m;
+      });
+
+      // ── Header banner (logo + part number + general info) ─────────────────
+      const bannerH = 54;
+      const top = LM;
+      doc.rect(LM, top, usableW, bannerH).fillColor(NAVY).fill();
+      if (fs.existsSync(LOGO_PATH)) {
+        try { doc.image(LOGO_PATH, LM + 10, top + 14, { height: 26, fit: [90, 26] }); } catch (_) {}
+      }
+
+      const firstInj = list[0] || {};
+      const partNo = firstInj.part_number || '—';
+      const titleX = LM + 112;
+      const titleW = usableW - 122;
+      doc.fontSize(14).font('Helvetica-Bold').fillColor(WHITE);
+      doc.text(`INJECTOR TEST REPORT — ${partNo}`, titleX, top + 9, { width: titleW, align: 'center', lineBreak: false });
+
+      const brands = [...new Set(list.map(i => [i.brand, i.injector_type].filter(Boolean).join(' ')).filter(Boolean))];
+      const machines = [...new Set(list.map(i => i.machine_name).filter(Boolean))];
+      const dates = list.map(i => (i.test_datetime || '').slice(0, 10)).filter(Boolean);
+      const genInfo = [
+        `${list.length} injector${list.length === 1 ? '' : 's'}`,
+        brands.length ? brands.join(', ') : null,
+        machines.length ? `Bench: ${machines.join(', ')}` : null,
+        dates.length ? `Tested: ${dates.sort()[0]}${dates.length > 1 ? ' – ' + dates.sort()[dates.length - 1] : ''}` : null,
+      ].filter(Boolean).join('   ·   ');
+      doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
+      doc.text(genInfo.toUpperCase(), titleX, top + 30, { width: titleW, align: 'center', lineBreak: false });
+
+      // ── Column geometry ───────────────────────────────────────────────────
+      // Fixed columns: Test Step + Specification. Remaining width is split
+      // evenly across the injector columns, scaling down if there are many.
+      const tableTop = top + bannerH + 10;
+      const n = Math.max(list.length, 1);
+      let stepW = Math.max(150, Math.min(220, usableW * 0.24));
+      let specW = Math.max(96, Math.min(150, usableW * 0.16));
+      const MIN_INJ_COL = 44;
+      let injColW = (usableW - stepW - specW) / n;
+      if (injColW < MIN_INJ_COL) {
+        // Shrink the fixed columns to guarantee everything fits on one page.
+        const need = MIN_INJ_COL * n;
+        const leftover = usableW - need;
+        stepW = Math.max(120, leftover * 0.6);
+        specW = Math.max(80, leftover * 0.4);
+        injColW = (usableW - stepW - specW) / n;
+      }
+      const col1X = LM;
+      const col2X = LM + stepW;
+      const injStartX = LM + stepW + specW;
+
+      const headerRowH = 30;
+      const availH = pageH - LM - tableTop - headerRowH - 4;
+      const dataRowCount = rowOrder.length || 1;
+      // Auto-scale row height so all rows fit on one page.
+      let rowH = Math.floor(availH / dataRowCount);
+      rowH = Math.max(12, Math.min(rowH, 24));
+      const nameFont = rowH >= 16 ? 7.5 : (rowH >= 13 ? 6.8 : 6);
+      const subFont = Math.max(5, nameFont - 1.5);
+      const valFont = rowH >= 16 ? 8 : (rowH >= 13 ? 7 : 6);
+
+      // ── Draw table header row ─────────────────────────────────────────────
+      let y = tableTop;
+      doc.rect(LM, y, usableW, headerRowH).fillColor(NAVY).fill();
+
+      doc.fontSize(8).font('Helvetica-Bold').fillColor(WHITE);
+      doc.text('TEST STEP', col1X + 4, y + 11, { width: stepW - 8, height: headerRowH - 6, lineBreak: false });
+      doc.text('SPECIFICATION', col2X + 4, y + 11, { width: specW - 8, height: headerRowH - 6, lineBreak: false });
+
+      // Header column separators
+      doc.strokeColor('#3A4A6B').lineWidth(0.4).moveTo(col2X, y).lineTo(col2X, y + headerRowH).stroke();
+      doc.strokeColor('#3A4A6B').lineWidth(0.4).moveTo(injStartX, y).lineTo(injStartX, y + headerRowH).stroke();
+
+      let x = injStartX;
+      list.forEach((inj) => {
+        doc.strokeColor('#3A4A6B').lineWidth(0.4).moveTo(x, y).lineTo(x, y + headerRowH).stroke();
+        doc.fontSize(injColW < 58 ? 6 : 7).font('Helvetica-Bold').fillColor(WHITE);
+        const sn = inj.serial_number || '—';
+        doc.text(sn, x + 3, y + 3, { width: injColW - 6, align: 'center', lineBreak: false, ellipsis: true });
+        doc.fontSize(injColW < 58 ? 5 : 6).font('Helvetica').fillColor('#A5B4C8');
+        const sub = inj.part_number || partNo;
+        doc.text(sub, x + 3, y + 14, { width: injColW - 6, align: 'center', lineBreak: false, ellipsis: true });
+        // Overall pass/fail badge line
+        doc.fontSize(injColW < 58 ? 5 : 6).font('Helvetica-Bold');
+        const scored = (inj.tests || []).filter(t => t.primary && t.status !== 'skip');
+        const failed = scored.filter(t => t.status === 'fail').length;
+        const overall = scored.length === 0 ? '—' : (failed === 0 ? 'PASS' : 'FAIL');
+        doc.fillColor(overall === 'FAIL' ? '#F1948A' : (overall === 'PASS' ? '#7DCEA0' : '#A5B4C8'));
+        doc.text(overall, x + 3, y + 22, { width: injColW - 6, align: 'center', lineBreak: false });
+        x += injColW;
+      });
+
+      y += headerRowH;
+
+      // ── Draw data rows ────────────────────────────────────────────────────
+      rowOrder.forEach((key, ri) => {
+        const row = rowMap.get(key);
+        const bg = ri % 2 === 1 ? ROWALT : WHITE;
+        doc.rect(LM, y, usableW, rowH).fillColor(bg).fill();
+        doc.strokeColor(BORDER).lineWidth(0.3).moveTo(LM, y + rowH).lineTo(LM + usableW, y + rowH).stroke();
+
+        // ── Column 1: Test Step — name (bold) + parameters sub-line ─────────
+        doc.fontSize(nameFont).font('Helvetica-Bold').fillColor(BLACK);
+        doc.text(row.label, col1X + 4, y + 1.5, { width: stepW - 8, height: rowH / 2, lineBreak: false, ellipsis: true });
+        const p = row.params || {};
+        const paramParts = [];
+        if (p.rail_pressure) paramParts.push(`Rail Pressure ${p.rail_pressure}`);
+        if (p.pulse_width) paramParts.push(`Pulse Width ${p.pulse_width}`);
+        if (p.strk) paramParts.push(`Strk ${p.strk}`);
+        if (paramParts.length) {
+          doc.fontSize(subFont).font('Helvetica').fillColor(MGRAY);
+          doc.text(paramParts.join('  ·  '), col1X + 4, y + rowH / 2 + 0.5, { width: stepW - 8, height: rowH / 2, lineBreak: false, ellipsis: true });
+        }
+
+        // ── Column 2: Specification — Target +/- range Units ────────────────
+        const specParts = [];
+        if (row.target !== '') specParts.push(row.target);
+        if (row.tolerance !== '') specParts.push(`± ${row.tolerance}`);
+        const specStr = specParts.join(' ');
+        doc.fontSize(nameFont).font('Helvetica').fillColor(DGRAY);
+        doc.text(specStr || '—', col2X + 4, y + 1.5, { width: specW - 8, height: rowH / 2, lineBreak: false, ellipsis: true });
+        if (row.unit) {
+          doc.fontSize(subFont).font('Helvetica').fillColor(MGRAY);
+          doc.text(row.unit, col2X + 4, y + rowH / 2 + 0.5, { width: specW - 8, height: rowH / 2, lineBreak: false, ellipsis: true });
+        }
+
+        // Fixed-column separators
+        doc.strokeColor(BORDER).lineWidth(0.3).moveTo(col2X, y).lineTo(col2X, y + rowH).stroke();
+        doc.strokeColor(BORDER).lineWidth(0.3).moveTo(injStartX, y).lineTo(injStartX, y + rowH).stroke();
+
+        // ── Injector columns: AVERAGE flow value, green/red ─────────────────
+        let cx = injStartX;
+        injValues.forEach((m) => {
+          doc.strokeColor(BORDER).lineWidth(0.3).moveTo(cx, y).lineTo(cx, y + rowH).stroke();
+          const cell = m.get(key);
+          const val = cell ? (cell.value || '') : '';
+          let color = DGRAY;
+          if (cell) {
+            if (cell.status === 'pass') color = GREEN;
+            else if (cell.status === 'fail') color = RED;
+          }
+          doc.fontSize(valFont).font(cell && (cell.status === 'pass' || cell.status === 'fail') ? 'Helvetica-Bold' : 'Helvetica').fillColor(color);
+          doc.text(val || '—', cx + 2, y + (rowH - valFont) / 2 - 1, { width: injColW - 4, align: 'center', lineBreak: false, ellipsis: true });
+          cx += injColW;
+        });
+
+        y += rowH;
+      });
+
+      // ── Outer border ──────────────────────────────────────────────────────
+      const tableBottom = y;
+      doc.strokeColor(BORDER).lineWidth(0.6).rect(LM, tableTop, usableW, tableBottom - tableTop).stroke();
+      doc.strokeColor(BORDER).lineWidth(0.4).moveTo(col2X, tableTop).lineTo(col2X, tableBottom).stroke();
+      doc.strokeColor(BORDER).lineWidth(0.4).moveTo(injStartX, tableTop).lineTo(injStartX, tableBottom).stroke();
+
+      // ── Footer ────────────────────────────────────────────────────────────
+      const footY = pageH - LM - 8;
+      if (footY > tableBottom + 2) {
+        doc.fontSize(6.5).font('Helvetica').fillColor(LGRAY);
+        doc.text(
+          `Generated ${new Date().toISOString().slice(0, 19).replace('T', ' ')} · Flow value = average reading · Green = Pass · Red = Fail`,
+          LM, footY, { width: usableW, align: 'right', lineBreak: false, height: 8 }
+        );
+      }
+
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+module.exports = { generateInspectionPdf, generateInjectorComparisonPdf };

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Printer, Search, Save, X, ChevronDown, ChevronUp, Users, FileImage, Download, AlertTriangle, Loader2, ClipboardCheck, UserCheck, Mail, Upload, FileSpreadsheet, DownloadCloud } from 'lucide-react'
+import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Printer, Search, Save, X, ChevronDown, ChevronUp, Users, FileImage, Download, AlertTriangle, Loader2, ClipboardCheck, UserCheck, Mail, Upload, FileSpreadsheet, DownloadCloud, Gauge, RefreshCw, CheckCircle2, XCircle } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '../lib/api'
 import { useInspections, useDeleteInspection, useCreateInspection, useAssignInspection } from '../hooks/useInspections'
@@ -20,6 +20,7 @@ const TABS = [
   { id: 'users',    label: 'User Management',    shortLabel: 'Users',   icon: Users },
   { id: 'drawings', label: 'Engineering Drawings', shortLabel: 'Drawings', icon: FileImage },
   { id: 'assign',   label: 'Assignments',         shortLabel: 'Assign',  icon: ClipboardCheck },
+  { id: 'injectors', label: 'Injector Tests',    shortLabel: 'Injectors', icon: Gauge },
   { id: 'data',     label: 'Inspection Data',    shortLabel: 'Data',    icon: Database },
 ]
 
@@ -1693,6 +1694,255 @@ function DrawingsTab({ showToast }) {
   )
 }
 
+// ── Injector Tests Tab ────────────────────────────────────────────────────────
+// Lists every individual injector synced from the CarbonZapp test bench (1 per
+// line). Supports "Sync Now", API-key settings, checkbox-selection, and a
+// custom landscape comparison PDF for the selected injectors.
+
+function InjectorTestsTab({ showToast }) {
+  const qc = useQueryClient()
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState(() => new Set())
+  const [syncing, setSyncing] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [savingKey, setSavingKey] = useState(false)
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ['injector-tests'],
+    queryFn: async () => { const { data } = await api.get('/injector-tests'); return data },
+  })
+  const { data: settings } = useQuery({
+    queryKey: ['injector-tests-settings'],
+    queryFn: async () => { const { data } = await api.get('/injector-tests/settings'); return data },
+  })
+
+  const injectors = data?.injectors || []
+  const filtered = injectors.filter(i => {
+    if (!search) return true
+    const s = search.toLowerCase()
+    return [i.part_number, i.serial_number, i.job_number].some(v => (v || '').toLowerCase().includes(s))
+  })
+
+  const toggle = (id) => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  const allSelected = filtered.length > 0 && filtered.every(i => selected.has(i.id))
+  const toggleAll = () => {
+    setSelected(prev => {
+      if (allSelected) return new Set()
+      return new Set(filtered.map(i => i.id))
+    })
+  }
+
+  const handleSync = async () => {
+    setSyncing(true)
+    try {
+      const { data: res } = await api.post('/injector-tests/sync', {})
+      showToast(`Synced: ${res.imported} new, ${res.updated} updated, ${res.inspectionsCreated} inspection(s) created`, 'success')
+      qc.invalidateQueries({ queryKey: ['injector-tests'] })
+      qc.invalidateQueries({ queryKey: ['injector-tests-settings'] })
+    } catch (err) {
+      const msg = err?.response?.data?.error || err.message
+      if (err?.response?.data?.code === 'NO_API_KEY') {
+        showToast('No API key configured — open Settings to add it.', 'error')
+        setShowSettings(true)
+      } else {
+        showToast(`Sync failed: ${msg}`, 'error')
+      }
+    } finally { setSyncing(false) }
+  }
+
+  const handleSaveKey = async () => {
+    if (apiKeyInput.trim().length < 8) { showToast('Enter a valid API key', 'error'); return }
+    setSavingKey(true)
+    try {
+      await api.put('/injector-tests/settings', { api_key: apiKeyInput.trim() })
+      showToast('API key saved', 'success')
+      setApiKeyInput('')
+      setShowSettings(false)
+      qc.invalidateQueries({ queryKey: ['injector-tests-settings'] })
+    } catch (err) {
+      showToast(`Save failed: ${err?.response?.data?.error || err.message}`, 'error')
+    } finally { setSavingKey(false) }
+  }
+
+  const handleGenerateReport = async () => {
+    const ids = filtered.filter(i => selected.has(i.id)).map(i => i.id)
+    if (ids.length === 0) { showToast('Select at least one injector', 'error'); return }
+    setGenerating(true)
+    try {
+      const res = await api.post('/injector-tests/report', { injector_ids: ids }, { responseType: 'blob' })
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `InjectorReport_${ids.length}.pdf`
+      document.body.appendChild(a); a.click(); a.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      showToast(`Report failed: ${err?.response?.data?.error || err.message}`, 'error')
+    } finally { setGenerating(false) }
+  }
+
+  const fmtDate = (v) => v ? String(v).slice(0, 10) : '—'
+  const selectedCount = filtered.filter(i => selected.has(i.id)).length
+
+  return (
+    <div className="space-y-4">
+      {/* Top action bar: Sync Now + Settings */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <button onClick={handleSync} disabled={syncing}
+            className="flex items-center gap-2 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px] font-medium">
+            <RefreshCw size={15} className={syncing ? 'animate-spin' : ''} />
+            {syncing ? 'Syncing…' : 'Sync Now'}
+          </button>
+          <button onClick={() => setShowSettings(s => !s)}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">
+            <Settings size={15} /> Settings
+          </button>
+        </div>
+        <div className="text-xs text-gray-500">
+          {settings?.lastSync ? `Last sync: ${new Date(settings.lastSync).toLocaleString()}` : 'Never synced'}
+          {settings && !settings.hasApiKey && (
+            <span className="ml-2 text-amber-600 font-medium">· No API key</span>
+          )}
+        </div>
+      </div>
+
+      {/* Settings panel */}
+      {showSettings && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-pdi-navy">CarbonZapp Test Bench Settings</h3>
+            <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
+          </div>
+          {settings?.apiKeyFromEnv ? (
+            <p className="text-xs text-gray-500">API key is set from a server environment variable (CARBONZAPP_API_KEY) and cannot be edited here.</p>
+          ) : (
+            <>
+              <p className="text-xs text-gray-500">
+                {settings?.hasApiKey ? `Current key: ${settings.apiKeyMasked}. ` : ''}
+                Enter a CarbonZapp API key to enable syncing. Stored server-side only.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input type="password" value={apiKeyInput} onChange={e => setApiKeyInput(e.target.value)}
+                  placeholder="CarbonZapp API key" autoComplete="off"
+                  className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+                <button onClick={handleSaveKey} disabled={savingKey}
+                  className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px]">
+                  <Save size={14} /> {savingKey ? 'Saving…' : 'Save Key'}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Search + selection actions */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+        <div className="relative flex-1">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="Search part #, serial #, job #…"
+            className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+        </div>
+        <button onClick={handleGenerateReport} disabled={generating || selectedCount === 0}
+          className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-pdi-teal text-white rounded-lg hover:opacity-90 disabled:opacity-40 min-h-[40px] font-medium whitespace-nowrap">
+          <Printer size={15} /> {generating ? 'Generating…' : `Custom Report${selectedCount ? ` (${selectedCount})` : ''}`}
+        </button>
+      </div>
+
+      {/* Injector list — 1 per line */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        {isLoading ? (
+          <div className="text-center text-gray-400 py-10">Loading…</div>
+        ) : filtered.length === 0 ? (
+          <div className="text-center text-gray-400 py-10 text-sm">
+            {injectors.length === 0 ? 'No injector tests synced yet. Click "Sync Now" to pull results from the test bench.' : 'No injectors match your search.'}
+          </div>
+        ) : (
+          <>
+            {/* Desktop table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-200 text-left text-xs text-gray-500 uppercase">
+                    <th className="px-3 py-2 w-10">
+                      <input type="checkbox" checked={allSelected} onChange={toggleAll} className="rounded" />
+                    </th>
+                    <th className="px-3 py-2">Part Number</th>
+                    <th className="px-3 py-2">Serial Number</th>
+                    <th className="px-3 py-2">Job Number</th>
+                    <th className="px-3 py-2">Flow Results</th>
+                    <th className="px-3 py-2">Tested</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filtered.map(i => (
+                    <tr key={i.id} className={`hover:bg-gray-50 ${selected.has(i.id) ? 'bg-pdi-navy/5' : ''}`}>
+                      <td className="px-3 py-2.5">
+                        <input type="checkbox" checked={selected.has(i.id)} onChange={() => toggle(i.id)} className="rounded" />
+                      </td>
+                      <td className="px-3 py-2.5 font-medium text-gray-900">{i.part_number || '—'}</td>
+                      <td className="px-3 py-2.5 text-gray-700">{i.serial_number || '—'}</td>
+                      <td className="px-3 py-2.5 text-gray-700">{i.job_number || '—'}</td>
+                      <td className="px-3 py-2.5">
+                        <InjectorFlowBadge injector={i} />
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-500 text-xs">{fmtDate(i.test_datetime)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile cards */}
+            <div className="md:hidden divide-y divide-gray-100">
+              {filtered.map(i => (
+                <div key={i.id} className={`p-3 flex gap-3 ${selected.has(i.id) ? 'bg-pdi-navy/5' : ''}`}>
+                  <input type="checkbox" checked={selected.has(i.id)} onChange={() => toggle(i.id)} className="rounded mt-1" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-sm text-gray-900 truncate">{i.part_number || '—'}</span>
+                      <InjectorFlowBadge injector={i} />
+                    </div>
+                    <div className="text-xs text-gray-500 mt-0.5">SN: {i.serial_number || '—'} · Job: {i.job_number || '—'}</div>
+                    <div className="text-xs text-gray-400 mt-0.5">{fmtDate(i.test_datetime)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function InjectorFlowBadge({ injector }) {
+  const { overall_pass, steps_passed, steps_total } = injector
+  if (overall_pass == null || steps_total === 0) {
+    return <span className="inline-flex items-center gap-1 text-xs text-gray-500">
+      <span className="text-gray-400">No result</span>
+    </span>
+  }
+  const pass = overall_pass === 1
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs">
+      {pass
+        ? <span className="inline-flex items-center gap-1 bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium"><CheckCircle2 size={12} /> Pass</span>
+        : <span className="inline-flex items-center gap-1 bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium"><XCircle size={12} /> Fail</span>}
+      <span className="text-gray-500">{steps_passed}/{steps_total} steps</span>
+    </span>
+  )
+}
+
 // ── Admin Page ────────────────────────────────────────────────────────────────────────────────
 
 export default function Admin() {
@@ -1709,6 +1959,7 @@ export default function Admin() {
     users:    <UsersTab showToast={showToast} />,
     drawings: <DrawingsTab showToast={showToast} />,
     assign:   <InspectionDataTab showToast={showToast} />,
+    injectors: <InjectorTestsTab showToast={showToast} />,
     data:     <InspectionDataTab showToast={showToast} />,
   }
 
