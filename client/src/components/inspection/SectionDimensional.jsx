@@ -56,13 +56,18 @@ export default function SectionDimensional({
           <thead>
             <tr className="bg-gray-100">
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-8">#</th>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-44">Measurement</th>
+              {/* In single-value (injector) mode the Measurement/Test Step column
+                  does not need to be as wide as the multi-point measurement mode,
+                  and dropping the Location column would otherwise leave it
+                  stretched. Give the measured columns more room so Spec / Limit
+                  and Actual are clearly separated rather than crowded together. */}
+              <th className={`px-3 py-2 text-left text-xs font-semibold text-gray-600 ${singleValue ? 'w-56' : 'w-44'}`}>Measurement</th>
               {!singleValue && (
                 <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Location(s)</th>
               )}
-              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-36">Spec / Limit</th>
+              <th className={`px-3 py-2 text-left text-xs font-semibold text-gray-600 ${singleValue ? 'w-48' : 'w-36'}`}>Spec / Limit</th>
               {actualLabels.map(lbl => (
-                <th key={lbl} className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-24">{lbl}</th>
+                <th key={lbl} className={`px-3 py-2 text-left text-xs font-semibold text-gray-600 ${singleValue ? 'w-40' : 'w-24'}`}>{lbl}</th>
               ))}
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-28">Status</th>
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-36">Notes</th>
