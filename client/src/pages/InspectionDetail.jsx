@@ -20,7 +20,7 @@ import SectionValveRecession from '../components/inspection/SectionValveRecessio
 import SectionVacuumTest from '../components/inspection/SectionVacuumTest'
 import FileUploadZone from '../components/FileUploadZone'
 import { formatDate, formatDateTime, formatFileSize } from '../lib/utils'
-import { HEADER_FIELD_LABELS, DISPOSITION_COLORS } from '../lib/constants'
+import { HEADER_FIELD_LABELS, dispositionColor, dispositionLabel } from '../lib/constants'
 import { getItemDisposition } from '../lib/itemCompletion'
 
 const SECTION_COMPONENTS = {
@@ -426,8 +426,8 @@ export default function InspectionDetail() {
               <div className="bg-pdi-navy text-white rounded-xl px-4 sm:px-5 py-2.5 text-sm font-semibold shadow-sm flex items-center justify-between gap-2">
                 <span>Item {itemIdx + 1} of {itemDataList.length}</span>
                 {itemDisp && (
-                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${DISPOSITION_COLORS[itemDisp] || 'bg-white text-gray-700 border-gray-300'}`}>
-                    {itemDisp}
+                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${dispositionColor(itemDisp)}`}>
+                    {dispositionLabel(itemDisp)}
                   </span>
                 )}
               </div>
@@ -463,8 +463,8 @@ export default function InspectionDetail() {
                   </h2>
                 </div>
                 <div className="p-4 sm:p-5 space-y-2">
-                  <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold border ${DISPOSITION_COLORS[itemDisp] || 'bg-gray-100 text-gray-700 border-gray-300'}`}>
-                    {itemDisp}
+                  <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold border ${dispositionColor(itemDisp)}`}>
+                    {dispositionLabel(itemDisp)}
                   </span>
                   {itemDispNotes && (
                     <p className="text-sm text-gray-600 mt-2">{itemDispNotes}</p>
@@ -483,8 +483,8 @@ export default function InspectionDetail() {
               <h2 className="text-sm font-semibold text-gray-700">Overall Disposition</h2>
             </div>
             <div className="p-4 sm:p-5 space-y-2">
-              <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold border ${DISPOSITION_COLORS[inspection.disposition] || 'bg-gray-100 text-gray-700 border-gray-300'}`}>
-                {inspection.disposition}
+              <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold border ${dispositionColor(inspection.disposition)}`}>
+                {dispositionLabel(inspection.disposition)}
               </span>
               <p className="text-xs text-gray-400 mt-1">Derived from the worst-case item disposition.</p>
             </div>

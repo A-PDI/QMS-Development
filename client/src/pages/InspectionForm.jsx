@@ -23,7 +23,7 @@ import FileUploadZone from '../components/FileUploadZone'
 import AuthImage from '../components/AuthImage'
 import { initSectionData, mergeSectionData, formatFileSize } from '../lib/utils'
 import { getItemsCompletion, deriveOverallDisposition, getItemDisposition, ITEM_DISPOSITION_KEY } from '../lib/itemCompletion'
-import { DISPOSITION_COLORS, HEADER_FIELD_LABELS, COMPONENT_TYPE_LABELS } from '../lib/constants'
+import { dispositionColor, HEADER_FIELD_LABELS, COMPONENT_TYPE_LABELS } from '../lib/constants'
 
 // Statuses that are still editable in the inspection form (not yet finalized).
 const EDITABLE_STATUSES = new Set(['draft', 'partially_complete'])
@@ -1037,7 +1037,7 @@ export default function InspectionForm() {
                     onClick={() => setDisposition(opt)}
                     className={`px-4 py-2 text-sm rounded-lg border font-medium transition-colors min-h-[40px] ${
                       disposition === opt
-                        ? `${DISPOSITION_COLORS[opt] || 'bg-gray-200 border-gray-300'} text-white`
+                        ? dispositionColor(opt)
                         : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'
                     }`}
                   >

@@ -63,19 +63,21 @@ function buildDimensionalFromTests(tests) {
     // Show the flow spec (green band) only; do NOT append bench conditions here
     // — the user asked for Specification = flow spec only.
     const spec = p.spec || '';
-    const statusVal = t.status === 'fail' ? 'fail' : (t.status === 'pass' ? 'pass' : 'na');
+    // Dimensional status uses the shared P/F/A code so it renders in the app
+    // (PFNToggle) and PDF (statusToGlyph) identically. '' when not scored.
+    const statusVal = t.status === 'fail' ? 'F' : (t.status === 'pass' ? 'P' : '');
 
     items.push({
       id,
       measurement: t.name || t.raw_name || `Step ${id}`,
-      location: '',
       spec,
     });
     answers.push({
       id,
-      actual1: p.average || '',          // AVERAGE value only
-      actual2: '',
-      actual3: '',
+      // Persist the spec on the answer row too so it is visible in the app view
+      // (the client reads row.spec; without this the Spec/Limit column is blank).
+      spec,
+      actual1: p.average || '',          // single AVERAGE value ("Actual")
       status: statusVal,
       __unit: p.unit || '',
     });
@@ -84,18 +86,16 @@ function buildDimensionalFromTests(tests) {
     if (t.secondary) {
       id += 1;
       const s = t.secondary;
-      const sStatusVal = s.status === 'fail' ? 'fail' : (s.status === 'pass' ? 'pass' : 'na');
+      const sStatusVal = s.status === 'fail' ? 'F' : (s.status === 'pass' ? 'P' : '');
       items.push({
         id,
         measurement: `${t.name || t.raw_name} — ${s.tank_name || 'Secondary'}`,
-        location: '',
         spec: s.spec || '',
       });
       answers.push({
         id,
+        spec: s.spec || '',
         actual1: s.average || '',
-        actual2: '',
-        actual3: '',
         status: sStatusVal,
         __unit: s.unit || '',
       });
@@ -131,20 +131,33 @@ function buildItemForInjector(inj, templateSections) {
   const failed = inj.overall_pass === 0;
 
   // Receiving (pfn_checklist) and Visual (pass_fail_checklist) both use the
-  // unified {id, result} shape. Auto-mark 'P' on a pass, leave '' on a fail.
-  const checklistResult = passed ? 'P' : '';
+  // unified {id, result} shape.
+  //
+  //  • SECTION A — Receiving & Documentation Verification (pfn_checklist):
+  //    always auto-marked PASS on generation. These checks (carton condition,
+  //    labels, part marking, quantity, corrosion protection) are independent of
+  //    the flow-test outcome, so they are populated regardless of pass/fail.
+  //  • VISUAL / quality checklist (pass_fail_checklist): auto-marked PASS when
+  //    the injector passed every flow test, left OPEN when it failed so a QC
+  //    reviewer must inspect a failing injector.
+  const visualResult = passed ? 'P' : '';
   const item = {};
 
   for (const [key, section] of Object.entries(templateSections)) {
     if (key === 'dimensional') continue; // handled below
-    if (section.section_type === 'pfn_checklist' || section.section_type === 'pass_fail_checklist') {
-      const srcItems = Array.isArray(section.items) ? section.items : [];
-      item[key] = srcItems.map((it) => ({ id: it.id, result: checklistResult, notes: '', finding: '' }));
+    const srcItems = Array.isArray(section.items) ? section.items : [];
+    if (section.section_type === 'pfn_checklist') {
+      // Section A (Receiving & Documentation) — always Pass.
+      item[key] = srcItems.map((it) => ({ id: it.id, result: 'P', notes: '', finding: '' }));
+    } else if (section.section_type === 'pass_fail_checklist') {
+      item[key] = srcItems.map((it) => ({ id: it.id, result: visualResult, notes: '', finding: '' }));
     }
   }
 
   item.dimensional = answers;
-  item.__disposition = inj.overall_pass == null ? '' : (failed ? 'fail' : 'pass');
+  // Disposition uses the app's UPPERCASE codes (PASS / FAIL) so badges, the
+  // detail view, and the PDF all colour + label it consistently.
+  item.__disposition = inj.overall_pass == null ? '' : (failed ? 'FAIL' : 'PASS');
   item.__disposition_notes = '';
   return item;
 }
@@ -182,6 +195,10 @@ function autoFillReportInspection(reportExtId, injectorRows) {
   adminSections.dimensional = {
     title: 'C. DIMENSIONAL INSPECTION — INJECTOR TEST BENCH RESULTS',
     section_type: 'dimensional',
+    // 'single_value' layout: one measured value per row (renamed "Actual"),
+    // no Location column and no Actual 2 / Actual 3 columns. The test bench
+    // reports a single averaged flow value, so the extra columns don't apply.
+    layout: 'single_value',
     items: dimItems,
   };
 
@@ -200,9 +217,10 @@ function autoFillReportInspection(reportExtId, injectorRows) {
   };
 
   // Overall disposition: pass only if every injector passed; fail if any failed.
+  // UPPERCASE to match the app's disposition vocabulary (PASS / FAIL).
   const anyFail = injectors.some((i) => i.overall_pass === 0);
   const allScored = injectors.every((i) => i.overall_pass != null);
-  const disposition = !allScored ? '' : (anyFail ? 'fail' : 'pass');
+  const disposition = !allScored ? '' : (anyFail ? 'FAIL' : 'PASS');
 
   // Header info from the first injector (shared across the report).
   const head = injectors[0];

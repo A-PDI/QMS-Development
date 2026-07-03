@@ -46,22 +46,49 @@ export const STATUS_COLORS = {
   pending_review:      'bg-amber-100 text-amber-700 ring-1 ring-amber-300',
 }
 
+// Disposition badge styling. PASS/ACCEPT = solid green + white text;
+// FAIL/REJECT = solid red + white text; ACCEPTED/CONDITIONAL = solid amber.
+// Keyed by the UPPERCASE disposition code — use normalizeDisposition() before
+// lookup so lowercase legacy values ('pass'/'fail') resolve correctly.
 export const DISPOSITION_COLORS = {
-  ACCEPT:      'bg-pdi-green-light text-pdi-green border-green-400',
-  PASS:        'bg-pdi-green-light text-pdi-green border-green-400',
-  REJECT:      'bg-pdi-red-light text-pdi-red border-red-400',
-  FAIL:        'bg-pdi-red-light text-pdi-red border-red-400',
-  CONDITIONAL: 'bg-pdi-amber-light text-pdi-amber border-pdi-amber',
-  ACCEPTED:    'bg-amber-100 text-amber-700 border-amber-400',
+  ACCEPT:      'bg-green-600 text-white border-green-700',
+  PASS:        'bg-green-600 text-white border-green-700',
+  REJECT:      'bg-red-600 text-white border-red-700',
+  FAIL:        'bg-red-600 text-white border-red-700',
+  CONDITIONAL: 'bg-amber-500 text-white border-amber-600',
+  ACCEPTED:    'bg-amber-500 text-white border-amber-600',
 }
 
+// Dispositions are ALWAYS displayed in uppercase.
 export const DISPOSITION_LABELS = {
-  PASS:        'Pass',
-  FAIL:        'Fail',
-  ACCEPTED:    'Accepted',
-  ACCEPT:      'Accept',
-  REJECT:      'Reject',
-  CONDITIONAL: 'Conditional',
+  PASS:        'PASS',
+  FAIL:        'FAIL',
+  ACCEPTED:    'ACCEPTED',
+  ACCEPT:      'ACCEPT',
+  REJECT:      'REJECT',
+  CONDITIONAL: 'CONDITIONAL',
+}
+
+/**
+ * Normalize any disposition value to its canonical UPPERCASE code.
+ * Accepts legacy lowercase ('pass'/'fail'/'na') and returns '' for blanks.
+ */
+export function normalizeDisposition(value) {
+  const v = String(value == null ? '' : value).trim().toUpperCase()
+  if (v === 'NA' || v === 'N/A') return ''
+  return v
+}
+
+/** Uppercase display label for a disposition (falls back to the code itself). */
+export function dispositionLabel(value) {
+  const code = normalizeDisposition(value)
+  return DISPOSITION_LABELS[code] || code
+}
+
+/** Tailwind classes for a disposition badge (normalizes case first). */
+export function dispositionColor(value) {
+  const code = normalizeDisposition(value)
+  return DISPOSITION_COLORS[code] || 'bg-gray-500 text-white border-gray-600'
 }
 
 export const ALERT_TYPE_LABELS = {
