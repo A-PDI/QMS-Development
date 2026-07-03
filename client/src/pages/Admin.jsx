@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Printer, Search, Save, X, ChevronDown, ChevronUp, Users, FileImage, Download, AlertTriangle, Loader2, ClipboardCheck, UserCheck, Mail, Upload, FileSpreadsheet, DownloadCloud, Gauge, RefreshCw, CheckCircle2, XCircle } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -1702,7 +1702,11 @@ function DrawingsTab({ showToast }) {
 function InjectorTestsTab({ showToast }) {
   const qc = useQueryClient()
   const [search, setSearch] = useState('')
-  const [selected, setSelected] = useState(() => new Set())
+  // Selection is ORDER-AWARE: `selectedIds` is an array whose order defines the
+  // injector column order (1, 2, 3, 4 …) in the generated report. `selected` is
+  // a derived Set used only for fast membership lookups in the table.
+  const [selectedIds, setSelectedIds] = useState(() => [])
+  const selected = useMemo(() => new Set(selectedIds), [selectedIds])
   const [syncing, setSyncing] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -1729,20 +1733,39 @@ function InjectorTestsTab({ showToast }) {
     return [i.part_number, i.serial_number, i.job_number].some(v => (v || '').toLowerCase().includes(s))
   })
 
+  // Toggle a single injector, APPENDING to the end so the pick order is kept.
   const toggle = (id) => {
-    setSelected(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id); else next.add(id)
-      return next
-    })
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }
   const allSelected = filtered.length > 0 && filtered.every(i => selected.has(i.id))
   const toggleAll = () => {
-    setSelected(prev => {
-      if (allSelected) return new Set()
-      return new Set(filtered.map(i => i.id))
+    if (allSelected) {
+      // Deselect only the currently-filtered rows; keep any others selected.
+      const filteredIds = new Set(filtered.map(i => i.id))
+      setSelectedIds(prev => prev.filter(id => !filteredIds.has(id)))
+    } else {
+      // Append any not-yet-selected filtered rows (preserving existing order).
+      setSelectedIds(prev => {
+        const have = new Set(prev)
+        return [...prev, ...filtered.map(i => i.id).filter(id => !have.has(id))]
+      })
+    }
+  }
+
+  // Reorder helpers for the "Report column order" list.
+  const moveSelected = (id, dir) => {
+    setSelectedIds(prev => {
+      const idx = prev.indexOf(id)
+      if (idx < 0) return prev
+      const swap = idx + dir
+      if (swap < 0 || swap >= prev.length) return prev
+      const next = [...prev]
+      ;[next[idx], next[swap]] = [next[swap], next[idx]]
+      return next
     })
   }
+  const removeSelected = (id) => setSelectedIds(prev => prev.filter(x => x !== id))
+  const clearSelection = () => setSelectedIds([])
 
   const handleSync = async (fullResync = false) => {
     setSyncing(true)
@@ -1795,7 +1818,7 @@ function InjectorTestsTab({ showToast }) {
         '. You can now run a fresh sync.'
       setStatusMsg({ type: 'success', text: summary })
       showToast('Synced reports cleared', 'success')
-      setSelected(new Set())
+      setSelectedIds([])
       qc.invalidateQueries({ queryKey: ['injector-tests'] })
       qc.invalidateQueries({ queryKey: ['injector-tests-settings'] })
     } catch (err) {
@@ -1835,7 +1858,10 @@ function InjectorTestsTab({ showToast }) {
   }
 
   const handleGenerateReport = async () => {
-    const ids = filtered.filter(i => selected.has(i.id)).map(i => i.id)
+    // Preserve the user-chosen column order (selectedIds) but only include
+    // injectors that are still visible/available in the current list.
+    const availableIds = new Set(filtered.map(i => i.id))
+    const ids = selectedIds.filter(id => availableIds.has(id))
     if (ids.length === 0) { showToast('Select at least one injector', 'error'); return }
     setGenerating(true)
     try {
@@ -1852,7 +1878,12 @@ function InjectorTestsTab({ showToast }) {
   }
 
   const fmtDate = (v) => v ? String(v).slice(0, 10) : '—'
-  const selectedCount = filtered.filter(i => selected.has(i.id)).length
+  // Ordered list of currently-selected injectors that are still visible; the
+  // array order defines report column order (col 1, 2, 3, 4 …).
+  const orderedSelected = selectedIds
+    .map(id => filtered.find(i => i.id === id))
+    .filter(Boolean)
+  const selectedCount = orderedSelected.length
 
   return (
     <div className="space-y-4">
@@ -1978,6 +2009,58 @@ function InjectorTestsTab({ showToast }) {
           <Printer size={15} /> {generating ? 'Generating…' : `Custom Report${selectedCount ? ` (${selectedCount})` : ''}`}
         </button>
       </div>
+
+      {/* Report column order — lets the user pick which injector is column 1, 2, 3, 4 … */}
+      {orderedSelected.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+              Report Column Order
+            </h4>
+            <button onClick={clearSelection}
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-600">
+              <Trash2 size={13} /> Clear
+            </button>
+          </div>
+          <p className="text-xs text-gray-400">
+            Drag the arrows to reorder. Injectors appear in report columns in this order (1, 2, 3, 4 …).
+          </p>
+          <ol className="space-y-1.5">
+            {orderedSelected.map((inj, idx) => (
+              <li key={inj.id}
+                className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-2">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-pdi-navy text-white text-xs font-semibold shrink-0">
+                  {idx + 1}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-gray-900 truncate">
+                    {inj.part_number || '—'}
+                    <span className="text-gray-400 font-normal"> · SN {inj.serial_number || '—'}</span>
+                  </div>
+                  <div className="text-xs text-gray-400 truncate">Job {inj.job_number || '—'}</div>
+                </div>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <button onClick={() => moveSelected(inj.id, -1)} disabled={idx === 0}
+                    title="Move up" aria-label="Move up"
+                    className="p-1.5 text-gray-500 hover:text-pdi-navy hover:bg-white rounded disabled:opacity-30 disabled:hover:bg-transparent">
+                    <ChevronUp size={16} />
+                  </button>
+                  <button onClick={() => moveSelected(inj.id, 1)} disabled={idx === orderedSelected.length - 1}
+                    title="Move down" aria-label="Move down"
+                    className="p-1.5 text-gray-500 hover:text-pdi-navy hover:bg-white rounded disabled:opacity-30 disabled:hover:bg-transparent">
+                    <ChevronDown size={16} />
+                  </button>
+                  <button onClick={() => removeSelected(inj.id)}
+                    title="Remove" aria-label="Remove"
+                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-white rounded">
+                    <X size={16} />
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
 
       {/* Injector list — 1 per line */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
