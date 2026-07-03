@@ -21,6 +21,20 @@ const THBG    = '#E5E7EB';  // table column-header background
 const SECBG   = '#EEF2F7';  // section header background
 const WHITE   = '#FFFFFF';
 
+// Normalize a disposition value to its UPPERCASE code so PASS/FAIL colour +
+// label consistently regardless of how it was stored (e.g. legacy 'fail').
+function normalizeDisp(value) {
+  return String(value == null ? '' : value).trim().toUpperCase();
+}
+// Solid colour for a disposition badge: PASS/ACCEPT → green, FAIL/REJECT → red,
+// everything else (CONDITIONAL/ACCEPTED) → amber.
+function dispColor(value) {
+  const v = normalizeDisp(value);
+  if (['FAIL', 'REJECT'].includes(v)) return RED;
+  if (['PASS', 'ACCEPT'].includes(v)) return GREEN;
+  return AMBER;
+}
+
 // ── Page geometry ─────────────────────────────────────────────────────────────
 const M       = 40;           // left/right margin
 const PW      = 612 - M * 2; // usable width  (= 532 pt on Letter)
@@ -125,13 +139,12 @@ function generateInspectionPdf(inspection, template, attachments = []) {
         if (itemDisp) {
           ensureSpace(doc, 60);
           renderSectionTitle(doc, itemList.length > 1 ? `Item ${itemIdx + 1} — Disposition` : 'Final Result');
-          const color = ['FAIL', 'REJECT'].includes(itemDisp) ? RED
-            : ['PASS', 'ACCEPT'].includes(itemDisp) ? GREEN : AMBER;
+          const color = dispColor(itemDisp);
           const bY = doc.y;
           doc.roundedRect(M, bY, PW, 32, 3).fillColor(color).fill();
           const tY = bY + (32 - 12) / 2;
           doc.fontSize(12).font('Helvetica-Bold').fillColor(WHITE)
-            .text(itemDisp, M, tY, { width: PW, align: 'center', lineBreak: false });
+            .text(normalizeDisp(itemDisp), M, tY, { width: PW, align: 'center', lineBreak: false });
           doc.y = bY + 32 + 6;
           if (itemDispNotes) {
             doc.fontSize(9).font('Helvetica').fillColor(DGRAY)
@@ -146,14 +159,13 @@ function generateInspectionPdf(inspection, template, attachments = []) {
         ensureSpace(doc, 60);
         renderSectionTitle(doc, 'Overall Disposition');
 
-        const color = ['FAIL', 'REJECT'].includes(inspection.disposition) ? RED
-          : ['PASS', 'ACCEPT'].includes(inspection.disposition) ? GREEN : AMBER;
+        const color = dispColor(inspection.disposition);
 
         const bY = doc.y;
         doc.roundedRect(M, bY, PW, 32, 3).fillColor(color).fill();
         const tY = bY + (32 - 12) / 2;
         doc.fontSize(12).font('Helvetica-Bold').fillColor(WHITE)
-          .text(inspection.disposition, M, tY, { width: PW, align: 'center', lineBreak: false });
+          .text(normalizeDisp(inspection.disposition), M, tY, { width: PW, align: 'center', lineBreak: false });
         doc.y = bY + 32 + 6;
 
         if (inspection.disposition_notes) {
@@ -673,15 +685,31 @@ function renderDimensional(doc, section, data, secAtts = []) {
   ensureSpace(doc, 60);
   renderSectionTitle(doc, title);
 
-  const header = ['#', 'Measurement', 'Location', 'Spec', 'Actual 1', 'Actual 2', 'Actual 3', 'Status'];
-  const cw     = [24, 130, 80, 68, 60, 60, 60, 50]; // sum = 532
-  const rows   = filledItems.map(item => {
+  // 'single_value' layout (injector test-bench results): drop the Location and
+  // Actual 2 / Actual 3 columns, rename Actual 1 → Actual, and widen the spec.
+  const singleValue = section.layout === 'single_value';
+  let header, cw, statusColIdx;
+  if (singleValue) {
+    header = ['#', 'Measurement', 'Spec / Limit', 'Actual', 'Status'];
+    cw     = [24, 214, 130, 100, 64]; // sum = 532
+    statusColIdx = 4;
+  } else {
+    header = ['#', 'Measurement', 'Location', 'Spec', 'Actual 1', 'Actual 2', 'Actual 3', 'Status'];
+    cw     = [24, 130, 80, 68, 60, 60, 60, 50]; // sum = 532
+    statusColIdx = 7;
+  }
+  const rows = filledItems.map(item => {
     const d = dataArr.find(r => r.id === item.id) || {};
-    return [String(item.id), item.measurement || '', item.location || '', item.spec || '',
+    // Fall back to the item's spec so the Spec/Limit column is never blank.
+    const spec = d.spec || item.spec || '';
+    if (singleValue) {
+      return [String(item.id), item.measurement || '', spec, d.actual1 || '', d.status || ''];
+    }
+    return [String(item.id), item.measurement || '', item.location || '', spec,
       d.actual1 || '', d.actual2 || '', d.actual3 || '', d.status || ''];
   });
 
-  renderTable(doc, header, rows, cw, { statusColIdx: 7, sectionTitle: title });
+  renderTable(doc, header, rows, cw, { statusColIdx, sectionTitle: title });
 
   const allImgsDim = secAtts.filter(a =>
     (a.mime_type || '').startsWith('image/') && a.file_path && fs.existsSync(a.file_path)
@@ -1074,17 +1102,19 @@ function generateInjectorComparisonPdf(injectors = []) {
       const tableTop = top + bannerH + 10;
       const n = Math.max(list.length, 1);
       // Test Step is the widest fixed column (holds Step Name + Pressure/Pulse/
-      // Strk lines). Specification is deliberately narrow with centered values.
-      let stepW = Math.max(150, Math.min(210, usableW * 0.22));
-      let specW = Math.max(70, Math.min(96, usableW * 0.12));
+      // Strk lines) but is kept NARROW to free horizontal space for the injector
+      // value columns. Specification sits beside it with a distinct value/unit
+      // treatment.
+      let stepW = Math.max(120, Math.min(168, usableW * 0.17));
+      let specW = Math.max(78, Math.min(104, usableW * 0.13));
       const MIN_INJ_COL = 44;
       let injColW = (usableW - stepW - specW) / n;
       if (injColW < MIN_INJ_COL) {
         // Shrink the fixed columns to guarantee everything fits on one page.
         const need = MIN_INJ_COL * n;
         const leftover = usableW - need;
-        stepW = Math.max(120, leftover * 0.62);
-        specW = Math.max(64, leftover * 0.38);
+        stepW = Math.max(104, leftover * 0.58);
+        specW = Math.max(66, leftover * 0.42);
         injColW = (usableW - stepW - specW) / n;
       }
       const col1X = LM;
@@ -1103,7 +1133,24 @@ function generateInjectorComparisonPdf(injectors = []) {
       if (rowH * dataRowCount > availH) rowH = Math.max(24, Math.floor(availH / dataRowCount));
       const nameFont = rowH >= 38 ? 8 : (rowH >= 30 ? 7 : 6.2);
       const subFont = Math.max(5.2, nameFont - 1.6);
-      const valFont = rowH >= 38 ? 8.5 : (rowH >= 30 ? 7.5 : 6.5);
+      // ── Dynamic measured-value font scaling ───────────────────────────────
+      // The measured flow value must stay readable but never overflow its
+      // column. Scale the font to the AVAILABLE COLUMN WIDTH (fewer injectors =
+      // wider columns = larger font) as well as the row height. Widest sample
+      // value determines how large we can safely go for the given injColW.
+      let widestVal = 4; // at least a few chars ("—")
+      injValues.forEach((m) => {
+        m.forEach((cell) => {
+          const s = String((cell && cell.value) || '');
+          if (s.length > widestVal) widestVal = s.length;
+        });
+      });
+      const rowValCap = rowH >= 38 ? 11 : (rowH >= 30 ? 9.5 : 8);
+      // Width the value cell can use (minus padding), and the per-char width at
+      // Helvetica-Bold is ~0.6em, so max font ≈ availWidth / (chars * 0.6).
+      const valAvail = injColW - 6;
+      const widthCappedFont = valAvail / (Math.max(widestVal, 1) * 0.6);
+      const valFont = Math.max(6, Math.min(rowValCap, widthCappedFont));
 
       // ── Draw table header row ─────────────────────────────────────────────
       let y = tableTop;
@@ -1154,12 +1201,39 @@ function generateInjectorComparisonPdf(injectors = []) {
           ly += lineH;
         });
 
-        // ── Column 2: Specification — green-band spec, CENTERED ─────────────
-        const specStr = row.spec || (row.unit ? row.unit : '—');
-        doc.fontSize(nameFont).font('Helvetica').fillColor(DGRAY);
-        doc.text(specStr || '—', col2X + 2, y + (rowH - nameFont) / 2 - 1, {
-          width: specW - 4, height: rowH - 2, align: 'center', lineBreak: false, ellipsis: true,
-        });
+        // ── Column 2: Specification — value visually distinct from units ────
+        // Split "8.5 +/- 4.5 mm3/STRK" into the numeric spec (bold, larger) and
+        // the trailing unit (lighter, smaller) so the value stands out.
+        const rawSpec = (row.spec || '').trim();
+        const unitStr = (row.unit || '').trim();
+        let specValue = rawSpec;
+        if (unitStr && rawSpec.toLowerCase().endsWith(unitStr.toLowerCase())) {
+          specValue = rawSpec.slice(0, rawSpec.length - unitStr.length).trim();
+        }
+        const specValFont = nameFont;
+        const specUnitFont = Math.max(5, subFont - 0.3);
+        if (specValue || unitStr) {
+          // Two stacked lines: value on top (bold), unit below (light grey).
+          const hasUnit = !!unitStr;
+          const blockH = specValFont + (hasUnit ? specUnitFont + 1.5 : 0);
+          let sy = y + (rowH - blockH) / 2 - 0.5;
+          doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
+          doc.text(specValue || unitStr, col2X + 2, sy, {
+            width: specW - 4, align: 'center', lineBreak: false, ellipsis: true,
+          });
+          if (hasUnit && specValue) {
+            sy += specValFont + 1.5;
+            doc.fontSize(specUnitFont).font('Helvetica').fillColor(LGRAY);
+            doc.text(unitStr, col2X + 2, sy, {
+              width: specW - 4, align: 'center', lineBreak: false, ellipsis: true,
+            });
+          }
+        } else {
+          doc.fontSize(nameFont).font('Helvetica').fillColor(DGRAY);
+          doc.text('—', col2X + 2, y + (rowH - nameFont) / 2 - 1, {
+            width: specW - 4, align: 'center', lineBreak: false,
+          });
+        }
 
         // Fixed-column separators
         doc.strokeColor(BORDER).lineWidth(0.3).moveTo(col2X, y).lineTo(col2X, y + rowH).stroke();

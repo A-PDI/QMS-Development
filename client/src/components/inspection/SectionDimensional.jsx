@@ -39,6 +39,15 @@ export default function SectionDimensional({
 
   const showImages = !!sectionKey && (!!onUploadItem || readOnly)
 
+  // 'single_value' layout (injector test-bench results): one measured value per
+  // row (labelled "Actual"), no Location column, no Actual 2 / Actual 3.
+  const singleValue = section.layout === 'single_value'
+  const actualFields = singleValue ? ['actual1'] : ['actual1', 'actual2', 'actual3']
+  const actualLabels = singleValue ? ['Actual'] : ['Actual 1', 'Actual 2', 'Actual 3']
+  // Resolve the spec shown for a row: prefer the answer's spec, fall back to the
+  // item definition's spec so it is never blank when the template carries it.
+  const specFor = (row, item) => row.spec || item.spec || ''
+
   return (
     <div>
       {/* Desktop table */}
@@ -48,11 +57,13 @@ export default function SectionDimensional({
             <tr className="bg-gray-100">
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-8">#</th>
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-44">Measurement</th>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Location(s)</th>
+              {!singleValue && (
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Location(s)</th>
+              )}
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-36">Spec / Limit</th>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-24">Actual 1</th>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-24">Actual 2</th>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-24">Actual 3</th>
+              {actualLabels.map(lbl => (
+                <th key={lbl} className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-24">{lbl}</th>
+              ))}
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-28">Status</th>
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-36">Notes</th>
               {showImages && (
@@ -66,6 +77,7 @@ export default function SectionDimensional({
           <tbody>
             {section.items.map(item => {
               const row = data.find(r => r.id === item.id) || { id: item.id, spec: item.spec || '', actual1: '', actual2: '', actual3: '', status: '', notes: '' }
+              const specVal = specFor(row, item)
               const isAccepted = row.status === 'A'
               const isFail = row.status === 'F'
               const needsNotes = isAccepted && !row.notes?.trim()
@@ -79,26 +91,28 @@ export default function SectionDimensional({
                         className="w-full text-xs border border-pdi-navy rounded px-2 py-1 focus:outline-none" placeholder="Measurement…" />
                     ) : item.measurement}
                   </td>
-                  <td className="px-3 py-2 text-gray-600 text-xs">
-                    {isEditing ? (
-                      <input type="text" value={editLocation} onChange={e => setEditLocation(e.target.value)}
-                        className="w-full text-xs border border-pdi-navy rounded px-2 py-1 focus:outline-none" placeholder="Location…" />
-                    ) : item.location}
-                  </td>
+                  {!singleValue && (
+                    <td className="px-3 py-2 text-gray-600 text-xs">
+                      {isEditing ? (
+                        <input type="text" value={editLocation} onChange={e => setEditLocation(e.target.value)}
+                          className="w-full text-xs border border-pdi-navy rounded px-2 py-1 focus:outline-none" placeholder="Location…" />
+                      ) : item.location}
+                    </td>
+                  )}
                   <td className="px-3 py-2">
                     {readOnly ? (
-                      <span className="font-mono text-xs">{row.spec || '\u2014'}</span>
+                      <span className="font-mono text-xs">{specVal || '\u2014'}</span>
                     ) : (
                       <input
                         type="text"
                         className="w-full text-xs border border-gray-200 rounded px-2 py-1 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy"
-                        value={row.spec || ''}
+                        value={specVal}
                         onChange={e => update(item.id, 'spec', e.target.value)}
                         placeholder="e.g. 85.00\u00b10.02"
                       />
                     )}
                   </td>
-                  {['actual1', 'actual2', 'actual3'].map(field => (
+                  {actualFields.map(field => (
                     <td key={field} className="px-3 py-2">
                       {readOnly ? (
                         <span className="font-mono text-xs">{row[field] || '\u2014'}</span>
@@ -173,6 +187,7 @@ export default function SectionDimensional({
       <div className="md:hidden space-y-3">
         {section.items.map(item => {
           const row = data.find(r => r.id === item.id) || { id: item.id, spec: item.spec || '', actual1: '', actual2: '', actual3: '', status: '', notes: '' }
+          const specVal = specFor(row, item)
           const isAccepted = row.status === 'A'
           const isFail = row.status === 'F'
           const needsNotes = isAccepted && !row.notes?.trim()
@@ -180,13 +195,13 @@ export default function SectionDimensional({
             <div key={item.id} className="border rounded-lg p-3 bg-white border-gray-200">
               <div className="flex items-baseline gap-1.5 mb-1">
                 <span className="font-mono text-xs font-bold text-pdi-navy">{item.id}.</span>
-                <span className="text-xs text-gray-700 font-medium">{item.measurement || item.location || `Item ${item.id}`}</span>
+                <span className="text-xs text-gray-700 font-medium">{item.measurement || (!singleValue && item.location) || `Item ${item.id}`}</span>
               </div>
-              {item.spec && <div className="text-xs text-gray-400 mb-2">Spec: {item.spec}</div>}
-              <div className="grid grid-cols-3 gap-1.5 mb-1.5">
-                {['actual1','actual2','actual3'].map((f,i) => (
+              {specVal && <div className="text-xs text-gray-400 mb-2">Spec: {specVal}</div>}
+              <div className={`grid gap-1.5 mb-1.5 ${singleValue ? 'grid-cols-1' : 'grid-cols-3'}`}>
+                {actualFields.map((f,i) => (
                   <div key={f}>
-                    <label className="block text-xs text-gray-400 mb-0.5">M{i+1}</label>
+                    <label className="block text-xs text-gray-400 mb-0.5">{actualLabels[i]}</label>
                     {readOnly ? (
                       <span className="text-xs font-mono">{row[f] || '—'}</span>
                     ) : (
