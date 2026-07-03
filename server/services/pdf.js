@@ -690,8 +690,11 @@ function renderDimensional(doc, section, data, secAtts = []) {
   const singleValue = section.layout === 'single_value';
   let header, cw, statusColIdx;
   if (singleValue) {
+    // Rebalanced so the Measurement column is not overly wide and the
+    // Spec / Limit and Actual columns are given comfortable, evenly spaced
+    // widths instead of being crowded together.
     header = ['#', 'Measurement', 'Spec / Limit', 'Actual', 'Status'];
-    cw     = [24, 214, 130, 100, 64]; // sum = 532
+    cw     = [24, 168, 160, 116, 64]; // sum = 532
     statusColIdx = 4;
   } else {
     header = ['#', 'Measurement', 'Location', 'Spec', 'Actual 1', 'Actual 2', 'Actual 3', 'Status'];

@@ -148,9 +148,14 @@ function buildItemForInjector(inj, templateSections) {
     const srcItems = Array.isArray(section.items) ? section.items : [];
     if (section.section_type === 'pfn_checklist') {
       // Section A (Receiving & Documentation) — always Pass.
-      item[key] = srcItems.map((it) => ({ id: it.id, result: 'P', notes: '', finding: '' }));
+      // IMPORTANT: the pfn_checklist renderer (SectionReceiving.jsx) and the PDF
+      // read the per-item value from `status` (NOT `result`, which is what the
+      // pass_fail_checklist renderer uses). Populate BOTH so the mark shows up
+      // regardless of which renderer reads the row.
+      item[key] = srcItems.map((it) => ({ id: it.id, status: 'P', result: 'P', notes: '', finding: '' }));
     } else if (section.section_type === 'pass_fail_checklist') {
-      item[key] = srcItems.map((it) => ({ id: it.id, result: visualResult, notes: '', finding: '' }));
+      // Visual checklist (SectionChecklist.jsx / PDF) reads `result`.
+      item[key] = srcItems.map((it) => ({ id: it.id, result: visualResult, status: visualResult, notes: '', finding: '' }));
     }
   }
 
