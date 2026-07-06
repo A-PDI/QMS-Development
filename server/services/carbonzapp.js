@@ -333,9 +333,9 @@ async function testConnection({ apiKey } = {}) {
 // bench "Job #" to say which system a result belongs to:
 //   "QMS…" → an internal quality inspection → belongs here (QMS-Development)
 //   "RMA…" → a warranty return evaluation → belongs to Warranty_SQL only
-// Reports with neither prefix are not filtered (synced as before, for back-
-// compat with benches/jobs that predate this routing convention).
-const FOREIGN_JOB_PREFIX = 'RMA';
+// A report is only synced here if its Job # begins with OUR prefix — anything
+// else (the other system's prefix, no prefix, or any other text) is excluded.
+const OWN_JOB_PREFIX = 'QMS';
 
 function jobNumberOf(report) {
   return String((report && (report.job || report.drs_id)) || '').trim();
@@ -343,7 +343,7 @@ function jobNumberOf(report) {
 
 function belongsToThisApp(report) {
   const job = jobNumberOf(report);
-  return !new RegExp(`^${FOREIGN_JOB_PREFIX}`, 'i').test(job);
+  return new RegExp(`^${OWN_JOB_PREFIX}`, 'i').test(job);
 }
 
 /**
