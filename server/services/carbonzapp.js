@@ -328,6 +328,24 @@ async function testConnection({ apiKey } = {}) {
   };
 }
 
+// ── Job-number routing ────────────────────────────────────────────────────────
+// The test bench is shared with the Warranty_SQL app. Technicians prefix the
+// bench "Job #" to say which system a result belongs to:
+//   "QMS…" → an internal quality inspection → belongs here (QMS-Development)
+//   "RMA…" → a warranty return evaluation → belongs to Warranty_SQL only
+// Reports with neither prefix are not filtered (synced as before, for back-
+// compat with benches/jobs that predate this routing convention).
+const FOREIGN_JOB_PREFIX = 'RMA';
+
+function jobNumberOf(report) {
+  return String((report && (report.job || report.drs_id)) || '').trim();
+}
+
+function belongsToThisApp(report) {
+  const job = jobNumberOf(report);
+  return !new RegExp(`^${FOREIGN_JOB_PREFIX}`, 'i').test(job);
+}
+
 /**
  * Turn a stored injector_test_reports DB row back into the shape the
  * inspection auto-fill expects (with a parsed `tests` array).
@@ -515,8 +533,13 @@ async function syncNow({ apiKey, fullResync = false } = {}) {
   }
 
   console.log(`[CarbonZapp] Sync starting (fullResync=${fullResync}, dateFrom=${dateFrom || 'none'})`);
-  const raw = await fetchReports({ apiKey, dateFrom });
-  console.log(`[CarbonZapp] Fetched ${raw.length} report object(s) from the bench.`);
+  const fetched = await fetchReports({ apiKey, dateFrom });
+  // Route by Job # prefix — reports belonging to the Warranty app are excluded
+  // here. Filtering BEFORE upsert/reconcile means a Full Resync also prunes any
+  // wrong-system rows imported before this routing rule existed.
+  const raw = fetched.filter(belongsToThisApp);
+  const excludedByRouting = fetched.length - raw.length;
+  console.log(`[CarbonZapp] Fetched ${fetched.length} report object(s) from the bench (${excludedByRouting} excluded by job-number routing).`);
   const result = upsertReports(raw);
 
   // Auto-create/fill inspections — ONE inspection per test report, grouping all
@@ -563,6 +586,8 @@ async function syncNow({ apiKey, fullResync = false } = {}) {
 
   return {
     fetched: raw.length,
+    fetchedTotal: fetched.length,
+    excludedByRouting,
     imported: result.imported,
     updated: result.updated,
     inspectionsCreated,
@@ -584,6 +609,8 @@ module.exports = {
   mapReportToInjector,
   normaliseTests,
   hydrateInjectorRow,
+  jobNumberOf,
+  belongsToThisApp,
   upsertReports,
   syncNow,
   clearAllReports,
