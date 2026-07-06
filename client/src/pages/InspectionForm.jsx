@@ -1009,9 +1009,6 @@ export default function InspectionForm() {
                     >
                       <Trash2 size={13} />
                     </button>
-                    <div className="absolute bottom-0 left-0 right-0 bg-black/40 px-1.5 py-0.5 text-[10px] text-white truncate">
-                      {att.file_name}
-                    </div>
                   </div>
                 ))}
               </div>

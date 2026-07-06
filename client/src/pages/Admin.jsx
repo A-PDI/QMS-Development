@@ -1312,6 +1312,9 @@ function UsersTab({ showToast }) {
       active: user.active,
       permTabs: tabs,
       usePermissions: tabs !== null,
+      setPassword: false,
+      newPassword: '',
+      newPasswordConfirm: '',
     })
   }
 
@@ -1333,16 +1336,33 @@ function UsersTab({ showToast }) {
       showToast('Name and email are required', 'error')
       return
     }
+
+    if (!creating && editForm.setPassword) {
+      if (!editForm.newPassword?.trim()) {
+        showToast('New password cannot be empty', 'error')
+        return
+      }
+      if (editForm.newPassword !== editForm.newPasswordConfirm) {
+        showToast('Passwords do not match', 'error')
+        return
+      }
+    }
+
+    // Strip UI-only password fields before sending to the API
+    const { setPassword, newPassword, newPasswordConfirm, ...base } = editForm
+
     try {
       if (creating) {
-        if (!editForm.password?.trim()) {
+        if (!base.password?.trim()) {
           showToast('Password is required for new users', 'error')
           return
         }
-        await api.post('/admin/users', editForm)
+        await api.post('/admin/users', base)
         showToast('User created', 'success')
       } else {
-        await api.patch(`/admin/users/${editingId}`, editForm)
+        const payload = { ...base }
+        if (setPassword && newPassword) payload.password = newPassword
+        await api.patch(`/admin/users/${editingId}`, payload)
         showToast('User updated', 'success')
       }
       qc.invalidateQueries({ queryKey: ['admin-users'] })
@@ -1452,6 +1472,51 @@ function UsersTab({ showToast }) {
               )}
             </div>
           )}
+          {/* Set Password (edit only) */}
+          {!creating && (
+            <div className="pt-2 border-t border-gray-100 space-y-3">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="setPassword"
+                  checked={!!editForm?.setPassword}
+                  onChange={e => setEditForm(f => ({
+                    ...f,
+                    setPassword: e.target.checked,
+                    newPassword: '',
+                    newPasswordConfirm: '',
+                  }))}
+                  className="w-4 h-4 accent-pdi-navy"
+                />
+                <label htmlFor="setPassword" className="text-sm font-medium text-gray-700">Set new password</label>
+              </div>
+              {editForm?.setPassword && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">New Password</label>
+                    <input
+                      type="password"
+                      value={editForm?.newPassword || ''}
+                      onChange={e => setEditForm(f => ({ ...f, newPassword: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
+                      placeholder="Min 8 characters"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Confirm Password</label>
+                    <input
+                      type="password"
+                      value={editForm?.newPasswordConfirm || ''}
+                      onChange={e => setEditForm(f => ({ ...f, newPasswordConfirm: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
+                      placeholder="Must match above"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3 pt-2 border-t border-gray-100">
             <button onClick={() => { setEditingId(null); setCreating(false); setEditForm(null) }} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
             <button onClick={handleSave} className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[40px]">

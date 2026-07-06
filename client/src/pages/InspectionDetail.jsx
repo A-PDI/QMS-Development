@@ -9,6 +9,7 @@ import { getUser } from '../lib/auth'
 import { useQueryClient } from '@tanstack/react-query'
 import api from '../lib/api'
 import StatusBadge from '../components/StatusBadge'
+import AuthImage from '../components/AuthImage'
 import SectionReceiving from '../components/inspection/SectionReceiving'
 import SectionVisual from '../components/inspection/SectionVisual'
 import SectionDimensional from '../components/inspection/SectionDimensional'
@@ -124,6 +125,24 @@ export default function InspectionDetail() {
       } catch {
         showToast(`Failed to upload ${file.name}`, 'error')
       }
+    }
+  }
+
+  async function openAttachment(att) {
+    try {
+      const res = await api.get(`/attachments/download/${att.id}`, { responseType: 'blob' })
+      const url = URL.createObjectURL(res.data)
+      const a = document.createElement('a')
+      a.href = url
+      a.target = '_blank'
+      a.rel = 'noopener noreferrer'
+      if (!att.mime_type?.startsWith('image/')) a.download = att.file_name
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(url), 10000)
+    } catch {
+      showToast('Failed to open file', 'error')
     }
   }
 
@@ -492,41 +511,92 @@ export default function InspectionDetail() {
         )}
 
         {/* Attachments */}
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="px-4 sm:px-5 py-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-              <Paperclip size={14} />
-              Attachments ({attachments.length})
-            </h2>
-          </div>
-          <div className="p-4 sm:p-5 space-y-3">
-            {canEdit && (
-              <FileUploadZone onFiles={handleUpload} uploading={uploadFile.isPending} />
-            )}
-            {attachments.filter(a => !a.section_key && !a.item_id).length === 0 ? (
-              <div className="text-sm text-gray-400">No attachments</div>
-            ) : (
-              <div className="space-y-2">
-                {attachments.filter(a => !a.section_key && !a.item_id).map(att => (
-                  <div key={att.id} className="flex items-center justify-between gap-2 p-2 rounded-lg border border-gray-100 hover:bg-gray-50">
-                    <div className="min-w-0 flex-1">
-                      <a href={`/api/attachments/download/${att.id}`} target="_blank" rel="noopener noreferrer" className="text-sm text-pdi-navy hover:underline truncate block">{att.file_name}</a>
-                      <div className="text-xs text-gray-400">{formatFileSize(att.file_size_bytes)} · {formatDateTime(att.uploaded_at)}</div>
-                    </div>
-                    {canEdit && (
-                      <button
-                        onClick={() => deleteFile.mutate({ id: att.id, inspectionId: id })}
-                        className="p-1.5 text-gray-400 hover:text-red-500 rounded transition-colors flex-shrink-0"
-                      >
-                        <X size={14} />
-                      </button>
-                    )}
-                  </div>
-                ))}
+        {(() => {
+          const general = attachments.filter(a => !a.section_key && !a.item_id)
+          const generalImages = general.filter(a => (a.mime_type || '').startsWith('image/'))
+          const generalFiles  = general.filter(a => !(a.mime_type || '').startsWith('image/'))
+          return (
+            <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+              <div className="px-4 sm:px-5 py-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                  <Paperclip size={14} />
+                  Attachments ({attachments.length})
+                </h2>
               </div>
-            )}
-          </div>
-        </div>
+              <div className="p-4 sm:p-5 space-y-4">
+                {canEdit && (
+                  <FileUploadZone onFiles={handleUpload} uploading={uploadFile.isPending} />
+                )}
+
+                {/* Photo grid for bulk-uploaded images */}
+                {generalImages.length > 0 && (
+                  <div>
+                    <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+                      Inspection Images ({generalImages.length})
+                    </h3>
+                    <div className="grid grid-cols-3 gap-3">
+                      {generalImages.map(att => (
+                        <div
+                          key={att.id}
+                          className="relative group border border-gray-200 rounded overflow-hidden bg-gray-50 cursor-pointer"
+                          style={{ aspectRatio: '2.45 / 3.25' }}
+                          onClick={() => openAttachment(att)}
+                          title={att.file_name}
+                        >
+                          <AuthImage
+                            attachmentId={att.id}
+                            alt={att.file_name}
+                            className="absolute inset-0 w-full h-full object-cover"
+                          />
+                          {canEdit && (
+                            <button
+                              onClick={e => { e.stopPropagation(); deleteFile.mutate({ id: att.id, inspectionId: id }) }}
+                              title="Remove image"
+                              className="absolute top-1 right-1 p-1 bg-white/80 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Non-image file list */}
+                {generalFiles.length > 0 && (
+                  <div className="space-y-2">
+                    {generalFiles.map(att => (
+                      <div key={att.id} className="flex items-center justify-between gap-2 p-2 rounded-lg border border-gray-100 hover:bg-gray-50">
+                        <div className="min-w-0 flex-1">
+                          <button
+                            onClick={() => openAttachment(att)}
+                            className="text-sm text-pdi-navy hover:underline truncate block text-left"
+                          >
+                            {att.file_name}
+                          </button>
+                          <div className="text-xs text-gray-400">{formatFileSize(att.file_size_bytes)} · {formatDateTime(att.uploaded_at)}</div>
+                        </div>
+                        {canEdit && (
+                          <button
+                            onClick={() => deleteFile.mutate({ id: att.id, inspectionId: id })}
+                            className="p-1.5 text-gray-400 hover:text-red-500 rounded transition-colors flex-shrink-0"
+                          >
+                            <X size={14} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {general.length === 0 && !canEdit && (
+                  <div className="text-sm text-gray-400">No attachments</div>
+                )}
+              </div>
+            </div>
+          )
+        })()}
 
         {/* Quality alerts */}
         {inspection.quality_alerts && inspection.quality_alerts.length > 0 && (

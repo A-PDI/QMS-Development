@@ -183,4 +183,37 @@ router.get('/me', authMiddleware, (req, res) => {
   });
 });
 
+// ── PATCH /api/auth/password  (change own password) ──────────────────────────
+router.patch('/password', authMiddleware, async (req, res, next) => {
+  try {
+    const { current_password, new_password } = req.body;
+    if (!current_password || !new_password) {
+      return next(new AppError('current_password and new_password are required', 400, 'VALIDATION_ERROR'));
+    }
+    if (new_password.length < 8) {
+      return next(new AppError('New password must be at least 8 characters', 400, 'VALIDATION_ERROR'));
+    }
+
+    const user = db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
+    if (!user) return next(new AppError('User not found', 404, 'NOT_FOUND'));
+
+    if (!user.password_hash) {
+      return next(new AppError(
+        'This account uses Microsoft sign-in and does not have a local password.',
+        400, 'NO_LOCAL_PASSWORD'
+      ));
+    }
+
+    const valid = await bcrypt.compare(current_password, user.password_hash);
+    if (!valid) return next(new AppError('Current password is incorrect', 401, 'INVALID_CREDENTIALS'));
+
+    const hash = await bcrypt.hash(new_password, 10);
+    db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hash, user.id]);
+
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;
