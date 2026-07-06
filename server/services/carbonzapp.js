@@ -95,6 +95,16 @@ function toNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// FL(W) is an internal bench diagnostic step, not a customer-facing test —
+// exclude it everywhere test steps are consumed (reports, pass/fail totals,
+// dimensional inspection sections) rather than filtering it per-consumer.
+function isInternalTestStep(testInfo) {
+  const raw = String((testInfo && testInfo.test_name) || '')
+    .replace(/\s*:\s*SKIPPED\s*$/i, '')
+    .trim();
+  return /^FL\s*\(\s*W\s*\)$/i.test(raw);
+}
+
 /**
  * Build a normalised list of test steps for a single injector report object.
  * Each step: { name, category, conditions, spec, unit, results, status,
@@ -102,7 +112,7 @@ function toNum(v) {
  */
 function normaliseTests(report) {
   const tests = Array.isArray(report.AllTests) ? report.AllTests : [];
-  return tests.map((t) => {
+  return tests.filter((t) => !isInternalTestStep(t.TestInfo || {})).map((t) => {
     const ti = t.TestInfo || {};
     const pt = t.PrimaryTank || null;
     const st = t.SecondaryTank || null;
