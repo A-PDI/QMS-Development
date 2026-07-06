@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
-import { ClipboardList, CheckSquare, AlertTriangle, TrendingUp, PlusCircle, Bell } from 'lucide-react'
+import { ClipboardList, CheckSquare, AlertTriangle, TrendingUp, PlusCircle, Bell, Clock, Zap } from 'lucide-react'
 import api from '../lib/api'
 import { useInspections, useInspectionAlerts } from '../hooks/useInspections'
 import { useNCRs } from '../hooks/useNCRs'
@@ -13,10 +13,15 @@ import { formatDate } from '../lib/utils'
 import { COMPONENT_TYPE_LABELS, NCR_SEVERITY_COLORS, NCR_SEVERITY_LABELS, NCR_STATUS_COLORS, NCR_STATUS_LABELS } from '../lib/constants'
 
 const METRIC_CONFIGS = [
-  { key: 'total_inspections',    label: 'Total Inspections',    icon: ClipboardList,  bg: 'bg-pdi-navy',  fg: 'text-white', filter: 'all',      filterLabel: 'All Inspections' },
-  { key: 'open_inspections',     label: 'Open Inspections',     icon: ClipboardList,  bg: 'bg-pdi-amber', fg: 'text-white', filter: 'draft',    filterLabel: 'Open Inspections' },
-  { key: 'completed_this_month', label: 'Completed This Month', icon: CheckSquare,    bg: 'bg-pdi-teal',  fg: 'text-white', filter: 'complete', filterLabel: 'Completed Inspections' },
-  { key: 'open_ncrs',            label: 'Open NCRs',            icon: AlertTriangle,  bg: 'bg-pdi-red',   fg: 'text-white', filter: 'ncrs',     filterLabel: 'Open NCRs' },
+  { key: 'total_inspections',    label: 'Total Inspections',    icon: ClipboardList,  bg: 'bg-pdi-navy',   fg: 'text-white', filter: 'all',            filterLabel: 'All Inspections' },
+  { key: 'open_inspections',     label: 'Open Inspections',     icon: ClipboardList,  bg: 'bg-pdi-amber',  fg: 'text-white', filter: 'draft',          filterLabel: 'Open Inspections' },
+  { key: 'completed_this_month', label: 'Completed This Month', icon: CheckSquare,    bg: 'bg-pdi-teal',   fg: 'text-white', filter: 'complete',       filterLabel: 'Completed Inspections' },
+  { key: 'open_ncrs',            label: 'Open NCRs',            icon: AlertTriangle,  bg: 'bg-pdi-red',    fg: 'text-white', filter: 'ncrs',           filterLabel: 'Open NCRs' },
+]
+
+const ADMIN_METRIC_CONFIGS = [
+  { key: 'past_due',       label: 'Past Due',        icon: Clock, bg: 'bg-red-700',    fg: 'text-white', filter: 'past_due',       filterLabel: 'Past Due Inspections' },
+  { key: 'short_duration', label: 'Short Duration',  icon: Zap,   bg: 'bg-orange-500', fg: 'text-white', filter: 'short_duration', filterLabel: 'Short Duration Completions' },
 ]
 
 const COMPONENT_COLORS = ['#1D2B4F', '#1A8C80', '#D4943A', '#C0392B', '#2A3F72', '#7C3AED']
@@ -73,6 +78,8 @@ export default function Dashboard() {
   const [activeFilter, setActiveFilter] = useState(null)
   const [chartPeriodIdx, setChartPeriodIdx] = useState(1)
 
+  const isAdminRole = user && (user.role === 'admin' || user.role === 'qc_manager')
+
   const { data: stats, isLoading } = useQuery({
     queryKey: ['dashboard'],
     queryFn: async () => { const { data } = await api.get('/dashboard/stats'); return data },
@@ -100,9 +107,13 @@ export default function Dashboard() {
   }
   const chartData = Object.values(periodMap)
 
-  // Inspections filtered by card click (non-NCR cards) — must be strict boolean for React Query v5
-  const showInspections = activeFilter !== null && activeFilter !== 'ncrs'
+  // Determine which panel to show based on active filter
+  const showInspections = activeFilter !== null && !['ncrs', 'past_due', 'short_duration'].includes(activeFilter)
   const showAllInspections = activeFilter === 'all'
+  const showNcrs = activeFilter === 'ncrs'
+  const showPastDue = activeFilter === 'past_due'
+  const showShortDuration = activeFilter === 'short_duration'
+
   const inspectionFilter = showInspections
     ? (showAllInspections ? { limit: 50, page: 1 } : { status: activeFilter, limit: 50, page: 1 })
     : null
@@ -112,19 +123,21 @@ export default function Dashboard() {
   )
   const tableInspections = showInspections ? (filteredData?.inspections || []) : []
 
-  // NCRs for the Open NCRs card
-  const showNcrs = activeFilter === 'ncrs'
   const { data: ncrData, isLoading: ncrLoading } = useNCRs(
     { status: 'open', limit: 50 },
     { enabled: showNcrs }
   )
   const tableNcrs = showNcrs ? (ncrData?.ncrs || []) : []
 
+  const tablePastDue = showPastDue ? (inspectionAlerts.past_due || []) : []
+  const tableShortDuration = showShortDuration ? (inspectionAlerts.short_duration || []) : []
+
   function handleCardClick(filter) {
     setActiveFilter(prev => prev === filter ? null : filter)
   }
 
-  const activeConfig = METRIC_CONFIGS.find(m => m.filter === activeFilter)
+  const allConfigs = [...METRIC_CONFIGS, ...(isAdminRole ? ADMIN_METRIC_CONFIGS : [])]
+  const activeConfig = allConfigs.find(m => m.filter === activeFilter)
 
   return (
     <div className="min-h-full bg-gray-50/50">
@@ -184,250 +197,22 @@ export default function Dashboard() {
         )}
 
         {/* KPI Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className={`grid gap-3 sm:gap-4 ${isAdminRole ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-6' : 'grid-cols-2 lg:grid-cols-4'}`}>
           {METRIC_CONFIGS.map(({ key, label, icon, bg, fg, filter }) => (
             <MetricCard key={key} label={label} value={stats?.[key]} icon={icon} bg={bg} fg={fg}
               isActive={activeFilter === filter}
               onClick={() => handleCardClick(filter)}
             />
           ))}
+          {isAdminRole && ADMIN_METRIC_CONFIGS.map(({ key, label, icon, bg, fg, filter }) => (
+            <MetricCard key={key} label={label}
+              value={key === 'past_due' ? (inspectionAlerts.past_due || []).length : (inspectionAlerts.short_duration || []).length}
+              icon={icon} bg={bg} fg={fg}
+              isActive={activeFilter === filter}
+              onClick={() => handleCardClick(filter)}
+            />
+          ))}
         </div>
-
-        {/* Filtered inspection table */}
-        {showInspections && (
-          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-100 gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <div className="w-1 h-5 bg-pdi-navy rounded-full flex-shrink-0" />
-                <h2 className="text-sm sm:text-base font-semibold text-gray-800 truncate">{activeConfig?.filterLabel}</h2>
-                <span className="text-xs text-gray-400 flex-shrink-0">({tableInspections.length})</span>
-              </div>
-              <button onClick={() => navigate('/inspections')} className="text-xs text-pdi-navy hover:underline font-medium flex-shrink-0">View all →</button>
-            </div>
-            {filteredLoading ? (
-              <div className="text-center text-gray-400 text-sm py-10">Loading…</div>
-            ) : tableInspections.length === 0 ? (
-              <div className="text-center text-gray-400 text-sm py-10">No matching inspections</div>
-            ) : (
-              <>
-                {/* Desktop table — hidden on mobile */}
-                <div className="hidden md:block overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50 border-b border-gray-100">
-                      <tr>
-                        {['Component', 'Part Number', 'PO Number', 'Lot / Serial', 'Inspector', 'Date Received', 'Status'].map(h => (
-                          <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50">
-                      {tableInspections.map(insp => (
-                        <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-blue-50/50 cursor-pointer">
-                          <td className="px-4 py-3">
-                            <div className="font-medium text-gray-800">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</div>
-                            <div className="text-xs text-gray-400 font-mono mt-0.5">{insp.form_no}</div>
-                          </td>
-                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.po_number || '—'}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.lot_serial_no || '—'}</td>
-                          <td className="px-4 py-3 text-sm text-gray-700">{insp.inspector_name || '—'}</td>
-                          <td className="px-4 py-3 text-sm text-gray-500">{formatDate(insp.date_received || insp.created_at)}</td>
-                          <td className="px-4 py-3"><StatusBadge status={insp.status} /></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                {/* Mobile card list — hidden on md and up */}
-                <div className="md:hidden divide-y divide-gray-100">
-                  {tableInspections.map(insp => (
-                    <button
-                      key={insp.id}
-                      type="button"
-                      onClick={() => navigate(`/inspections/${insp.id}`)}
-                      className="w-full text-left px-4 py-3 hover:bg-blue-50/50 active:bg-blue-50 transition-colors min-h-[44px]"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="font-medium text-gray-800 text-sm truncate">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</div>
-                          <div className="text-xs text-gray-400 font-mono mt-0.5 truncate">{insp.form_no}</div>
-                        </div>
-                        <div className="flex-shrink-0"><StatusBadge status={insp.status} /></div>
-                      </div>
-                      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                        <div className="min-w-0">
-                          <span className="text-gray-400">Part: </span>
-                          <span className="font-mono text-gray-700">{insp.part_number || '—'}</span>
-                        </div>
-                        <div className="min-w-0">
-                          <span className="text-gray-400">PO: </span>
-                          <span className="font-mono text-gray-700">{insp.po_number || '—'}</span>
-                        </div>
-                        <div className="min-w-0 truncate">
-                          <span className="text-gray-400">By: </span>
-                          <span className="text-gray-700">{insp.inspector_name || '—'}</span>
-                        </div>
-                        <div className="min-w-0 truncate">
-                          <span className="text-gray-400">On: </span>
-                          <span className="text-gray-500">{formatDate(insp.date_received || insp.created_at)}</span>
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        )}
-
-        {/* Filtered NCR table */}
-        {showNcrs && (
-          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-100 gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <div className="w-1 h-5 bg-pdi-red rounded-full flex-shrink-0" />
-                <h2 className="text-sm sm:text-base font-semibold text-gray-800 truncate">Open NCRs</h2>
-                <span className="text-xs text-gray-400 flex-shrink-0">({tableNcrs.length})</span>
-              </div>
-              <button onClick={() => navigate('/ncrs')} className="text-xs text-pdi-navy hover:underline font-medium flex-shrink-0">View all →</button>
-            </div>
-            {ncrLoading ? (
-              <div className="text-center text-gray-400 text-sm py-10">Loading…</div>
-            ) : tableNcrs.length === 0 ? (
-              <div className="text-center text-gray-400 text-sm py-10">No open NCRs</div>
-            ) : (
-              <>
-                {/* Desktop table */}
-                <div className="hidden md:block overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50 border-b border-gray-100">
-                      <tr>
-                        {['NCR #', 'Part Number', 'Supplier', 'Description', 'Severity', 'Status', 'Created'].map(h => (
-                          <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50">
-                      {tableNcrs.map(ncr => (
-                        <tr key={ncr.id} onClick={() => navigate(`/ncrs/${ncr.id}`)} className="hover:bg-orange-50/40 cursor-pointer">
-                          <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{ncr.ncr_number}</td>
-                          <td className="px-4 py-3 font-mono text-xs">{ncr.part_number || '—'}</td>
-                          <td className="px-4 py-3 text-sm text-gray-700">{ncr.supplier || '—'}</td>
-                          <td className="px-4 py-3 text-sm max-w-xs truncate text-gray-700">{ncr.description_of_defect}</td>
-                          <td className="px-4 py-3">
-                            <NcrBadge value={ncr.severity} colorMap={NCR_SEVERITY_COLORS} labelMap={NCR_SEVERITY_LABELS} />
-                          </td>
-                          <td className="px-4 py-3">
-                            <NcrBadge value={ncr.status} colorMap={NCR_STATUS_COLORS} labelMap={NCR_STATUS_LABELS} />
-                          </td>
-                          <td className="px-4 py-3 text-xs text-gray-500">{formatDate(ncr.created_at)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                {/* Mobile card list */}
-                <div className="md:hidden divide-y divide-gray-100">
-                  {tableNcrs.map(ncr => (
-                    <button
-                      key={ncr.id}
-                      type="button"
-                      onClick={() => navigate(`/ncrs/${ncr.id}`)}
-                      className="w-full text-left px-4 py-3 hover:bg-orange-50/40 active:bg-orange-50 transition-colors min-h-[44px]"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="font-mono text-xs font-bold text-pdi-navy">{ncr.ncr_number}</div>
-                          <div className="font-mono text-xs text-gray-500 mt-0.5 truncate">{ncr.part_number || '—'}</div>
-                        </div>
-                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                          <NcrBadge value={ncr.severity} colorMap={NCR_SEVERITY_COLORS} labelMap={NCR_SEVERITY_LABELS} />
-                          <NcrBadge value={ncr.status} colorMap={NCR_STATUS_COLORS} labelMap={NCR_STATUS_LABELS} />
-                        </div>
-                      </div>
-                      <div className="mt-1.5 text-xs text-gray-700 line-clamp-2">{ncr.description_of_defect}</div>
-                      <div className="mt-1.5 flex items-center justify-between gap-2 text-xs">
-                        <span className="text-gray-500 truncate">{ncr.supplier || '—'}</span>
-                        <span className="text-gray-400 flex-shrink-0">{formatDate(ncr.created_at)}</span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        )}
-
-        {/* Admin Alerts Section — only shown for admin/qc_manager */}
-        {user && (user.role === 'admin' || user.role === 'qc_manager') && inspectionAlerts && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-            {/* Past Due */}
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-              <div className="flex items-center gap-2 px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-200 bg-gray-50">
-                <div className="w-1 h-5 bg-red-500 rounded-full flex-shrink-0" />
-                <h3 className="text-sm sm:text-base font-semibold text-gray-800">Past Due Inspections</h3>
-                <span className="text-xs text-gray-400 flex-shrink-0">({(inspectionAlerts.past_due || []).length})</span>
-              </div>
-              {(inspectionAlerts.past_due || []).length === 0 ? (
-                <div className="text-center text-gray-400 text-sm py-8 px-4">No past due inspections</div>
-              ) : (
-                <div className="divide-y divide-gray-100">
-                  {(inspectionAlerts.past_due || []).slice(0, 5).map(insp => (
-                    <button
-                      key={insp.id}
-                      onClick={() => navigate(`/inspections/${insp.id}`)}
-                      className="w-full text-left px-4 sm:px-5 py-3 hover:bg-red-50/50 transition-colors min-h-[44px] flex items-start justify-between gap-2"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</div>
-                        <div className="font-mono text-xs text-gray-600 mt-0.5">{insp.part_number || '—'}</div>
-                      </div>
-                      <div className="text-right flex-shrink-0">
-                        <div className="text-xs text-red-600 font-semibold">{formatDate(insp.due_date)}</div>
-                        <div className="text-xs text-gray-500 mt-0.5">{insp.assigned_to_name || '—'}</div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Short Duration */}
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-              <div className="flex items-center gap-2 px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-200 bg-gray-50">
-                <div className="w-1 h-5 bg-orange-500 rounded-full flex-shrink-0" />
-                <h3 className="text-sm sm:text-base font-semibold text-gray-800">Short Duration Completions</h3>
-                <span className="text-xs text-gray-400 flex-shrink-0">({(inspectionAlerts.short_duration || []).length})</span>
-              </div>
-              {(inspectionAlerts.short_duration || []).length === 0 ? (
-                <div className="text-center text-gray-400 text-sm py-8 px-4">No short duration completions</div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50 border-b border-gray-100">
-                      <tr>
-                        {['Part Number', 'Part Type', 'Inspector', 'Date Started', 'Duration'].map(h => (
-                          <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50">
-                      {(inspectionAlerts.short_duration || []).slice(0, 10).map(insp => (
-                        <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-orange-50/40 cursor-pointer">
-                          <td className="px-4 py-2.5 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
-                          <td className="px-4 py-2.5 text-xs text-gray-700">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</td>
-                          <td className="px-4 py-2.5 text-xs text-gray-700">{insp.inspector_name || '—'}</td>
-                          <td className="px-4 py-2.5 text-xs text-gray-500">{formatDate(insp.created_at)}</td>
-                          <td className="px-4 py-2.5 text-xs text-orange-600 font-semibold">{insp.duration_minutes != null ? `${insp.duration_minutes}m` : '—'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
 
         {/* Recent Activity */}
         {stats?.recent_inspections && stats.recent_inspections.length > 0 && (
@@ -465,6 +250,266 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
+        {/* Filtered inspection table */}
+        {showInspections && (
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-100 gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-1 h-5 bg-pdi-navy rounded-full flex-shrink-0" />
+                <h2 className="text-sm sm:text-base font-semibold text-gray-800 truncate">{activeConfig?.filterLabel}</h2>
+                <span className="text-xs text-gray-400 flex-shrink-0">({tableInspections.length})</span>
+              </div>
+              <button onClick={() => navigate('/inspections')} className="text-xs text-pdi-navy hover:underline font-medium flex-shrink-0">View all →</button>
+            </div>
+            {filteredLoading ? (
+              <div className="text-center text-gray-400 text-sm py-10">Loading…</div>
+            ) : tableInspections.length === 0 ? (
+              <div className="text-center text-gray-400 text-sm py-10">No matching inspections</div>
+            ) : (
+              <>
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-100">
+                      <tr>
+                        {['Component', 'Part Number', 'PO Number', 'Lot / Serial', 'Inspector', 'Date Received', 'Status'].map(h => (
+                          <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {tableInspections.map(insp => (
+                        <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-blue-50/50 cursor-pointer">
+                          <td className="px-4 py-3">
+                            <div className="font-medium text-gray-800">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</div>
+                            <div className="text-xs text-gray-400 font-mono mt-0.5">{insp.form_no}</div>
+                          </td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.po_number || '—'}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.lot_serial_no || '—'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700">{insp.inspector_name || '—'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-500">{formatDate(insp.date_received || insp.created_at)}</td>
+                          <td className="px-4 py-3"><StatusBadge status={insp.status} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="md:hidden divide-y divide-gray-100">
+                  {tableInspections.map(insp => (
+                    <button key={insp.id} type="button" onClick={() => navigate(`/inspections/${insp.id}`)}
+                      className="w-full text-left px-4 py-3 hover:bg-blue-50/50 active:bg-blue-50 transition-colors min-h-[44px]"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-gray-800 text-sm truncate">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</div>
+                          <div className="text-xs text-gray-400 font-mono mt-0.5 truncate">{insp.form_no}</div>
+                        </div>
+                        <div className="flex-shrink-0"><StatusBadge status={insp.status} /></div>
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                        <div className="min-w-0"><span className="text-gray-400">Part: </span><span className="font-mono text-gray-700">{insp.part_number || '—'}</span></div>
+                        <div className="min-w-0"><span className="text-gray-400">PO: </span><span className="font-mono text-gray-700">{insp.po_number || '—'}</span></div>
+                        <div className="min-w-0 truncate"><span className="text-gray-400">By: </span><span className="text-gray-700">{insp.inspector_name || '—'}</span></div>
+                        <div className="min-w-0 truncate"><span className="text-gray-400">On: </span><span className="text-gray-500">{formatDate(insp.date_received || insp.created_at)}</span></div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Filtered NCR table */}
+        {showNcrs && (
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-100 gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-1 h-5 bg-pdi-red rounded-full flex-shrink-0" />
+                <h2 className="text-sm sm:text-base font-semibold text-gray-800 truncate">Open NCRs</h2>
+                <span className="text-xs text-gray-400 flex-shrink-0">({tableNcrs.length})</span>
+              </div>
+              <button onClick={() => navigate('/ncrs')} className="text-xs text-pdi-navy hover:underline font-medium flex-shrink-0">View all →</button>
+            </div>
+            {ncrLoading ? (
+              <div className="text-center text-gray-400 text-sm py-10">Loading…</div>
+            ) : tableNcrs.length === 0 ? (
+              <div className="text-center text-gray-400 text-sm py-10">No open NCRs</div>
+            ) : (
+              <>
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-100">
+                      <tr>
+                        {['NCR #', 'Part Number', 'Supplier', 'Description', 'Severity', 'Status', 'Created'].map(h => (
+                          <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {tableNcrs.map(ncr => (
+                        <tr key={ncr.id} onClick={() => navigate(`/ncrs/${ncr.id}`)} className="hover:bg-orange-50/40 cursor-pointer">
+                          <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{ncr.ncr_number}</td>
+                          <td className="px-4 py-3 font-mono text-xs">{ncr.part_number || '—'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700">{ncr.supplier || '—'}</td>
+                          <td className="px-4 py-3 text-sm max-w-xs truncate text-gray-700">{ncr.description_of_defect}</td>
+                          <td className="px-4 py-3"><NcrBadge value={ncr.severity} colorMap={NCR_SEVERITY_COLORS} labelMap={NCR_SEVERITY_LABELS} /></td>
+                          <td className="px-4 py-3"><NcrBadge value={ncr.status} colorMap={NCR_STATUS_COLORS} labelMap={NCR_STATUS_LABELS} /></td>
+                          <td className="px-4 py-3 text-xs text-gray-500">{formatDate(ncr.created_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="md:hidden divide-y divide-gray-100">
+                  {tableNcrs.map(ncr => (
+                    <button key={ncr.id} type="button" onClick={() => navigate(`/ncrs/${ncr.id}`)}
+                      className="w-full text-left px-4 py-3 hover:bg-orange-50/40 active:bg-orange-50 transition-colors min-h-[44px]"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-mono text-xs font-bold text-pdi-navy">{ncr.ncr_number}</div>
+                          <div className="font-mono text-xs text-gray-500 mt-0.5 truncate">{ncr.part_number || '—'}</div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                          <NcrBadge value={ncr.severity} colorMap={NCR_SEVERITY_COLORS} labelMap={NCR_SEVERITY_LABELS} />
+                          <NcrBadge value={ncr.status} colorMap={NCR_STATUS_COLORS} labelMap={NCR_STATUS_LABELS} />
+                        </div>
+                      </div>
+                      <div className="mt-1.5 text-xs text-gray-700 line-clamp-2">{ncr.description_of_defect}</div>
+                      <div className="mt-1.5 flex items-center justify-between gap-2 text-xs">
+                        <span className="text-gray-500 truncate">{ncr.supplier || '—'}</span>
+                        <span className="text-gray-400 flex-shrink-0">{formatDate(ncr.created_at)}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Past Due filtered panel */}
+        {showPastDue && (
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-100 gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-1 h-5 bg-red-700 rounded-full flex-shrink-0" />
+                <h2 className="text-sm sm:text-base font-semibold text-gray-800 truncate">Past Due Inspections</h2>
+                <span className="text-xs text-gray-400 flex-shrink-0">({tablePastDue.length})</span>
+              </div>
+              <button onClick={() => navigate('/inspections')} className="text-xs text-pdi-navy hover:underline font-medium flex-shrink-0">View all →</button>
+            </div>
+            {tablePastDue.length === 0 ? (
+              <div className="text-center text-gray-400 text-sm py-10">No past due inspections</div>
+            ) : (
+              <>
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-100">
+                      <tr>
+                        {['Form No', 'Part Number', 'Component', 'Inspector', 'Due Date', 'Status'].map(h => (
+                          <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {tablePastDue.map(insp => (
+                        <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-red-50/40 cursor-pointer">
+                          <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
+                          <td className="px-4 py-3 text-xs text-gray-700">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</td>
+                          <td className="px-4 py-3 text-xs text-gray-700">{insp.assigned_to_name || insp.inspector_name || '—'}</td>
+                          <td className="px-4 py-3 text-xs text-red-600 font-semibold">{formatDate(insp.due_date)}</td>
+                          <td className="px-4 py-3"><StatusBadge status={insp.status} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="md:hidden divide-y divide-gray-100">
+                  {tablePastDue.map(insp => (
+                    <button key={insp.id} type="button" onClick={() => navigate(`/inspections/${insp.id}`)}
+                      className="w-full text-left px-4 py-3 hover:bg-red-50/40 active:bg-red-50 transition-colors min-h-[44px]"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</div>
+                          <div className="font-mono text-xs text-gray-500 mt-0.5 truncate">{insp.part_number || '—'}</div>
+                        </div>
+                        <div className="text-xs text-red-600 font-semibold flex-shrink-0">{formatDate(insp.due_date)}</div>
+                      </div>
+                      <div className="mt-1.5 flex items-center gap-3 text-xs text-gray-500">
+                        <span>{insp.assigned_to_name || insp.inspector_name || '—'}</span>
+                        <StatusBadge status={insp.status} />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Short Duration filtered panel */}
+        {showShortDuration && (
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-100 gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-1 h-5 bg-orange-500 rounded-full flex-shrink-0" />
+                <h2 className="text-sm sm:text-base font-semibold text-gray-800 truncate">Short Duration Completions</h2>
+                <span className="text-xs text-gray-400 flex-shrink-0">({tableShortDuration.length})</span>
+              </div>
+              <button onClick={() => navigate('/inspections')} className="text-xs text-pdi-navy hover:underline font-medium flex-shrink-0">View all →</button>
+            </div>
+            {tableShortDuration.length === 0 ? (
+              <div className="text-center text-gray-400 text-sm py-10">No short duration completions</div>
+            ) : (
+              <>
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-100">
+                      <tr>
+                        {['Part Number', 'Component', 'Inspector', 'Date Completed', 'Duration'].map(h => (
+                          <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {tableShortDuration.map(insp => (
+                        <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-orange-50/40 cursor-pointer">
+                          <td className="px-4 py-2.5 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
+                          <td className="px-4 py-2.5 text-xs text-gray-700">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</td>
+                          <td className="px-4 py-2.5 text-xs text-gray-700">{insp.inspector_name || '—'}</td>
+                          <td className="px-4 py-2.5 text-xs text-gray-500">{formatDate(insp.created_at)}</td>
+                          <td className="px-4 py-2.5 text-xs text-orange-600 font-semibold">{insp.duration_minutes != null ? `${insp.duration_minutes}m` : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="md:hidden divide-y divide-gray-100">
+                  {tableShortDuration.map(insp => (
+                    <button key={insp.id} type="button" onClick={() => navigate(`/inspections/${insp.id}`)}
+                      className="w-full text-left px-4 py-3 hover:bg-orange-50/40 active:bg-orange-50 transition-colors min-h-[44px]"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-mono text-xs text-gray-700">{insp.part_number || '—'}</div>
+                          <div className="text-xs text-gray-500 mt-0.5 truncate">{insp.inspector_name || '—'}</div>
+                        </div>
+                        <div className="text-xs text-orange-600 font-semibold flex-shrink-0">{insp.duration_minutes != null ? `${insp.duration_minutes}m` : '—'}</div>
+                      </div>
+                      <div className="mt-1 text-xs text-gray-400">{formatDate(insp.created_at)}</div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
       </div>
     </div>
   )
