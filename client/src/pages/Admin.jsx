@@ -1839,7 +1839,7 @@ function InjectorTestsTab({ showToast }) {
       const { data: res } = await api.post('/injector-tests/sync', fullResync ? { full_resync: true } : {})
       let summary = `Synced ${res.fetched} report object(s): ${res.imported} new, ${res.updated} updated, ${res.inspectionsCreated} inspection(s) created.`
       if (res.excludedByRouting) {
-        summary += ` (${res.excludedByRouting} excluded — belong to Warranty.)`
+        summary += ` (${res.excludedByRouting} excluded — Job # doesn't start with QMS.)`
       }
       // On a full resync, the backend reconciles deletions against the complete set.
       const delReports = res.reportsDeleted || 0
