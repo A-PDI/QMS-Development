@@ -21,6 +21,22 @@ const THBG    = '#E5E7EB';  // table column-header background
 const SECBG   = '#EEF2F7';  // section header background
 const WHITE   = '#FFFFFF';
 
+// Extract the longest run of digits from a part number (e.g.
+// "PN-0445120067" -> "0445120067") so the report header shows just the
+// numeric part id.
+function numericPartNumber(v) {
+  const s = String(v || '').trim();
+  const matches = s.match(/\d+/g);
+  if (!matches || matches.length === 0) return s || '—';
+  return matches.reduce((a, b) => (b.length > a.length ? b : a));
+}
+
+// Format an ISO date string ("2026-01-01") as MM/DD/YYYY.
+function fmtDateMDY(isoDate) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(isoDate || ''));
+  return m ? `${m[2]}/${m[3]}/${m[1]}` : String(isoDate || '');
+}
+
 // Normalize a disposition value to its UPPERCASE code so PASS/FAIL colour +
 // label consistently regardless of how it was stored (e.g. legacy 'fail').
 function normalizeDisp(value) {
@@ -1072,7 +1088,7 @@ function generateInjectorComparisonPdf(injectors = []) {
         return m;
       });
 
-      // ── Header banner (logo + part number + general info) ─────────────────
+      // ── Header banner (logo + numeric part number + tested date) ──────────
       const bannerH = 54;
       const top = LM;
       doc.rect(LM, top, usableW, bannerH).fillColor(NAVY).fill();
@@ -1081,23 +1097,16 @@ function generateInjectorComparisonPdf(injectors = []) {
       }
 
       const firstInj = list[0] || {};
-      const partNo = firstInj.part_number || '—';
+      const partNo = numericPartNumber(firstInj.part_number);
+      const testDates = [...new Set(list.map(i => (i.test_datetime || '').slice(0, 10)).filter(Boolean))].sort();
+      const testedText = testDates.length
+        ? `Tested: ${fmtDateMDY(testDates[0])}${testDates.length > 1 ? ' – ' + fmtDateMDY(testDates[testDates.length - 1]) : ''}`
+        : '';
       const titleX = LM + 112;
       const titleW = usableW - 122;
-      doc.fontSize(14).font('Helvetica-Bold').fillColor(WHITE);
-      doc.text(`INJECTOR TEST REPORT — ${partNo}`, titleX, top + 9, { width: titleW, align: 'center', lineBreak: false });
-
-      const brands = [...new Set(list.map(i => [i.brand, i.injector_type].filter(Boolean).join(' ')).filter(Boolean))];
-      const machines = [...new Set(list.map(i => i.machine_name).filter(Boolean))];
-      const dates = list.map(i => (i.test_datetime || '').slice(0, 10)).filter(Boolean);
-      const genInfo = [
-        `${list.length} injector${list.length === 1 ? '' : 's'}`,
-        brands.length ? brands.join(', ') : null,
-        machines.length ? `Bench: ${machines.join(', ')}` : null,
-        dates.length ? `Tested: ${dates.sort()[0]}${dates.length > 1 ? ' – ' + dates.sort()[dates.length - 1] : ''}` : null,
-      ].filter(Boolean).join('   ·   ');
-      doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
-      doc.text(genInfo.toUpperCase(), titleX, top + 30, { width: titleW, align: 'center', lineBreak: false });
+      const title = [partNo, testedText].filter(Boolean).join('   |   ');
+      doc.fontSize(16).font('Helvetica-Bold').fillColor(WHITE);
+      doc.text(title, titleX, top + (bannerH - 16) / 2, { width: titleW, align: 'center', lineBreak: false });
 
       // ── Column geometry ───────────────────────────────────────────────────
       // Fixed columns: Test Step (multi-line) + Specification (narrow). The
@@ -1124,18 +1133,24 @@ function generateInjectorComparisonPdf(injectors = []) {
       const col2X = LM + stepW;
       const injStartX = LM + stepW + specW;
 
-      // The Test Step cell needs up to 4 lines (name + 3 params); reserve a
-      // taller minimum row height so it isn't cramped.
+      // The Test Step cell needs room for 3 stacked parameter lines beside the
+      // step name; reserve a taller minimum row height so it isn't cramped.
       const headerRowH = 22;
       const resultRowH = 20; // Pass/Fail summary row at the bottom
       const availH = pageH - LM - tableTop - headerRowH - resultRowH - 6;
       const dataRowCount = rowOrder.length || 1;
       let rowH = Math.floor(availH / dataRowCount);
-      rowH = Math.max(30, Math.min(rowH, 44)); // room for the 4-line test step
+      rowH = Math.max(30, Math.min(rowH, 44)); // room for the 3-line parameter stack
       // If min row height overflows the page, fall back to the largest that fits.
       if (rowH * dataRowCount > availH) rowH = Math.max(24, Math.floor(availH / dataRowCount));
       const nameFont = rowH >= 38 ? 8 : (rowH >= 30 ? 7 : 6.2);
       const subFont = Math.max(5.2, nameFont - 1.6);
+      // Step-name font: sized so a single line visually matches the height of
+      // the 3 stacked parameter lines beside it (Pressure/Pulse/Strk).
+      const paramFont = subFont;
+      const paramLineH = Math.min((rowH - 4) / 3, paramFont + 2.5);
+      const paramBlockH = paramLineH * 3;
+      const stepNameFont = Math.max(8, Math.min(16, paramBlockH / 1.15));
       // ── Dynamic measured-value font scaling ───────────────────────────────
       // The measured flow value must stay readable but never overflow its
       // column. Scale the font to the AVAILABLE COLUMN WIDTH (fewer injectors =
@@ -1186,51 +1201,62 @@ function generateInjectorComparisonPdf(injectors = []) {
         doc.rect(LM, y, usableW, rowH).fillColor(bg).fill();
         doc.strokeColor(BORDER).lineWidth(0.3).moveTo(LM, y + rowH).lineTo(LM + usableW, y + rowH).stroke();
 
-        // ── Column 1: Test Step — Step Name + Pressure/Pulse/Strk lines ─────
+        // ── Column 1: Test Step — name (left, larger) + Pressure/Pulse/Strk
+        // (right, stacked) so the step name and its parameters sit side by side ─
         const p = row.params || {};
-        const stepLines = [
-          { t: row.label, bold: true },
-          { t: `Pressure: ${p.rail_pressure || '—'}`, bold: false },
-          { t: `Pulse: ${p.pulse_width || '—'}`, bold: false },
-          { t: `Strk: ${p.strk || '—'}`, bold: false },
-        ];
-        const lineH = Math.min((rowH - 4) / stepLines.length, nameFont + 2.5);
-        let ly = y + 2;
-        stepLines.forEach((ln, li) => {
-          doc.fontSize(li === 0 ? nameFont : subFont)
-             .font(ln.bold ? 'Helvetica-Bold' : 'Helvetica')
-             .fillColor(li === 0 ? BLACK : DGRAY);
-          doc.text(ln.t, col1X + 4, ly, { width: stepW - 8, height: lineH + 1, lineBreak: false, ellipsis: true });
-          ly += lineH;
+        const cellInnerW = stepW - 8;
+        const nameW = Math.round(cellInnerW * 0.52);
+        const nameParamsGap = 4;
+        const paramsW = cellInnerW - nameW - nameParamsGap;
+        const paramsX = col1X + 4 + nameW + nameParamsGap;
+
+        doc.fontSize(stepNameFont).font('Helvetica-Bold').fillColor(BLACK);
+        doc.text(row.label, col1X + 4, y + (rowH - stepNameFont) / 2 - 1, {
+          width: nameW, height: rowH - 4, lineBreak: false, ellipsis: true,
         });
 
-        // ── Column 2: Specification — value visually distinct from units ────
-        // Split "8.5 +/- 4.5 mm3/STRK" into the numeric spec (bold, larger) and
-        // the trailing unit (lighter, smaller) so the value stands out.
+        const paramLines = [
+          `Pressure: ${p.rail_pressure || '—'}`,
+          `Pulse: ${p.pulse_width || '—'}`,
+          `Strk: ${p.strk || '—'}`,
+        ];
+        let py = y + (rowH - paramBlockH) / 2;
+        paramLines.forEach((t) => {
+          doc.fontSize(paramFont).font('Helvetica').fillColor(DGRAY);
+          doc.text(t, paramsX, py, { width: paramsW, height: paramLineH + 1, lineBreak: false, ellipsis: true });
+          py += paramLineH;
+        });
+
+        // ── Column 2: Specification — Target Value + Units on line 1, the
+        // +/- Range on line 2, both in the same font/size/weight ────────────
+        // `spec` (text_green) arrives as "target +/- tolerance unit" (e.g.
+        // "8.5 +/- 4.5 mm3/STRK"); strip the trailing unit (shown separately
+        // via `unit`), then split what's left into its two numeric parts.
         const rawSpec = (row.spec || '').trim();
         const unitStr = (row.unit || '').trim();
-        let specValue = rawSpec;
+        let specCore = rawSpec;
         if (unitStr && rawSpec.toLowerCase().endsWith(unitStr.toLowerCase())) {
-          specValue = rawSpec.slice(0, rawSpec.length - unitStr.length).trim();
+          specCore = rawSpec.slice(0, rawSpec.length - unitStr.length).trim();
         }
+        const specMatch = specCore.match(/^([+-]?[\d.]+)\s*(?:\+\/-|±)\s*([+-]?[\d.]+)$/);
         const specValFont = nameFont;
-        const specUnitFont = Math.max(5, subFont - 0.3);
-        if (specValue || unitStr) {
-          // Two stacked lines: value on top (bold), unit below (light grey).
-          const hasUnit = !!unitStr;
-          const blockH = specValFont + (hasUnit ? specUnitFont + 1.5 : 0);
+        if (specMatch) {
+          const targetLine = unitStr ? `${specMatch[1]} ${unitStr}` : specMatch[1];
+          const rangeLine = `+/- ${specMatch[2]}`;
+          const blockH = specValFont * 2 + 1.5;
           let sy = y + (rowH - blockH) / 2 - 0.5;
           doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
-          doc.text(specValue || unitStr, col2X + 2, sy, {
+          doc.text(targetLine, col2X + 2, sy, { width: specW - 4, align: 'center', lineBreak: false, ellipsis: true });
+          sy += specValFont + 1.5;
+          doc.text(rangeLine, col2X + 2, sy, { width: specW - 4, align: 'center', lineBreak: false, ellipsis: true });
+        } else if (specCore || unitStr) {
+          // Fallback for a spec that isn't a simple "target +/- tolerance" (e.g.
+          // a single limit with no range) — show the value with its unit.
+          const text = specCore ? (unitStr ? `${specCore} ${unitStr}` : specCore) : unitStr;
+          doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
+          doc.text(text, col2X + 2, y + (rowH - specValFont) / 2 - 1, {
             width: specW - 4, align: 'center', lineBreak: false, ellipsis: true,
           });
-          if (hasUnit && specValue) {
-            sy += specValFont + 1.5;
-            doc.fontSize(specUnitFont).font('Helvetica').fillColor(LGRAY);
-            doc.text(unitStr, col2X + 2, sy, {
-              width: specW - 4, align: 'center', lineBreak: false, ellipsis: true,
-            });
-          }
         } else {
           doc.fontSize(nameFont).font('Helvetica').fillColor(DGRAY);
           doc.text('—', col2X + 2, y + (rowH - nameFont) / 2 - 1, {
