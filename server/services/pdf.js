@@ -37,6 +37,16 @@ function fmtDateMDY(isoDate) {
   return m ? `${m[2]}/${m[3]}/${m[1]}` : String(isoDate || '');
 }
 
+// Test-step row label suffix derived from a tank's own code: "D" (the
+// default/delivery tank) shows no suffix, any other code (e.g. "R" for the
+// return/secondary tank) is appended in brackets — e.g. "iVM.01" vs
+// "iVM.01 [R]". Applies uniformly to every tank, not just secondaries.
+function tankSuffix(tankName) {
+  const code = String(tankName || '').trim().toUpperCase();
+  if (!code || code === 'D') return '';
+  return ` [${code}]`;
+}
+
 // Normalize a disposition value to its UPPERCASE code so PASS/FAIL colour +
 // label consistently regardless of how it was stored (e.g. legacy 'fail').
 function normalizeDisp(value) {
@@ -1040,10 +1050,13 @@ function generateInjectorComparisonPdf(injectors = []) {
           if (!t.primary) continue;
           const params = t.params || {};
           const pLabel = t.name || t.raw_name || 'Step';
+          // Row KEYS stay based on the step name alone (stable across
+          // injectors); the DISPLAY label is derived separately from each
+          // tank's own code.
           const pKey = rowKey(pLabel + '|1');
           if (!rowMap.has(pKey)) {
             rowMap.set(pKey, {
-              label: pLabel,
+              label: `${pLabel}${tankSuffix(t.primary.tank_name)}`,
               params,
               // Specification shown = green-band spec (e.g. "8.5 +/- 4.5 mm3/STRK").
               spec: t.primary.spec || '',
@@ -1052,14 +1065,10 @@ function generateInjectorComparisonPdf(injectors = []) {
             rowOrder.push(pKey);
           }
           if (t.secondary) {
-            // Compact suffix (not "{pLabel} — {tankName}") — a long tank name
-            // combined with the step name doesn't fit the Test Step column and
-            // truncates to an awkward trailing "—…".
-            const sLabel = `${pLabel} (2)`;
-            const sKey = rowKey(sLabel + '|2');
+            const sKey = rowKey(pLabel + '|2');
             if (!rowMap.has(sKey)) {
               rowMap.set(sKey, {
-                label: sLabel,
+                label: `${pLabel}${tankSuffix(t.secondary.tank_name)}`,
                 params,
                 spec: t.secondary.spec || '',
                 unit: t.secondary.unit || '',
@@ -1081,11 +1090,7 @@ function generateInjectorComparisonPdf(injectors = []) {
             status: t.primary.status,
           });
           if (t.secondary) {
-            // Compact suffix (not "{pLabel} — {tankName}") — a long tank name
-            // combined with the step name doesn't fit the Test Step column and
-            // truncates to an awkward trailing "—…".
-            const sLabel = `${pLabel} (2)`;
-            m.set(rowKey(sLabel + '|2'), {
+            m.set(rowKey(pLabel + '|2'), {
               value: t.secondary.average || '',
               status: t.secondary.status,
             });
@@ -1163,7 +1168,7 @@ function generateInjectorComparisonPdf(injectors = []) {
       // Step-name font: fixed size, vertically centered beside its 3-line
       // parameter stack (a size auto-scaled to match the block's height read as
       // too large).
-      const stepNameFont = 10;
+      const stepNameFont = 9;
       // ── Dynamic measured-value font scaling ───────────────────────────────
       // The measured flow value must stay readable but never overflow its
       // column. Scale the font to the AVAILABLE COLUMN WIDTH (fewer injectors =
@@ -1266,7 +1271,9 @@ function generateInjectorComparisonPdf(injectors = []) {
           const targetLine = specMatch[1];
           const rangeLine = `+/- ${specMatch[2]}`;
           const hasUnit = !!unitStr;
-          const gap = 1.5;
+          // No extra gap beyond each line's own font size — adding one made
+          // the Target/Units/Range block read as too loosely spaced.
+          const gap = 0;
           const blockH = specValFont * 2 + (hasUnit ? specUnitFont + gap * 2 : gap);
           let sy = y + (rowH - blockH) / 2 - 0.5;
           doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
