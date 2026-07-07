@@ -37,13 +37,14 @@ function fmtDateMDY(isoDate) {
   return m ? `${m[2]}/${m[3]}/${m[1]}` : String(isoDate || '');
 }
 
-// Test-step row label suffix derived from a tank's own code: "D" (the
-// default/delivery tank) shows no suffix, any other code (e.g. "R" for the
-// return/secondary tank) is appended in brackets — e.g. "iVM.01" vs
-// "iVM.01 [R]". Applies uniformly to every tank, not just secondaries.
+// Test-step row label suffix — ONLY the "R" (return) tank gets one, e.g.
+// "iVM.01" vs "iVM.01 [R]"; every other code (D, RES, IND, ...) shows no
+// suffix. The bench's own tank_name values already arrive bracketed (e.g.
+// "[R]", "[D]"), so strip any existing brackets before comparing/formatting
+// to avoid doubling them up into "[[R]]".
 function tankSuffix(tankName) {
-  const code = String(tankName || '').trim().toUpperCase();
-  if (!code || code === 'D') return '';
+  const code = String(tankName || '').replace(/[[\]]/g, '').trim().toUpperCase();
+  if (code !== 'R') return '';
   return ` [${code}]`;
 }
 
@@ -1147,8 +1148,8 @@ function generateInjectorComparisonPdf(injectors = []) {
       // ── Row height + per-row font sizes ───────────────────────────────────
       // These depend only on how much vertical space is available and how
       // many rows there are — NOT on column widths — so they're computed
-      // before the column geometry below, which needs specValFont/
-      // specUnitFont to size the Spec column to fit its content.
+      // before the column geometry below, which needs specValFont to size
+      // the Spec column to fit its content.
       const tableTop = top + bannerH + 10;
       const n = Math.max(list.length, 1);
       const headerRowH = 22;
@@ -1169,7 +1170,6 @@ function generateInjectorComparisonPdf(injectors = []) {
       // too large).
       const stepNameFont = 9;
       const specValFont = nameFont;
-      const specUnitFont = Math.max(5, subFont - 0.3);
 
       // ── Column geometry ───────────────────────────────────────────────────
       // Fixed columns: Test Step (multi-line) + Spec (sized to fit its
@@ -1180,21 +1180,17 @@ function generateInjectorComparisonPdf(injectors = []) {
       let stepW = Math.max(120, Math.min(168, usableW * 0.17));
 
       // Spec column width fits its content: the "SPEC" header plus the
-      // widest Target/Range/Units string across every row, at the font
-      // sizes above.
+      // widest Target/Range string across every row, at the font sizes
+      // above. (Units is no longer shown here — it's already on its own
+      // line in Test Step.)
       doc.font('Helvetica-Bold').fontSize(8);
       let specContentW = doc.widthOfString('SPEC');
       rowOrder.forEach((key) => {
         const parsed = parseSpecRow(rowMap.get(key));
+        doc.font('Helvetica-Bold').fontSize(specValFont);
         if (parsed.hasMatch) {
-          doc.font('Helvetica-Bold').fontSize(specValFont);
           specContentW = Math.max(specContentW, doc.widthOfString(parsed.targetLine), doc.widthOfString(parsed.rangeLine));
-          if (parsed.unitStr) {
-            doc.font('Helvetica').fontSize(specUnitFont);
-            specContentW = Math.max(specContentW, doc.widthOfString(parsed.unitStr));
-          }
         } else if (parsed.fallbackText) {
-          doc.font('Helvetica-Bold').fontSize(specValFont);
           specContentW = Math.max(specContentW, doc.widthOfString(parsed.fallbackText));
         }
       });
@@ -1293,25 +1289,17 @@ function generateInjectorComparisonPdf(injectors = []) {
           py += paramLineH;
         });
 
-        // ── Column 2: Spec — Target, Units, Range, all left-justified ─────
+        // ── Column 2: Spec — Target, Range, all left-justified ────────────
         const parsed = parseSpecRow(row);
         const specTextX = col2X + 6;
         const specTextW = specW - 10;
         if (parsed.hasMatch) {
-          const hasUnit = !!parsed.unitStr;
-          // No extra gap beyond each line's own font size — adding one made
-          // the Target/Units/Range block read as too loosely spaced.
           const gap = 0;
-          const blockH = specValFont * 2 + (hasUnit ? specUnitFont + gap * 2 : gap);
+          const blockH = specValFont * 2 + gap;
           let sy = y + (rowH - blockH) / 2 - 0.5;
           doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
           doc.text(parsed.targetLine, specTextX, sy, { width: specTextW, align: 'left', height: specValFont + 2, ellipsis: true });
           sy += specValFont + gap;
-          if (hasUnit) {
-            doc.fontSize(specUnitFont).font('Helvetica').fillColor(LGRAY);
-            doc.text(parsed.unitStr, specTextX, sy, { width: specTextW, align: 'left', height: specUnitFont + 2, ellipsis: true });
-            sy += specUnitFont + gap;
-          }
           doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
           doc.text(parsed.rangeLine, specTextX, sy, { width: specTextW, align: 'left', height: specValFont + 2, ellipsis: true });
         } else if (parsed.fallbackText) {
