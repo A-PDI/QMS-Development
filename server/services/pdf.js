@@ -47,6 +47,25 @@ function tankSuffix(tankName) {
   return ` [${code}]`;
 }
 
+// Splits a row's raw spec text ("8.5 +/- 4.5 mm3/STRK") into its Target and
+// Range parts (the trailing unit is stripped first, since it's shown on its
+// own line). Falls back to the raw text combined with its unit when the spec
+// isn't a simple "target +/- tolerance" (e.g. a single limit with no range).
+function parseSpecRow(row) {
+  const rawSpec = (row.spec || '').trim();
+  const unitStr = (row.unit || '').trim();
+  let specCore = rawSpec;
+  if (unitStr && rawSpec.toLowerCase().endsWith(unitStr.toLowerCase())) {
+    specCore = rawSpec.slice(0, rawSpec.length - unitStr.length).trim();
+  }
+  const specMatch = specCore.match(/^([+-]?[\d.]+)\s*(?:\+\/-|±)\s*([+-]?[\d.]+)$/);
+  if (specMatch) {
+    return { hasMatch: true, targetLine: specMatch[1], rangeLine: `+/- ${specMatch[2]}`, unitStr };
+  }
+  const fallbackText = specCore ? (unitStr ? `${specCore} ${unitStr}` : specCore) : unitStr;
+  return { hasMatch: false, fallbackText, unitStr: '' };
+}
+
 // Normalize a disposition value to its UPPERCASE code so PASS/FAIL colour +
 // label consistently regardless of how it was stored (e.g. legacy 'fail').
 function normalizeDisp(value) {
@@ -1125,17 +1144,62 @@ function generateInjectorComparisonPdf(injectors = []) {
       doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
       doc.text(subtitle, titleX, top + 30, { width: titleW, align: 'center', lineBreak: false });
 
-      // ── Column geometry ───────────────────────────────────────────────────
-      // Fixed columns: Test Step (multi-line) + Specification (narrow). The
-      // remaining width is split evenly across the injector columns.
+      // ── Row height + per-row font sizes ───────────────────────────────────
+      // These depend only on how much vertical space is available and how
+      // many rows there are — NOT on column widths — so they're computed
+      // before the column geometry below, which needs specValFont/
+      // specUnitFont to size the Spec column to fit its content.
       const tableTop = top + bannerH + 10;
       const n = Math.max(list.length, 1);
-      // Test Step is the widest fixed column (holds Step Name + Pressure/Pulse/
-      // Strk lines) but is kept NARROW to free horizontal space for the injector
-      // value columns. Specification sits beside it with a distinct value/unit
-      // treatment.
+      const headerRowH = 22;
+      const resultRowH = 20; // Pass/Fail summary row at the bottom
+      const availH = pageH - LM - tableTop - headerRowH - resultRowH - 6;
+      const dataRowCount = rowOrder.length || 1;
+      let rowH = Math.floor(availH / dataRowCount);
+      rowH = Math.max(30, Math.min(rowH, 44)); // room for the 4-line parameter stack
+      // If min row height overflows the page, fall back to the largest that fits.
+      if (rowH * dataRowCount > availH) rowH = Math.max(24, Math.floor(availH / dataRowCount));
+      const nameFont = rowH >= 38 ? 8 : (rowH >= 30 ? 7 : 6.2);
+      const subFont = Math.max(5.2, nameFont - 1.6);
+      const paramFont = subFont;
+      const paramLineH = Math.min((rowH - 4) / 4, paramFont + 2.5);
+      const paramBlockH = paramLineH * 4;
+      // Step-name font: fixed size, vertically centered beside its 4-line
+      // parameter stack (a size auto-scaled to match the block's height read as
+      // too large).
+      const stepNameFont = 9;
+      const specValFont = nameFont;
+      const specUnitFont = Math.max(5, subFont - 0.3);
+
+      // ── Column geometry ───────────────────────────────────────────────────
+      // Fixed columns: Test Step (multi-line) + Spec (sized to fit its
+      // content). The remaining width is split evenly across the injector
+      // columns. Test Step is the widest fixed column (holds Step Name +
+      // Pressure/Pulse/Strk/Units lines) but is kept NARROW to free
+      // horizontal space for the injector value columns.
       let stepW = Math.max(120, Math.min(168, usableW * 0.17));
-      let specW = Math.max(78, Math.min(104, usableW * 0.13));
+
+      // Spec column width fits its content: the "SPEC" header plus the
+      // widest Target/Range/Units string across every row, at the font
+      // sizes above.
+      doc.font('Helvetica-Bold').fontSize(8);
+      let specContentW = doc.widthOfString('SPEC');
+      rowOrder.forEach((key) => {
+        const parsed = parseSpecRow(rowMap.get(key));
+        if (parsed.hasMatch) {
+          doc.font('Helvetica-Bold').fontSize(specValFont);
+          specContentW = Math.max(specContentW, doc.widthOfString(parsed.targetLine), doc.widthOfString(parsed.rangeLine));
+          if (parsed.unitStr) {
+            doc.font('Helvetica').fontSize(specUnitFont);
+            specContentW = Math.max(specContentW, doc.widthOfString(parsed.unitStr));
+          }
+        } else if (parsed.fallbackText) {
+          doc.font('Helvetica-Bold').fontSize(specValFont);
+          specContentW = Math.max(specContentW, doc.widthOfString(parsed.fallbackText));
+        }
+      });
+      let specW = Math.min(usableW * 0.22, specContentW + 16);
+
       const MIN_INJ_COL = 44;
       let injColW = (usableW - stepW - specW) / n;
       if (injColW < MIN_INJ_COL) {
@@ -1150,25 +1214,6 @@ function generateInjectorComparisonPdf(injectors = []) {
       const col2X = LM + stepW;
       const injStartX = LM + stepW + specW;
 
-      // The Test Step cell needs room for 3 stacked parameter lines beside the
-      // step name; reserve a taller minimum row height so it isn't cramped.
-      const headerRowH = 22;
-      const resultRowH = 20; // Pass/Fail summary row at the bottom
-      const availH = pageH - LM - tableTop - headerRowH - resultRowH - 6;
-      const dataRowCount = rowOrder.length || 1;
-      let rowH = Math.floor(availH / dataRowCount);
-      rowH = Math.max(30, Math.min(rowH, 44)); // room for the 3-line parameter stack
-      // If min row height overflows the page, fall back to the largest that fits.
-      if (rowH * dataRowCount > availH) rowH = Math.max(24, Math.floor(availH / dataRowCount));
-      const nameFont = rowH >= 38 ? 8 : (rowH >= 30 ? 7 : 6.2);
-      const subFont = Math.max(5.2, nameFont - 1.6);
-      const paramFont = subFont;
-      const paramLineH = Math.min((rowH - 4) / 3, paramFont + 2.5);
-      const paramBlockH = paramLineH * 3;
-      // Step-name font: fixed size, vertically centered beside its 3-line
-      // parameter stack (a size auto-scaled to match the block's height read as
-      // too large).
-      const stepNameFont = 9;
       // ── Dynamic measured-value font scaling ───────────────────────────────
       // The measured flow value must stay readable but never overflow its
       // column. Scale the font to the AVAILABLE COLUMN WIDTH (fewer injectors =
@@ -1194,7 +1239,7 @@ function generateInjectorComparisonPdf(injectors = []) {
 
       doc.fontSize(8).font('Helvetica-Bold').fillColor(WHITE);
       doc.text('TEST STEP', col1X + 4, y + 7, { width: stepW - 8, height: headerRowH - 6, lineBreak: false });
-      doc.text('SPECIFICATION', col2X + 3, y + 7, { width: specW - 6, height: headerRowH - 6, align: 'center', lineBreak: false });
+      doc.text('SPEC', col2X + 6, y + 7, { width: specW - 10, height: headerRowH - 6, lineBreak: false });
 
       // Header column separators
       doc.strokeColor('#3A4A6B').lineWidth(0.4).moveTo(col2X, y).lineTo(col2X, y + headerRowH).stroke();
@@ -1239,6 +1284,7 @@ function generateInjectorComparisonPdf(injectors = []) {
           `Pressure: ${p.rail_pressure || '—'}`,
           `Pulse: ${p.pulse_width || '—'}`,
           `Strk: ${p.strk || '—'}`,
+          `Units: ${row.unit || '—'}`,
         ];
         let py = y + (rowH - paramBlockH) / 2;
         paramLines.forEach((t) => {
@@ -1247,57 +1293,36 @@ function generateInjectorComparisonPdf(injectors = []) {
           py += paramLineH;
         });
 
-        // ── Column 2: Specification — Target on top, Range on bottom (same
-        // font/size/weight/justification), with the smaller Units line
-        // centered between them ─────────────────────────────────────────
-        // `spec` (text_green) arrives as "target +/- tolerance unit" (e.g.
-        // "8.5 +/- 4.5 mm3/STRK"); strip the trailing unit (shown separately
-        // via `unit`), then split what's left into its two numeric parts.
-        const rawSpec = (row.spec || '').trim();
-        const unitStr = (row.unit || '').trim();
-        let specCore = rawSpec;
-        if (unitStr && rawSpec.toLowerCase().endsWith(unitStr.toLowerCase())) {
-          specCore = rawSpec.slice(0, rawSpec.length - unitStr.length).trim();
-        }
-        const specMatch = specCore.match(/^([+-]?[\d.]+)\s*(?:\+\/-|±)\s*([+-]?[\d.]+)$/);
-        const specValFont = nameFont;
-        const specUnitFont = Math.max(5, subFont - 0.3);
-        // Target and Range share one fixed left edge so their digits line up
-        // (independently centering strings of different lengths doesn't align
-        // them); Units stays centered, sitting visually between the two.
+        // ── Column 2: Spec — Target, Units, Range, all left-justified ─────
+        const parsed = parseSpecRow(row);
         const specTextX = col2X + 6;
         const specTextW = specW - 10;
-        if (specMatch) {
-          const targetLine = specMatch[1];
-          const rangeLine = `+/- ${specMatch[2]}`;
-          const hasUnit = !!unitStr;
+        if (parsed.hasMatch) {
+          const hasUnit = !!parsed.unitStr;
           // No extra gap beyond each line's own font size — adding one made
           // the Target/Units/Range block read as too loosely spaced.
           const gap = 0;
           const blockH = specValFont * 2 + (hasUnit ? specUnitFont + gap * 2 : gap);
           let sy = y + (rowH - blockH) / 2 - 0.5;
           doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
-          doc.text(targetLine, specTextX, sy, { width: specTextW, align: 'left', height: specValFont + 2, ellipsis: true });
+          doc.text(parsed.targetLine, specTextX, sy, { width: specTextW, align: 'left', height: specValFont + 2, ellipsis: true });
           sy += specValFont + gap;
           if (hasUnit) {
             doc.fontSize(specUnitFont).font('Helvetica').fillColor(LGRAY);
-            doc.text(unitStr, col2X + 2, sy, { width: specW - 4, align: 'center', height: specUnitFont + 2, ellipsis: true });
+            doc.text(parsed.unitStr, specTextX, sy, { width: specTextW, align: 'left', height: specUnitFont + 2, ellipsis: true });
             sy += specUnitFont + gap;
           }
           doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
-          doc.text(rangeLine, specTextX, sy, { width: specTextW, align: 'left', height: specValFont + 2, ellipsis: true });
-        } else if (specCore || unitStr) {
-          // Fallback for a spec that isn't a simple "target +/- tolerance" (e.g.
-          // a single limit with no range) — show the value with its unit.
-          const text = specCore ? (unitStr ? `${specCore} ${unitStr}` : specCore) : unitStr;
+          doc.text(parsed.rangeLine, specTextX, sy, { width: specTextW, align: 'left', height: specValFont + 2, ellipsis: true });
+        } else if (parsed.fallbackText) {
           doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
-          doc.text(text, specTextX, y + (rowH - specValFont) / 2 - 1, {
+          doc.text(parsed.fallbackText, specTextX, y + (rowH - specValFont) / 2 - 1, {
             width: specTextW, align: 'left', height: specValFont + 2, ellipsis: true,
           });
         } else {
           doc.fontSize(nameFont).font('Helvetica').fillColor(DGRAY);
-          doc.text('—', col2X + 2, y + (rowH - nameFont) / 2 - 1, {
-            width: specW - 4, align: 'center', lineBreak: false,
+          doc.text('—', specTextX, y + (rowH - nameFont) / 2 - 1, {
+            width: specTextW, align: 'left', lineBreak: false,
           });
         }
 
