@@ -1088,7 +1088,7 @@ function generateInjectorComparisonPdf(injectors = []) {
         return m;
       });
 
-      // ── Header banner (logo + numeric part number + tested date) ──────────
+      // ── Header banner (logo + title, then part number + tested date) ──────
       const bannerH = 54;
       const top = LM;
       doc.rect(LM, top, usableW, bannerH).fillColor(NAVY).fill();
@@ -1104,9 +1104,15 @@ function generateInjectorComparisonPdf(injectors = []) {
         : '';
       const titleX = LM + 112;
       const titleW = usableW - 122;
-      const title = [partNo, testedText].filter(Boolean).join('   |   ');
-      doc.fontSize(16).font('Helvetica-Bold').fillColor(WHITE);
-      doc.text(title, titleX, top + (bannerH - 16) / 2, { width: titleW, align: 'center', lineBreak: false });
+
+      // Line 1: report title.
+      doc.fontSize(14).font('Helvetica-Bold').fillColor(WHITE);
+      doc.text('INJECTOR TEST REPORT', titleX, top + 9, { width: titleW, align: 'center', lineBreak: false });
+
+      // Line 2: Part Number | Test Date — visually distinct (smaller, lighter) subtitle.
+      const subtitle = [partNo, testedText].filter(Boolean).join('   |   ');
+      doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
+      doc.text(subtitle, titleX, top + 30, { width: titleW, align: 'center', lineBreak: false });
 
       // ── Column geometry ───────────────────────────────────────────────────
       // Fixed columns: Test Step (multi-line) + Specification (narrow). The
@@ -1145,12 +1151,13 @@ function generateInjectorComparisonPdf(injectors = []) {
       if (rowH * dataRowCount > availH) rowH = Math.max(24, Math.floor(availH / dataRowCount));
       const nameFont = rowH >= 38 ? 8 : (rowH >= 30 ? 7 : 6.2);
       const subFont = Math.max(5.2, nameFont - 1.6);
-      // Step-name font: sized so a single line visually matches the height of
-      // the 3 stacked parameter lines beside it (Pressure/Pulse/Strk).
       const paramFont = subFont;
       const paramLineH = Math.min((rowH - 4) / 3, paramFont + 2.5);
       const paramBlockH = paramLineH * 3;
-      const stepNameFont = Math.max(8, Math.min(16, paramBlockH / 1.15));
+      // Step-name font: fixed size, vertically centered beside its 3-line
+      // parameter stack (a size auto-scaled to match the block's height read as
+      // too large).
+      const stepNameFont = 10;
       // ── Dynamic measured-value font scaling ───────────────────────────────
       // The measured flow value must stay readable but never overflow its
       // column. Scale the font to the AVAILABLE COLUMN WIDTH (fewer injectors =
@@ -1211,8 +1218,10 @@ function generateInjectorComparisonPdf(injectors = []) {
         const paramsX = col1X + 4 + nameW + nameParamsGap;
 
         doc.fontSize(stepNameFont).font('Helvetica-Bold').fillColor(BLACK);
+        // `height` must cover exactly one line — pdfkit only truncates with an
+        // ellipsis once a 2nd line would overflow it; a taller box just wraps.
         doc.text(row.label, col1X + 4, y + (rowH - stepNameFont) / 2 - 1, {
-          width: nameW, height: rowH - 4, lineBreak: false, ellipsis: true,
+          width: nameW, height: stepNameFont + 2, ellipsis: true,
         });
 
         const paramLines = [
@@ -1227,8 +1236,9 @@ function generateInjectorComparisonPdf(injectors = []) {
           py += paramLineH;
         });
 
-        // ── Column 2: Specification — Target Value + Units on line 1, the
-        // +/- Range on line 2, both in the same font/size/weight ────────────
+        // ── Column 2: Specification — Target on top, Range on bottom (same
+        // font/size/weight/justification), with the smaller Units line
+        // centered between them ─────────────────────────────────────────
         // `spec` (text_green) arrives as "target +/- tolerance unit" (e.g.
         // "8.5 +/- 4.5 mm3/STRK"); strip the trailing unit (shown separately
         // via `unit`), then split what's left into its two numeric parts.
@@ -1240,14 +1250,23 @@ function generateInjectorComparisonPdf(injectors = []) {
         }
         const specMatch = specCore.match(/^([+-]?[\d.]+)\s*(?:\+\/-|±)\s*([+-]?[\d.]+)$/);
         const specValFont = nameFont;
+        const specUnitFont = Math.max(5, subFont - 0.3);
         if (specMatch) {
-          const targetLine = unitStr ? `${specMatch[1]} ${unitStr}` : specMatch[1];
+          const targetLine = specMatch[1];
           const rangeLine = `+/- ${specMatch[2]}`;
-          const blockH = specValFont * 2 + 1.5;
+          const hasUnit = !!unitStr;
+          const gap = 1.5;
+          const blockH = specValFont * 2 + (hasUnit ? specUnitFont + gap * 2 : gap);
           let sy = y + (rowH - blockH) / 2 - 0.5;
           doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
           doc.text(targetLine, col2X + 2, sy, { width: specW - 4, align: 'center', lineBreak: false, ellipsis: true });
-          sy += specValFont + 1.5;
+          sy += specValFont + gap;
+          if (hasUnit) {
+            doc.fontSize(specUnitFont).font('Helvetica').fillColor(LGRAY);
+            doc.text(unitStr, col2X + 2, sy, { width: specW - 4, align: 'center', lineBreak: false, ellipsis: true });
+            sy += specUnitFont + gap;
+          }
+          doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
           doc.text(rangeLine, col2X + 2, sy, { width: specW - 4, align: 'center', lineBreak: false, ellipsis: true });
         } else if (specCore || unitStr) {
           // Fallback for a spec that isn't a simple "target +/- tolerance" (e.g.
