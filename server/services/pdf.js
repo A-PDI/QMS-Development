@@ -1052,7 +1052,10 @@ function generateInjectorComparisonPdf(injectors = []) {
             rowOrder.push(pKey);
           }
           if (t.secondary) {
-            const sLabel = `${pLabel} — ${t.secondary.tank_name || 'Secondary'}`;
+            // Compact suffix (not "{pLabel} — {tankName}") — a long tank name
+            // combined with the step name doesn't fit the Test Step column and
+            // truncates to an awkward trailing "—…".
+            const sLabel = `${pLabel} (2)`;
             const sKey = rowKey(sLabel + '|2');
             if (!rowMap.has(sKey)) {
               rowMap.set(sKey, {
@@ -1078,7 +1081,10 @@ function generateInjectorComparisonPdf(injectors = []) {
             status: t.primary.status,
           });
           if (t.secondary) {
-            const sLabel = `${pLabel} — ${t.secondary.tank_name || 'Secondary'}`;
+            // Compact suffix (not "{pLabel} — {tankName}") — a long tank name
+            // combined with the step name doesn't fit the Test Step column and
+            // truncates to an awkward trailing "—…".
+            const sLabel = `${pLabel} (2)`;
             m.set(rowKey(sLabel + '|2'), {
               value: t.secondary.average || '',
               status: t.secondary.status,
@@ -1251,6 +1257,11 @@ function generateInjectorComparisonPdf(injectors = []) {
         const specMatch = specCore.match(/^([+-]?[\d.]+)\s*(?:\+\/-|±)\s*([+-]?[\d.]+)$/);
         const specValFont = nameFont;
         const specUnitFont = Math.max(5, subFont - 0.3);
+        // Target and Range share one fixed left edge so their digits line up
+        // (independently centering strings of different lengths doesn't align
+        // them); Units stays centered, sitting visually between the two.
+        const specTextX = col2X + 6;
+        const specTextW = specW - 10;
         if (specMatch) {
           const targetLine = specMatch[1];
           const rangeLine = `+/- ${specMatch[2]}`;
@@ -1259,22 +1270,22 @@ function generateInjectorComparisonPdf(injectors = []) {
           const blockH = specValFont * 2 + (hasUnit ? specUnitFont + gap * 2 : gap);
           let sy = y + (rowH - blockH) / 2 - 0.5;
           doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
-          doc.text(targetLine, col2X + 2, sy, { width: specW - 4, align: 'center', lineBreak: false, ellipsis: true });
+          doc.text(targetLine, specTextX, sy, { width: specTextW, align: 'left', height: specValFont + 2, ellipsis: true });
           sy += specValFont + gap;
           if (hasUnit) {
             doc.fontSize(specUnitFont).font('Helvetica').fillColor(LGRAY);
-            doc.text(unitStr, col2X + 2, sy, { width: specW - 4, align: 'center', lineBreak: false, ellipsis: true });
+            doc.text(unitStr, col2X + 2, sy, { width: specW - 4, align: 'center', height: specUnitFont + 2, ellipsis: true });
             sy += specUnitFont + gap;
           }
           doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
-          doc.text(rangeLine, col2X + 2, sy, { width: specW - 4, align: 'center', lineBreak: false, ellipsis: true });
+          doc.text(rangeLine, specTextX, sy, { width: specTextW, align: 'left', height: specValFont + 2, ellipsis: true });
         } else if (specCore || unitStr) {
           // Fallback for a spec that isn't a simple "target +/- tolerance" (e.g.
           // a single limit with no range) — show the value with its unit.
           const text = specCore ? (unitStr ? `${specCore} ${unitStr}` : specCore) : unitStr;
           doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
-          doc.text(text, col2X + 2, y + (rowH - specValFont) / 2 - 1, {
-            width: specW - 4, align: 'center', lineBreak: false, ellipsis: true,
+          doc.text(text, specTextX, y + (rowH - specValFont) / 2 - 1, {
+            width: specTextW, align: 'left', height: specValFont + 2, ellipsis: true,
           });
         } else {
           doc.fontSize(nameFont).font('Helvetica').fillColor(DGRAY);
