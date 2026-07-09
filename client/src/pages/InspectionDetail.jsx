@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Edit, Paperclip, Loader2, X, Printer, Mail, AlertTriangle, Bell, CheckSquare, UserPlus, Trash2 } from 'lucide-react'
+import { Edit, Paperclip, Loader2, X, Printer, Mail, AlertTriangle, Bell, CheckSquare, UserPlus, Trash2, Ruler } from 'lucide-react'
 import { useInspection, useAssignInspection, useDeleteInspection } from '../hooks/useInspections'
 import { useTemplate } from '../hooks/useTemplates'
 import { useAttachments, useUploadAttachment, useDeleteAttachment } from '../hooks/useAttachments'
@@ -19,8 +19,9 @@ import SectionCamshaftBore from '../components/inspection/SectionCamshaftBore'
 import SectionFireRingProtrusion from '../components/inspection/SectionFireRingProtrusion'
 import SectionValveRecession from '../components/inspection/SectionValveRecession'
 import SectionVacuumTest from '../components/inspection/SectionVacuumTest'
+import AddFireRingModal from '../components/inspection/AddFireRingModal'
 import FileUploadZone from '../components/FileUploadZone'
-import { formatDate, formatDateTime, formatFileSize } from '../lib/utils'
+import { formatDate, formatDateTime, formatFileSize, canAddFireRing } from '../lib/utils'
 import { HEADER_FIELD_LABELS, dispositionColor, dispositionLabel } from '../lib/constants'
 import { getItemDisposition } from '../lib/itemCompletion'
 
@@ -53,6 +54,7 @@ export default function InspectionDetail() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [showReviewModal, setShowReviewModal] = useState(false)
+  const [showFireRingModal, setShowFireRingModal] = useState(false)
   const [reviewNotes, setReviewNotes] = useState('')
   const [reviewSubmitting, setReviewSubmitting] = useState(false)
   const qc = useQueryClient()
@@ -206,6 +208,14 @@ export default function InspectionDetail() {
 
   return (
     <div>
+      {/* Add Fire Ring modal */}
+      {showFireRingModal && (
+        <AddFireRingModal
+          inspectionId={id}
+          onClose={() => setShowFireRingModal(false)}
+          onSaved={() => setShowFireRingModal(false)}
+        />
+      )}
       {/* Delete confirmation modal */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -378,6 +388,16 @@ export default function InspectionDetail() {
             <Mail size={14} />
             <span className="hidden sm:inline">Email</span>
           </button>
+          {canAddFireRing(inspection, template) && (
+            <button
+              onClick={() => setShowFireRingModal(true)}
+              title="Add Fire Ring"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-pdi-teal text-white rounded-lg hover:bg-teal-600 min-h-[40px] flex-shrink-0"
+            >
+              <Ruler size={14} />
+              <span className="hidden sm:inline">Add Fire Ring</span>
+            </button>
+          )}
           {isAdminRole && inspection.status === 'pending_review' && (
             <button
               onClick={() => setShowReviewModal(true)}

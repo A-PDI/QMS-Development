@@ -95,3 +95,84 @@ export function mergeSectionData(saved, fresh) {
   }
   return merged
 }
+
+// ─── Fire Ring (Fire Ring Protrusion) helpers ────────────────────────────────
+// These mirror the eligibility logic in server/routes/dashboard.js. The "Add
+// Fire Ring" action/KPI applies ONLY to complete cylinder-head inspections
+// whose Fire Ring section has no per-cylinder values entered yet.
+
+/** Parse an inspection's section_data (string or object) into an object. */
+export function getSectionData(inspection) {
+  if (!inspection) return {}
+  const sd = inspection.section_data
+  if (typeof sd === 'string') { try { return JSON.parse(sd || '{}') } catch { return {} } }
+  return sd || {}
+}
+
+/** Effective sections for an inspection: admin overrides win over the template. */
+export function getEffectiveSections(template, sectionData) {
+  if (sectionData && sectionData.__admin_sections && typeof sectionData.__admin_sections === 'object') {
+    return sectionData.__admin_sections
+  }
+  if (!template) return {}
+  return typeof template.sections === 'string'
+    ? JSON.parse(template.sections || '{}')
+    : (template.sections || {})
+}
+
+/** The per-item answer list (new __items format or a single legacy item). */
+export function getSectionItems(sectionData) {
+  if (Array.isArray(sectionData?.__items) && sectionData.__items.length > 0) {
+    return sectionData.__items
+  }
+  const legacy = {}
+  for (const k of Object.keys(sectionData || {})) {
+    if (k.startsWith('__')) continue
+    legacy[k] = sectionData[k]
+  }
+  return [legacy]
+}
+
+/** Section key of the Fire Ring (groove_specs) section, or null if none. */
+export function findFireRingKey(sections) {
+  for (const [key, section] of Object.entries(sections || {})) {
+    if (section && section.section_type === 'groove_specs') return key
+  }
+  return null
+}
+
+/** IDs of the data-entry measurement rows (e.g. Wire Protrusion) in a section. */
+export function fireRingEntryItemIds(section) {
+  return (section?.items || [])
+    .filter(it => it.entry === true || (it.entry === undefined && /wire protrusion/i.test(it.measurement || '')))
+    .map(it => it.id)
+}
+
+/** True if any entry-row cylinder value has already been recorded. */
+export function fireRingHasValues(items, grooveKey, section) {
+  const ids = fireRingEntryItemIds(section)
+  for (const item of items) {
+    const data = item?.[grooveKey]
+    if (!data || !Array.isArray(data.measurements)) continue
+    for (const m of data.measurements) {
+      if (!ids.includes(m.id)) continue
+      if (Array.isArray(m.cylinders) && m.cylinders.some(c => String(c ?? '').trim() !== '')) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Whether the "Add Fire Ring" action applies to this inspection: a complete
+ * cylinder-head inspection whose Fire Ring section exists but has no values.
+ */
+export function canAddFireRing(inspection, template) {
+  if (!inspection || !template) return false
+  if (inspection.status !== 'complete') return false
+  if (inspection.component_type !== 'cylinder_head') return false
+  const sd = getSectionData(inspection)
+  const sections = getEffectiveSections(template, sd)
+  const grooveKey = findFireRingKey(sections)
+  if (!grooveKey) return false
+  return !fireRingHasValues(getSectionItems(sd), grooveKey, sections[grooveKey])
+}

@@ -2,13 +2,14 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
-import { ClipboardList, CheckSquare, AlertTriangle, TrendingUp, PlusCircle, Bell, Clock, Zap } from 'lucide-react'
+import { ClipboardList, CheckSquare, AlertTriangle, TrendingUp, PlusCircle, Bell, Clock, Zap, Ruler } from 'lucide-react'
 import api from '../lib/api'
-import { useInspections, useInspectionAlerts } from '../hooks/useInspections'
+import { useInspections, useInspectionAlerts, useFireRingEligible } from '../hooks/useInspections'
 import { useNCRs } from '../hooks/useNCRs'
 import { useQualityAlertCount } from '../hooks/useQualityAlerts'
 import { getUser } from '../lib/auth'
 import StatusBadge from '../components/StatusBadge'
+import AddFireRingModal from '../components/inspection/AddFireRingModal'
 import { formatDate } from '../lib/utils'
 import { COMPONENT_TYPE_LABELS, NCR_SEVERITY_COLORS, NCR_SEVERITY_LABELS, NCR_STATUS_COLORS, NCR_STATUS_LABELS } from '../lib/constants'
 
@@ -23,6 +24,8 @@ const ADMIN_METRIC_CONFIGS = [
   { key: 'past_due',       label: 'Past Due',        icon: Clock, bg: 'bg-red-700',    fg: 'text-white', filter: 'past_due',       filterLabel: 'Past Due Inspections' },
   { key: 'short_duration', label: 'Short Duration',  icon: Zap,   bg: 'bg-orange-500', fg: 'text-white', filter: 'short_duration', filterLabel: 'Short Duration Completions' },
 ]
+
+const FIRE_RING_CONFIG = { key: 'fire_ring', label: 'Add Fire Ring', icon: Ruler, bg: 'bg-pdi-teal', fg: 'text-white', filter: 'fire_ring', filterLabel: 'Add Fire Ring' }
 
 const COMPONENT_COLORS = ['#1D2B4F', '#1A8C80', '#D4943A', '#C0392B', '#2A3F72', '#7C3AED']
 
@@ -77,6 +80,7 @@ export default function Dashboard() {
   const user = getUser()
   const [activeFilter, setActiveFilter] = useState(null)
   const [chartPeriodIdx, setChartPeriodIdx] = useState(1)
+  const [fireRingModalId, setFireRingModalId] = useState(null)
 
   const isAdminRole = user && (user.role === 'admin' || user.role === 'qc_manager')
 
@@ -87,6 +91,7 @@ export default function Dashboard() {
 
   const { data: qualityAlertCount = 0 } = useQualityAlertCount()
   const { data: inspectionAlerts = {} } = useInspectionAlerts()
+  const { data: fireRingEligible = [] } = useFireRingEligible()
 
   const chartPeriod = PERIOD_OPTIONS[chartPeriodIdx]
   const { data: chartRaw } = useQuery({
@@ -108,11 +113,12 @@ export default function Dashboard() {
   const chartData = Object.values(periodMap)
 
   // Determine which panel to show based on active filter
-  const showInspections = activeFilter !== null && !['ncrs', 'past_due', 'short_duration'].includes(activeFilter)
+  const showInspections = activeFilter !== null && !['ncrs', 'past_due', 'short_duration', 'fire_ring'].includes(activeFilter)
   const showAllInspections = activeFilter === 'all'
   const showNcrs = activeFilter === 'ncrs'
   const showPastDue = activeFilter === 'past_due'
   const showShortDuration = activeFilter === 'short_duration'
+  const showFireRing = activeFilter === 'fire_ring'
 
   const inspectionFilter = showInspections
     ? (showAllInspections ? { limit: 50, page: 1 } : { status: activeFilter, limit: 50, page: 1 })
@@ -136,7 +142,7 @@ export default function Dashboard() {
     setActiveFilter(prev => prev === filter ? null : filter)
   }
 
-  const allConfigs = [...METRIC_CONFIGS, ...(isAdminRole ? ADMIN_METRIC_CONFIGS : [])]
+  const allConfigs = [...METRIC_CONFIGS, ...(isAdminRole ? ADMIN_METRIC_CONFIGS : []), FIRE_RING_CONFIG]
   const activeConfig = allConfigs.find(m => m.filter === activeFilter)
 
   return (
@@ -197,7 +203,7 @@ export default function Dashboard() {
         )}
 
         {/* KPI Cards */}
-        <div className={`grid gap-3 sm:gap-4 ${isAdminRole ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-6' : 'grid-cols-2 lg:grid-cols-4'}`}>
+        <div className={`grid gap-3 sm:gap-4 ${isAdminRole ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-7' : 'grid-cols-2 lg:grid-cols-5'}`}>
           {METRIC_CONFIGS.map(({ key, label, icon, bg, fg, filter }) => (
             <MetricCard key={key} label={label} value={stats?.[key]} icon={icon} bg={bg} fg={fg}
               isActive={activeFilter === filter}
@@ -212,6 +218,11 @@ export default function Dashboard() {
               onClick={() => handleCardClick(filter)}
             />
           ))}
+          <MetricCard key={FIRE_RING_CONFIG.key} label={FIRE_RING_CONFIG.label} value={fireRingEligible.length}
+            icon={FIRE_RING_CONFIG.icon} bg={FIRE_RING_CONFIG.bg} fg={FIRE_RING_CONFIG.fg}
+            isActive={activeFilter === FIRE_RING_CONFIG.filter}
+            onClick={() => handleCardClick(FIRE_RING_CONFIG.filter)}
+          />
         </div>
 
         {/* Recent Activity */}
@@ -510,7 +521,78 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Add Fire Ring filtered panel */}
+        {showFireRing && (
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-100 gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-1 h-5 bg-pdi-teal rounded-full flex-shrink-0" />
+                <h2 className="text-sm sm:text-base font-semibold text-gray-800 truncate">Add Fire Ring</h2>
+                <span className="text-xs text-gray-400 flex-shrink-0">({fireRingEligible.length})</span>
+              </div>
+              <span className="text-xs text-gray-400 flex-shrink-0 hidden sm:block">Click an inspection to add Fire Ring Protrusion measurements</span>
+            </div>
+            {fireRingEligible.length === 0 ? (
+              <div className="text-center text-gray-400 text-sm py-10">No inspections awaiting Fire Ring measurements</div>
+            ) : (
+              <>
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-100">
+                      <tr>
+                        {['Form No', 'Part Number', 'PO Number', 'Lot / Serial', 'Inspector', 'Completed'].map(h => (
+                          <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {fireRingEligible.map(insp => (
+                        <tr key={insp.id} onClick={() => setFireRingModalId(insp.id)} className="hover:bg-teal-50/40 cursor-pointer">
+                          <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.po_number || '—'}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.lot_serial_no || '—'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700">{insp.inspector_name || '—'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-500">{formatDate(insp.completed_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="md:hidden divide-y divide-gray-100">
+                  {fireRingEligible.map(insp => (
+                    <button key={insp.id} type="button" onClick={() => setFireRingModalId(insp.id)}
+                      className="w-full text-left px-4 py-3 hover:bg-teal-50/40 active:bg-teal-50 transition-colors min-h-[44px]"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</div>
+                          <div className="font-mono text-xs text-gray-500 mt-0.5 truncate">{insp.part_number || '—'}</div>
+                        </div>
+                        <div className="text-xs text-gray-400 flex-shrink-0">{formatDate(insp.completed_at)}</div>
+                      </div>
+                      <div className="mt-1.5 flex items-center gap-3 text-xs text-gray-500">
+                        <span className="truncate">{insp.inspector_name || '—'}</span>
+                        {insp.po_number && <span className="font-mono flex-shrink-0">PO {insp.po_number}</span>}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
       </div>
+
+      {/* Add Fire Ring modal */}
+      {fireRingModalId && (
+        <AddFireRingModal
+          inspectionId={fireRingModalId}
+          onClose={() => setFireRingModalId(null)}
+          onSaved={() => setFireRingModalId(null)}
+        />
+      )}
     </div>
   )
 }
