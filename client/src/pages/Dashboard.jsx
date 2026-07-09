@@ -21,11 +21,11 @@ const METRIC_CONFIGS = [
 ]
 
 const ADMIN_METRIC_CONFIGS = [
-  { key: 'past_due',       label: 'Past Due',        icon: Clock, bg: 'bg-red-700',    fg: 'text-white', filter: 'past_due',       filterLabel: 'Past Due Inspections' },
+  { key: 'past_due',       label: 'Past Due',        icon: Clock, bg: 'bg-purple-600', fg: 'text-white', filter: 'past_due',       filterLabel: 'Past Due Inspections' },
   { key: 'short_duration', label: 'Short Duration',  icon: Zap,   bg: 'bg-orange-500', fg: 'text-white', filter: 'short_duration', filterLabel: 'Short Duration Completions' },
 ]
 
-const FIRE_RING_CONFIG = { key: 'fire_ring', label: 'Add Fire Ring', icon: Ruler, bg: 'bg-pdi-teal', fg: 'text-white', filter: 'fire_ring', filterLabel: 'Add Fire Ring' }
+const FIRE_RING_CONFIG = { key: 'fire_ring', label: 'Add Fire Ring', icon: Ruler, bg: 'bg-blue-600', fg: 'text-white', filter: 'fire_ring', filterLabel: 'Add Fire Ring' }
 
 const COMPONENT_COLORS = ['#1D2B4F', '#1A8C80', '#D4943A', '#C0392B', '#2A3F72', '#7C3AED']
 
@@ -367,7 +367,7 @@ export default function Dashboard() {
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
             <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-100 gap-2">
               <div className="flex items-center gap-2 min-w-0">
-                <div className="w-1 h-5 bg-red-700 rounded-full flex-shrink-0" />
+                <div className="w-1 h-5 bg-purple-600 rounded-full flex-shrink-0" />
                 <h2 className="text-sm sm:text-base font-semibold text-gray-800 truncate">Past Due Inspections</h2>
                 <span className="text-xs text-gray-400 flex-shrink-0">({tablePastDue.length})</span>
               </div>
@@ -487,7 +487,7 @@ export default function Dashboard() {
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
             <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-100 gap-2">
               <div className="flex items-center gap-2 min-w-0">
-                <div className="w-1 h-5 bg-pdi-teal rounded-full flex-shrink-0" />
+                <div className="w-1 h-5 bg-blue-600 rounded-full flex-shrink-0" />
                 <h2 className="text-sm sm:text-base font-semibold text-gray-800 truncate">Add Fire Ring</h2>
                 <span className="text-xs text-gray-400 flex-shrink-0">({fireRingEligible.length})</span>
               </div>
@@ -508,7 +508,7 @@ export default function Dashboard() {
                     </thead>
                     <tbody className="divide-y divide-gray-50">
                       {fireRingEligible.map(insp => (
-                        <tr key={insp.id} onClick={() => setFireRingModalId(insp.id)} className="hover:bg-teal-50/40 cursor-pointer">
+                        <tr key={insp.id} onClick={() => setFireRingModalId(insp.id)} className="hover:bg-blue-50/50 cursor-pointer">
                           <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{insp.part_number || '—'}</td>
                           <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.lot_serial_no || '—'}</td>
                           <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.po_number || '—'}</td>
@@ -522,7 +522,7 @@ export default function Dashboard() {
                 <div className="md:hidden divide-y divide-gray-100">
                   {fireRingEligible.map(insp => (
                     <button key={insp.id} type="button" onClick={() => setFireRingModalId(insp.id)}
-                      className="w-full text-left px-4 py-3 hover:bg-teal-50/40 active:bg-teal-50 transition-colors min-h-[44px]"
+                      className="w-full text-left px-4 py-3 hover:bg-blue-50/50 active:bg-blue-50 transition-colors min-h-[44px]"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
