@@ -102,7 +102,8 @@ router.get('/alerts', (req, res, next) => {
     const today = new Date().toISOString().slice(0, 10);
 
     const past_due = db.all(
-      `SELECT i.id, i.form_no, i.part_number, i.due_date, u.name AS assigned_to_name
+      `SELECT i.id, i.form_no, i.part_number, i.lot_serial_no, i.component_type, i.due_date,
+              i.inspector_name, u.name AS assigned_to_name
        FROM inspections i
        LEFT JOIN users u ON i.assigned_to = u.id
        WHERE i.status NOT IN ('complete') AND i.due_date IS NOT NULL AND i.due_date < ?

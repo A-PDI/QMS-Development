@@ -225,43 +225,6 @@ export default function Dashboard() {
           />
         </div>
 
-        {/* Recent Activity */}
-        {stats?.recent_inspections && stats.recent_inspections.length > 0 && (
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-200 bg-gray-50 gap-2">
-              <div className="flex items-center gap-2">
-                <div className="w-1 h-5 bg-pdi-teal rounded-full flex-shrink-0" />
-                <h3 className="text-sm sm:text-base font-semibold text-gray-800">Recent Activity</h3>
-              </div>
-              <button onClick={() => navigate('/inspections')} className="text-xs text-pdi-navy hover:underline font-medium flex-shrink-0">View all →</button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    {['Part Number', 'Part Type', 'PO Number', 'Lot / Serial', 'Inspector', 'Status', 'Last Update'].map(h => (
-                      <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {stats.recent_inspections.map(insp => (
-                    <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-blue-50/50 cursor-pointer">
-                      <td className="px-4 py-2.5 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
-                      <td className="px-4 py-2.5 text-xs text-gray-700">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-gray-700">{insp.po_number || '—'}</td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-gray-700">{insp.lot_serial_no || '—'}</td>
-                      <td className="px-4 py-2.5 text-xs text-gray-700">{insp.inspector_name || '—'}</td>
-                      <td className="px-4 py-2.5"><StatusBadge status={insp.status} /></td>
-                      <td className="px-4 py-2.5 text-xs text-gray-500">{formatDate(insp.updated_at || insp.created_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
         {/* Filtered inspection table */}
         {showInspections && (
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
@@ -293,7 +256,6 @@ export default function Dashboard() {
                         <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-blue-50/50 cursor-pointer">
                           <td className="px-4 py-3">
                             <div className="font-medium text-gray-800">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</div>
-                            <div className="text-xs text-gray-400 font-mono mt-0.5">{insp.form_no}</div>
                           </td>
                           <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
                           <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.po_number || '—'}</td>
@@ -314,7 +276,6 @@ export default function Dashboard() {
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
                           <div className="font-medium text-gray-800 text-sm truncate">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</div>
-                          <div className="text-xs text-gray-400 font-mono mt-0.5 truncate">{insp.form_no}</div>
                         </div>
                         <div className="flex-shrink-0"><StatusBadge status={insp.status} /></div>
                       </div>
@@ -420,7 +381,7 @@ export default function Dashboard() {
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 border-b border-gray-100">
                       <tr>
-                        {['Form No', 'Part Number', 'Component', 'Inspector', 'Due Date', 'Status'].map(h => (
+                        {['Part Number', 'Lot / Serial', 'Component', 'Inspector', 'Due Date', 'Status'].map(h => (
                           <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
                         ))}
                       </tr>
@@ -428,8 +389,8 @@ export default function Dashboard() {
                     <tbody className="divide-y divide-gray-50">
                       {tablePastDue.map(insp => (
                         <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-red-50/40 cursor-pointer">
-                          <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
+                          <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{insp.part_number || '—'}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.lot_serial_no || '—'}</td>
                           <td className="px-4 py-3 text-xs text-gray-700">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</td>
                           <td className="px-4 py-3 text-xs text-gray-700">{insp.assigned_to_name || insp.inspector_name || '—'}</td>
                           <td className="px-4 py-3 text-xs text-red-600 font-semibold">{formatDate(insp.due_date)}</td>
@@ -446,8 +407,8 @@ export default function Dashboard() {
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
-                          <div className="font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</div>
-                          <div className="font-mono text-xs text-gray-500 mt-0.5 truncate">{insp.part_number || '—'}</div>
+                          <div className="font-mono text-xs font-bold text-pdi-navy">{insp.part_number || '—'}</div>
+                          <div className="font-mono text-xs text-gray-500 mt-0.5 truncate">{insp.lot_serial_no || '—'}</div>
                         </div>
                         <div className="text-xs text-red-600 font-semibold flex-shrink-0">{formatDate(insp.due_date)}</div>
                       </div>
@@ -540,7 +501,7 @@ export default function Dashboard() {
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 border-b border-gray-100">
                       <tr>
-                        {['Form No', 'Part Number', 'PO Number', 'Lot / Serial', 'Inspector', 'Completed'].map(h => (
+                        {['Part Number', 'Lot / Serial', 'PO Number', 'Inspector', 'Completed'].map(h => (
                           <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
                         ))}
                       </tr>
@@ -548,10 +509,9 @@ export default function Dashboard() {
                     <tbody className="divide-y divide-gray-50">
                       {fireRingEligible.map(insp => (
                         <tr key={insp.id} onClick={() => setFireRingModalId(insp.id)} className="hover:bg-teal-50/40 cursor-pointer">
-                          <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.po_number || '—'}</td>
+                          <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{insp.part_number || '—'}</td>
                           <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.lot_serial_no || '—'}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.po_number || '—'}</td>
                           <td className="px-4 py-3 text-sm text-gray-700">{insp.inspector_name || '—'}</td>
                           <td className="px-4 py-3 text-sm text-gray-500">{formatDate(insp.completed_at)}</td>
                         </tr>
@@ -566,8 +526,8 @@ export default function Dashboard() {
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
-                          <div className="font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</div>
-                          <div className="font-mono text-xs text-gray-500 mt-0.5 truncate">{insp.part_number || '—'}</div>
+                          <div className="font-mono text-xs font-bold text-pdi-navy">{insp.part_number || '—'}</div>
+                          <div className="font-mono text-xs text-gray-500 mt-0.5 truncate">{insp.lot_serial_no || '—'}</div>
                         </div>
                         <div className="text-xs text-gray-400 flex-shrink-0">{formatDate(insp.completed_at)}</div>
                       </div>
@@ -580,6 +540,43 @@ export default function Dashboard() {
                 </div>
               </>
             )}
+          </div>
+        )}
+
+        {/* Recent Activity */}
+        {stats?.recent_inspections && stats.recent_inspections.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-gray-200 bg-gray-50 gap-2">
+              <div className="flex items-center gap-2">
+                <div className="w-1 h-5 bg-pdi-teal rounded-full flex-shrink-0" />
+                <h3 className="text-sm sm:text-base font-semibold text-gray-800">Recent Activity</h3>
+              </div>
+              <button onClick={() => navigate('/inspections')} className="text-xs text-pdi-navy hover:underline font-medium flex-shrink-0">View all →</button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b border-gray-100">
+                  <tr>
+                    {['Part Number', 'Part Type', 'PO Number', 'Lot / Serial', 'Inspector', 'Status', 'Last Update'].map(h => (
+                      <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {stats.recent_inspections.map(insp => (
+                    <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-blue-50/50 cursor-pointer">
+                      <td className="px-4 py-2.5 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
+                      <td className="px-4 py-2.5 text-xs text-gray-700">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-gray-700">{insp.po_number || '—'}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-gray-700">{insp.lot_serial_no || '—'}</td>
+                      <td className="px-4 py-2.5 text-xs text-gray-700">{insp.inspector_name || '—'}</td>
+                      <td className="px-4 py-2.5"><StatusBadge status={insp.status} /></td>
+                      <td className="px-4 py-2.5 text-xs text-gray-500">{formatDate(insp.updated_at || insp.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
