@@ -126,4 +126,100 @@ router.get('/alerts', (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ─── Fire Ring eligibility ───────────────────────────────────────────────────
+// Mirrors client helpers in client/src/lib/utils.js. An inspection is eligible
+// for the "Add Fire Ring" action when it is a complete cylinder-head inspection
+// whose Fire Ring (groove_specs) section has no per-cylinder values entered yet.
+
+function parseJSON(value, fallback) {
+  if (value == null) return fallback;
+  if (typeof value !== 'string') return value;
+  try { return JSON.parse(value || 'null') ?? fallback; } catch { return fallback; }
+}
+
+function effectiveSections(templateSections, sectionData) {
+  if (sectionData && sectionData.__admin_sections && typeof sectionData.__admin_sections === 'object') {
+    return sectionData.__admin_sections;
+  }
+  return templateSections || {};
+}
+
+function sectionItems(sectionData) {
+  if (Array.isArray(sectionData?.__items) && sectionData.__items.length > 0) {
+    return sectionData.__items;
+  }
+  const legacy = {};
+  for (const k of Object.keys(sectionData || {})) {
+    if (k.startsWith('__')) continue;
+    legacy[k] = sectionData[k];
+  }
+  return [legacy];
+}
+
+function findGrooveKey(sections) {
+  for (const [key, section] of Object.entries(sections || {})) {
+    if (section && section.section_type === 'groove_specs') return key;
+  }
+  return null;
+}
+
+function entryItemIds(section) {
+  return (section?.items || [])
+    .filter(it => it.entry === true || (it.entry === undefined && /wire protrusion/i.test(it.measurement || '')))
+    .map(it => it.id);
+}
+
+function fireRingHasValues(items, grooveKey, section) {
+  const ids = entryItemIds(section);
+  for (const item of items) {
+    const data = item && item[grooveKey];
+    if (!data || !Array.isArray(data.measurements)) continue;
+    for (const m of data.measurements) {
+      if (!ids.includes(m.id)) continue;
+      if (Array.isArray(m.cylinders) && m.cylinders.some(c => String(c == null ? '' : c).trim() !== '')) return true;
+    }
+  }
+  return false;
+}
+
+// GET /api/dashboard/fire-ring-eligible — complete cylinder-head inspections
+// with an empty Fire Ring section, awaiting Fire Ring Protrusion measurements.
+router.get('/fire-ring-eligible', (req, res, next) => {
+  try {
+    const rows = db.all(
+      `SELECT i.id, i.template_id, i.form_no, i.part_number, i.po_number, i.lot_serial_no,
+              i.inspector_name, i.component_type, i.completed_at, i.section_data,
+              t.sections AS template_sections
+       FROM inspections i
+       JOIN inspection_templates t ON t.id = i.template_id
+       WHERE i.status = 'complete' AND i.component_type = 'cylinder_head'
+       ORDER BY i.completed_at DESC`,
+      []
+    );
+
+    const inspections = [];
+    for (const row of rows) {
+      const sd = parseJSON(row.section_data, {});
+      const templateSections = parseJSON(row.template_sections, {});
+      const sections = effectiveSections(templateSections, sd);
+      const grooveKey = findGrooveKey(sections);
+      if (!grooveKey) continue;
+      if (fireRingHasValues(sectionItems(sd), grooveKey, sections[grooveKey])) continue;
+      inspections.push({
+        id: row.id,
+        template_id: row.template_id,
+        form_no: row.form_no,
+        part_number: row.part_number,
+        po_number: row.po_number,
+        lot_serial_no: row.lot_serial_no,
+        inspector_name: row.inspector_name,
+        component_type: row.component_type,
+        completed_at: row.completed_at,
+      });
+    }
+
+    res.json({ inspections });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;

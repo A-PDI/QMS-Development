@@ -112,6 +112,19 @@ export function useInspectionAlerts() {
   })
 }
 
+// Complete cylinder-head inspections eligible for Fire Ring Protrusion entry
+export function useFireRingEligible(options = {}) {
+  return useQuery({
+    queryKey: ['fire-ring-eligible'],
+    queryFn: async () => {
+      const { data } = await api.get('/dashboard/fire-ring-eligible')
+      return data.inspections || []
+    },
+    staleTime: 60 * 1000,
+    enabled: options.enabled === undefined ? true : Boolean(options.enabled),
+  })
+}
+
 // Assign an inspection to a user (used by AssignModal)
 export function useAssignInspection() {
   const qc = useQueryClient()
