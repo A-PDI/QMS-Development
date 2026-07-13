@@ -1139,4 +1139,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { seed };
+module.exports = { seed, TEMPLATES };

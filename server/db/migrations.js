@@ -6,6 +6,7 @@
  */
 
 const { v4: uuidv4 } = require('uuid');
+const { TEMPLATES } = require('./seed');
 
 // ─── PDI-IQI-005 Rev B sections ──────────────────────────────────────────────
 const RECEIVING_ITEMS = [
@@ -384,6 +385,36 @@ function applyMigrations(db) {
     if (!existing.has('updated_at')) {
       try { db.run("ALTER TABLE app_settings ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'))"); }
       catch (e) { console.error('[Migration] could not add app_settings.updated_at:', e.message); }
+    }
+  });
+
+  // ── Migration: new inspection forms + Miscellaneous base template ─────────
+  // The server only runs migrations on startup (not the seed), so templates
+  // added to seed.js must also be inserted here to reach existing databases.
+  // Inserts PDI-IQI-027 (Main Bearing), 028 (Cam Bearing), 029 (Connecting
+  // Rod), and the hidden PDI-IQI-MISC base template used by one-off
+  // Miscellaneous inspections — each only if not already present, using the
+  // definitions from seed.js as the single source of truth.
+  once('add_forms_bearings_conrod_misc', () => {
+    const now = new Date().toISOString();
+    const FORM_NOS = ['PDI-IQI-027', 'PDI-IQI-028', 'PDI-IQI-029', 'PDI-IQI-MISC'];
+    for (const formNo of FORM_NOS) {
+      if (db.get('SELECT id FROM inspection_templates WHERE form_no = ?', [formNo])) continue;
+      const t = (TEMPLATES || []).find(x => x.form_no === formNo);
+      if (!t) { console.error(`[Migration] template definition missing for ${formNo}`); continue; }
+      db.run(
+        `INSERT INTO inspection_templates
+           (id, component_type, form_no, revision, title, form_type, disposition_type,
+            header_schema, sections, active, created_at, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1)`,
+        [
+          uuidv4(), t.component_type, t.form_no, t.revision || '', t.title,
+          t.form_type, t.disposition_type || 'pass_fail',
+          JSON.stringify(t.header_schema || []),
+          JSON.stringify(t.sections || {}), now,
+        ]
+      );
+      console.log(`[Migration] Inserted template: ${formNo}`);
     }
   });
 }
