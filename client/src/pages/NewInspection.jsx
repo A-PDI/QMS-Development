@@ -16,6 +16,11 @@ const FIELD_CONFIG = [
   { key: 'inspector_name', label: 'Inspector Name',     required: true,  type: 'text' },
 ]
 
+// Sentinel Part Type value for a one-off Miscellaneous inspection, and the
+// form number of the hidden base template it uses (hidden from the dropdown).
+const MISC_OPTION = '__misc'
+const MISC_FORM_NO = 'PDI-IQI-MISC'
+
 export default function NewInspection() {
   const navigate = useNavigate()
   const { showToast } = useToast()
@@ -73,6 +78,13 @@ export default function NewInspection() {
     e.preventDefault()
     if (!templateId) {
       showToast('Please select a Part Type', 'error')
+      return
+    }
+    // Miscellaneous / one-off inspection: hand off the header details to the
+    // builder, where the inspector assembles the sections and items on the fly.
+    if (templateId === MISC_OPTION) {
+      const itemCount = Math.min(100, Math.max(1, parseInt(form.item_count, 10) || 1))
+      navigate('/inspections/new/misc', { state: { form: { ...form, item_count: itemCount } } })
       return
     }
     setSubmitting(true)
@@ -166,11 +178,14 @@ export default function NewInspection() {
                 className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pdi-navy bg-white min-h-[40px]"
               >
                 <option value="">— Select inspection form —</option>
-                {templates.map(t => (
-                  <option key={t.id} value={t.id}>
-                    {t.form_no} · {t.title.replace('PDI Incoming Quality Inspection — ', '')}
-                  </option>
-                ))}
+                {templates
+                  .filter(t => t.form_no !== MISC_FORM_NO)
+                  .map(t => (
+                    <option key={t.id} value={t.id}>
+                      {t.form_no} · {t.title.replace('PDI Incoming Quality Inspection — ', '')}
+                    </option>
+                  ))}
+                <option value={MISC_OPTION}>Miscellaneous — one-off inspection</option>
               </select>
             )}
           </div>
