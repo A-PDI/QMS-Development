@@ -24,6 +24,10 @@ export const COMPONENT_TYPE_LABELS = {
   water_pump: 'Water Pump',
   flywheel: 'Flywheel',
   stud_kit: 'Stud Kit',
+  main_bearing: 'Main Bearing (Shell Half)',
+  cam_bearing: 'Cam Bearing (Bushing / Sleeve)',
+  connecting_rod: 'Connecting Rod',
+  miscellaneous: 'Miscellaneous',
 }
 
 export const STATUS_LABELS = {

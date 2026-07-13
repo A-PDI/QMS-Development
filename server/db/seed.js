@@ -764,6 +764,112 @@ const TEMPLATES = [
       },
     },
   },
+
+  // ── PDI-IQI-027  Main Bearing (Shell Half) ───────────────────────────────
+  {
+    component_type: 'main_bearing', form_no: 'PDI-IQI-027',
+    title: 'PDI Incoming Quality Inspection — Main Bearing (Shell Half)',
+    form_type: 'iqi_standard', disposition_type: 'pass_fail', revision: '',
+    header_schema: STANDARD_HEADER,
+    sections: {
+      receiving: { title: 'A. RECEIVING & DOCUMENTATION VERIFICATION', section_type: 'pfn_checklist', items: RECEIVING_ITEMS },
+      visual: {
+        title: 'B. VISUAL INSPECTION', section_type: 'pass_fail_checklist',
+        items: [
+          { id: 1, name: 'Antifriction Lining Overlay',                           requirement: 'Interior bearing lining surface is 100% uniform; zero scratches, scuffs, layer blistering, exposed mid-layers, or embedded foreign matter.' },
+          { id: 2, name: 'Steel Backing Condition',                               requirement: 'Rear steel shell face is smooth, clean, and uniform; zero rust stains, pitting, fretting shadows, or deep stamping indentations.' },
+          { id: 3, name: 'Locating Tangs & Parting Lines',                        requirement: 'Anti-rotation locating tangs are sharp, crisp, and completely unbent; parting line mating faces are flat and free of upset metal or handling burrs.' },
+          { id: 4, name: 'Oil Grooves & Holes',                                   requirement: 'Oil supply channels and cross-holes are cleanly punched/machined with smoothly chamfered edges; no loose backing burrs.' },
+          { id: 5, name: 'Thrust Flanges (for combination main/thrust bearings only)', requirement: 'Flange lateral faces are smooth and free of machining tears, edge scoring, or handling nicks.' },
+        ],
+      },
+      dimensional: {
+        title: 'C. DIMENSIONAL INSPECTION', section_type: 'dimensional',
+        items: [
+          { id: 1, measurement: 'Bearing Shell Wall Thickness',                                location: 'Measured at the exact center apex of the bearing half using a specialized ball-anvil micrometer.', spec: '' },
+          { id: 2, measurement: 'Overall Shell Width',                                         location: 'Measured parallel to the bearing centerline across the parting line edges.',                    spec: '' },
+          { id: 3, measurement: 'Bearing Free Spread',                                         location: 'Measured distance across the extreme outer tips of the bearing shell parting lines in its relaxed state.', spec: '' },
+          { id: 4, measurement: 'Flange Thickness / Total Width (for combination main/thrust bearings only)', location: 'Measured from thrust face to thrust face parallel to the crankshaft axis.',                  spec: '' },
+        ],
+      },
+    },
+  },
+
+  // ── PDI-IQI-028  Cam Bearing (Bushing / Sleeve) ──────────────────────────
+  {
+    component_type: 'cam_bearing', form_no: 'PDI-IQI-028',
+    title: 'PDI Incoming Quality Inspection — Cam Bearing (Bushing / Sleeve)',
+    form_type: 'iqi_standard', disposition_type: 'pass_fail', revision: '',
+    header_schema: STANDARD_HEADER,
+    sections: {
+      receiving: { title: 'A. RECEIVING & DOCUMENTATION VERIFICATION', section_type: 'pfn_checklist', items: RECEIVING_ITEMS },
+      visual: {
+        title: 'B. VISUAL INSPECTION', section_type: 'pass_fail_checklist',
+        items: [
+          { id: 1, name: 'Inside Diameter (ID) Lining Finish',   requirement: 'Babbitt or overlay lining material is continuous and smoothly machined; zero scoring, pitting, handling marks, or peeling from the backing material.' },
+          { id: 2, name: 'Outside Diameter (OD) Surface Quality', requirement: 'Outer steel or bronze backing surface is uniform and smooth to facilitate proper press-fit; free of heavy insertion scratches, burrs, or corrosion.' },
+          { id: 3, name: 'Chamfers & Lead-in Edges',             requirement: 'OD edge chamfers are cleanly formed and deburred to prevent scoring the engine block cam tunnel during installation.' },
+          { id: 4, name: 'Oil Supply Holes',                     requirement: 'Lubrication holes are completely open, round, and free of punching flash or hanging metal slivers.' },
+        ],
+      },
+      dimensional: {
+        title: 'C. DIMENSIONAL INSPECTION', section_type: 'dimensional',
+        items: [
+          { id: 1, measurement: 'Bearing Wall Thickness',      location: 'Measured using a ball-anvil micrometer at 3 points around the circumference.',                spec: '' },
+          { id: 2, measurement: 'Bearing Outer Diameter (OD)', location: 'Measured across 2 axes at 90° to verify press-fit sizing before installation.',              spec: '' },
+          { id: 3, measurement: 'Total Bushing Width',         location: 'Measured parallel to the center axis of the sleeve.',                                        spec: '' },
+        ],
+      },
+    },
+  },
+
+  // ── PDI-IQI-029  Connecting Rod ──────────────────────────────────────────
+  {
+    component_type: 'connecting_rod', form_no: 'PDI-IQI-029',
+    title: 'PDI Incoming Quality Inspection — Connecting Rod',
+    form_type: 'iqi_standard', disposition_type: 'pass_fail', revision: '',
+    header_schema: STANDARD_HEADER,
+    sections: {
+      receiving: { title: 'A. RECEIVING & DOCUMENTATION VERIFICATION', section_type: 'pfn_checklist', items: RECEIVING_ITEMS },
+      visual: {
+        title: 'B. VISUAL INSPECTION', section_type: 'pass_fail_checklist',
+        items: [
+          { id: 1, name: 'Rod Beam & Cap Surface',                    requirement: 'Forged or machined surfaces are completely free of deep nicks, transport gouges, heat discoloration, or stamping cracks; no sharp structural stress-risers.' },
+          { id: 2, name: 'Big-End Mating Serrations / Fractured Face', requirement: 'Cap-to-rod mating interfaces (whether machined serrations or fractured split surfaces) are 100% clean, unbruised, and free of foreign particles or damaged teeth.' },
+          { id: 3, name: 'Small-End Bushing Seating',                 requirement: 'Pin bore bushing is securely pressed into place, aligned with the oil pathway, and free of internal scoring, flaking, or edge burrs.' },
+          { id: 4, name: 'Bolt Seat Counterbores',                    requirement: 'Machined seating areas for the rod bolts are flat, clean, and free of tool chatter marks or debris.' },
+          { id: 5, name: 'Weight Class / Matching Marks',             requirement: 'Rod and cap matching serialization or weight class indicators are clearly legible, matched, and permanently marked.' },
+        ],
+      },
+      dimensional: {
+        title: 'C. DIMENSIONAL INSPECTION', section_type: 'dimensional',
+        items: [
+          { id: 1, measurement: 'Big-End Bore Diameter',                       location: 'Measured with rod cap installed and torqued to specification (0° and 90° axes with respect to the beam axis).', spec: '' },
+          { id: 2, measurement: 'Small-End Pin Bushing Inner Diameter (ID)',   location: 'Measured across 0° and 90° vertical/horizontal planes.',                                          spec: '' },
+          { id: 3, measurement: 'Center-to-Center Distance',                   location: 'Measured distance between the absolute center points of the big-end bore and the small-end bore.',   spec: '' },
+          { id: 4, measurement: 'Bore Parallelism (Twist and Bend)',           location: 'Alignment checked via precision rod fixture pins to calculate alignment error between the big-end and small-end axes.', spec: '' },
+        ],
+      },
+    },
+  },
+
+  // ── PDI-IQI-MISC  Miscellaneous (one-off) ────────────────────────────────
+  // Base template for one-off inspections of odd/unusual parts. The actual
+  // section structure is built per-inspection at creation time and stored on
+  // the inspection itself (section_data.__admin_sections); this template only
+  // supplies starter sections and lets the inspection reference a valid form.
+  // Hidden from the normal Part Type dropdown and the standard forms list.
+  {
+    component_type: 'miscellaneous', form_no: 'PDI-IQI-MISC',
+    title: 'PDI Incoming Quality Inspection — Miscellaneous',
+    form_type: 'iqi_standard', disposition_type: 'pass_fail', revision: '',
+    header_schema: STANDARD_HEADER,
+    sections: {
+      receiving:  { title: 'A. RECEIVING & DOCUMENTATION VERIFICATION', section_type: 'pfn_checklist',      items: [] },
+      visual:     { title: 'B. VISUAL INSPECTION',                       section_type: 'pass_fail_checklist', items: [] },
+      dimensional:{ title: 'C. DIMENSIONAL INSPECTION',                  section_type: 'dimensional',         items: [] },
+    },
+  },
 ];
 
 // ─── PDI-IQI-005 Rev A sections (preserved, inactive after Rev B seeds) ────────

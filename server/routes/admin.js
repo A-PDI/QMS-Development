@@ -29,6 +29,49 @@ router.get('/templates', (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/admin/inspection-items — distinct inspection items grouped by section
+// type, aggregated across all active templates. Feeds the "pick an existing
+// item" dropdown in the custom / miscellaneous inspection builders. Available
+// to any authenticated user (no admin gate) since inspectors build one-off
+// Miscellaneous inspections. Each item is normalised to { name, requirement }
+// so a single dropdown shape works for every section type (for dimensional
+// sections, name = measurement and requirement = location).
+router.get('/inspection-items', (req, res, next) => {
+  try {
+    const templates = db.all('SELECT sections FROM inspection_templates WHERE active = 1', []);
+    // { [section_type]: Map<lowercase name, { name, requirement }> }
+    const buckets = {};
+    for (const t of templates) {
+      let sections;
+      try { sections = JSON.parse(t.sections || '{}'); } catch { continue; }
+      for (const [sectionKey, section] of Object.entries(sections)) {
+        if (sectionKey.startsWith('__')) continue;
+        const type = section?.section_type;
+        if (!type) continue;
+        const items = Array.isArray(section.items) ? section.items : [];
+        for (const item of items) {
+          const name = (item.name || item.measurement || '').trim();
+          if (!name) continue;
+          const requirement = (item.requirement || item.location || '').trim();
+          if (!buckets[type]) buckets[type] = new Map();
+          const key = name.toLowerCase();
+          // First occurrence wins; keep a requirement if this one supplies it.
+          if (!buckets[type].has(key)) {
+            buckets[type].set(key, { name, requirement });
+          } else if (!buckets[type].get(key).requirement && requirement) {
+            buckets[type].set(key, { name, requirement });
+          }
+        }
+      }
+    }
+    const items = {};
+    for (const [type, map] of Object.entries(buckets)) {
+      items[type] = Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+    }
+    res.json({ items });
+  } catch (err) { next(err); }
+});
+
 // GET /api/admin/templates/export — download all active templates + items as Excel
 router.get('/templates/export', requireAdmin, async (req, res, next) => {
   try {

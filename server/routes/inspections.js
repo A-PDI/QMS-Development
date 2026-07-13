@@ -107,13 +107,20 @@ router.post('/', (req, res, next) => {
     }
     const inspectionId = uuidv4();
     const now = new Date().toISOString();
+    // Optional initial section_data — lets a one-off Miscellaneous inspection
+    // persist its on-the-fly section structure (stored under __admin_sections)
+    // at creation time. Only accept a plain object; anything else falls back to {}.
+    let initialSectionData = {};
+    if (req.body.section_data && typeof req.body.section_data === 'object' && !Array.isArray(req.body.section_data)) {
+      initialSectionData = req.body.section_data;
+    }
     db.run(`INSERT INTO inspections (id, template_id, component_type, form_no, part_number, supplier, po_number, description, date_received, inspector_name, lot_size, aql_level, sample_size, lot_serial_no, signature, status, item_count, created_by, assigned_to, assigned_at, assigned_by, due_date, created_at, updated_at, section_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [inspectionId, template_id, template.component_type, template.form_no,
        part_number || null, supplier || null, po_number || null, description || null,
        date_received || null, inspector_name || null, lot_size || null, aql_level || null,
        sample_size || null, lot_serial_no || null, signature || null, itemCount,
        req.user.id, assigned_to || null, assigned_to ? now : null,
-       assigned_to ? req.user.id : null, due_date || null, now, now, JSON.stringify({})]
+       assigned_to ? req.user.id : null, due_date || null, now, now, JSON.stringify(initialSectionData)]
     );
     logActivity(inspectionId, assigned_to ? 'assigned' : 'started', req.user);
     const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [inspectionId]);
