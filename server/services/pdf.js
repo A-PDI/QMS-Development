@@ -48,10 +48,90 @@ function tankSuffix(tankName) {
   return ` [${code}]`;
 }
 
-// Splits a row's raw spec text ("8.5 +/- 4.5 mm3/STRK") into its Target and
-// Range parts (the trailing unit is stripped first, since it's shown on its
-// own line). Falls back to the raw text combined with its unit when the spec
-// isn't a simple "target +/- tolerance" (e.g. a single limit with no range).
+// Test-step unit label styling: always small (6pt) and gray. Volume-flow
+// units sometimes arrive from the bench as a compound value (e.g.
+// "mm3/STRK") — the report always shows just "mm3", with the "3" drawn as a
+// true raised exponent (mm³) since pdfkit has no native superscript support.
+const UNIT_FONT_SIZE = 6;
+const UNIT_SUP_SIZE = 4.3;
+const UNIT_SUP_RAISE = 1.6;
+
+function isVolumeUnit(unit) {
+  return /^mm3\b/i.test(String(unit || '').trim());
+}
+
+// Measures the width a unit label will take when drawn with drawUnitLabel()
+// below, without actually drawing it. Mutates doc's font/fontSize (like
+// widthOfString always does) — callers must reset those before continuing.
+function unitLabelWidth(doc, unit) {
+  if (!unit) return 0;
+  if (isVolumeUnit(unit)) {
+    doc.font('Helvetica').fontSize(UNIT_FONT_SIZE);
+    const baseW = doc.widthOfString('mm');
+    doc.fontSize(UNIT_SUP_SIZE);
+    return baseW + doc.widthOfString('3');
+  }
+  doc.font('Helvetica').fontSize(UNIT_FONT_SIZE);
+  return doc.widthOfString(unit);
+}
+
+// Draws a unit label at (x, y) — the y baseline the surrounding row text
+// uses. Volume units are shown as "mm" + a raised, smaller "3".
+function drawUnitLabel(doc, unit, x, y, color) {
+  if (!unit) return;
+  if (isVolumeUnit(unit)) {
+    doc.font('Helvetica').fontSize(UNIT_FONT_SIZE).fillColor(color);
+    doc.text('mm', x, y, { lineBreak: false });
+    const baseW = doc.widthOfString('mm');
+    doc.fontSize(UNIT_SUP_SIZE);
+    doc.text('3', x + baseW, y - UNIT_SUP_RAISE, { lineBreak: false });
+  } else {
+    doc.font('Helvetica').fontSize(UNIT_FONT_SIZE).fillColor(color).text(unit, x, y, { lineBreak: false });
+  }
+}
+
+// Maps a raw bench test-step name to the customer-facing label(s) shown in
+// the report. Most steps share one label across both tanks (tankSuffix
+// appends " [R]" to the secondary/return tank); "eRL" is the one exception —
+// it reports two unrelated measurements (Resistance / Inductance) off the
+// same step, so it gets a distinct name per tank instead of a suffix.
+const STEP_LABEL_MAP = {
+  'erl': { primary: 'Resistance', secondary: 'Inductance' },
+  'lkt.01': 'Low Pressure Leak',
+  'lkt.02': 'High Pressure Leak',
+  'warm up': 'Warm Up',
+  'ivm.01': 'Peak HP',
+  'ivm.02': 'Emissions',
+  'ivm.03': 'Low Idle',
+  'ivm.04': 'Mid-Range',
+  'ivm.05': 'Cranking',
+  'ivm.06': 'Peak Torque',
+  'rsp': 'Response Time',
+  'anop': 'Opening Pressure',
+};
+
+// Unmapped step names (not yet in STEP_LABEL_MAP) fall back to the raw bench
+// name so new/unrecognised steps still render instead of breaking the report.
+function mapStepLabel(rawName, role, tankName) {
+  const entry = STEP_LABEL_MAP[String(rawName || '').trim().toLowerCase()];
+  if (entry && typeof entry === 'object') return entry[role] || rawName;
+  const base = typeof entry === 'string' ? entry : rawName;
+  return `${base}${tankSuffix(tankName)}`;
+}
+
+// Number of digits after the decimal point in a numeric string ("8.50" -> 2).
+function decimalPlaces(str) {
+  const s = String(str || '');
+  const i = s.indexOf('.');
+  return i === -1 ? 0 : s.length - i - 1;
+}
+
+// Splits a row's raw spec text ("8.5 +/- 4.5 mm3/STRK") into a "Min - Max"
+// range (the trailing unit is stripped first — the unit is drawn separately,
+// to the right of the max value, by the caller). Precision mirrors the
+// source target/tolerance values, with a floor of one decimal place. Falls
+// back to the raw text when the spec isn't a simple "target +/- tolerance"
+// (e.g. a single limit with no range).
 function parseSpecRow(row) {
   const rawSpec = (row.spec || '').trim();
   const unitStr = (row.unit || '').trim();
@@ -61,10 +141,15 @@ function parseSpecRow(row) {
   }
   const specMatch = specCore.match(/^([+-]?[\d.]+)\s*(?:\+\/-|±)\s*([+-]?[\d.]+)$/);
   if (specMatch) {
-    return { hasMatch: true, targetLine: specMatch[1], rangeLine: `+/- ${specMatch[2]}`, unitStr };
+    const target = parseFloat(specMatch[1]);
+    const tolerance = parseFloat(specMatch[2]);
+    if (Number.isFinite(target) && Number.isFinite(tolerance)) {
+      const decimals = Math.max(1, decimalPlaces(specMatch[1]), decimalPlaces(specMatch[2]));
+      const rangeText = `${(target - tolerance).toFixed(decimals)} - ${(target + tolerance).toFixed(decimals)}`;
+      return { hasMatch: true, rangeText };
+    }
   }
-  const fallbackText = specCore ? (unitStr ? `${specCore} ${unitStr}` : specCore) : unitStr;
-  return { hasMatch: false, fallbackText, unitStr: '' };
+  return { hasMatch: false, fallbackText: specCore || unitStr };
 }
 
 // Normalize a disposition value to its UPPERCASE code so PASS/FAIL colour +
@@ -1030,8 +1115,8 @@ function renderVacuumTest(doc, section, data, secAtts = []) {
 /**
  * Generate a landscape PDF comparing one or more selected injectors side by
  * side. Columns:
- *   1. Test Step   — step name + Rail Pressure / Pulse Width / Strk parameters
- *   2. Specification — Target, +/- range, Units
+ *   1. Test Step   — customer-facing step label (single line)
+ *   2. Specification — "Min - Max" range with its unit
  *   3+. one column per injector (serial #) holding the AVERAGE flow value,
  *       coloured green (pass) / red (fail).
  * Everything is scaled to fit on a single landscape page.
@@ -1039,348 +1124,426 @@ function renderVacuumTest(doc, section, data, secAtts = []) {
  * injectors: array of {
  *   part_number, serial_number, job_number, brand, injector_type,
  *   machine_name, machine_sn, test_datetime,
- *   tests: [ { name, params:{rail_pressure,pulse_width,strk}, status,
- *              primary:{unit,target,tolerance,average,status}, secondary:{...}|null } ]
+ *   tests: [ { name, status, primary:{unit,spec,average,status,tank_name},
+ *              secondary:{...}|null } ]
  * }
  */
 function generateInjectorComparisonPdf(injectors = []) {
   return new Promise((resolve, reject) => {
     try {
-      const LM = 28; // landscape margin
-      const doc = new PDFDocument({ bufferPages: true, margin: LM, size: 'Letter', layout: 'landscape' });
+      const doc = new PDFDocument({ bufferPages: true, margin: 28, size: 'Letter', layout: 'landscape' });
       const chunks = [];
       doc.on('data', c => chunks.push(c));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
 
-      const pageW = 792;             // Letter landscape width
-      const pageH = 612;             // Letter landscape height
-      const usableW = pageW - LM * 2;
-      const list = Array.isArray(injectors) ? injectors : [];
-
-      // ── Build the unified list of test-step rows across all injectors ─────
-      // Each row = one test step (+ optional secondary tank). Rows are keyed by
-      // a stable label so the same step lines up across injectors.
-      const rowOrder = [];
-      const rowMap = new Map(); // key -> { label, params, target, tolerance, unit }
-      function rowKey(label) { return label.toLowerCase(); }
-
-      for (const inj of list) {
-        for (const t of (inj.tests || [])) {
-          if (!t.primary) continue;
-          const params = t.params || {};
-          const pLabel = t.name || t.raw_name || 'Step';
-          // Row KEYS stay based on the step name alone (stable across
-          // injectors); the DISPLAY label is derived separately from each
-          // tank's own code.
-          const pKey = rowKey(pLabel + '|1');
-          if (!rowMap.has(pKey)) {
-            rowMap.set(pKey, {
-              label: `${pLabel}${tankSuffix(t.primary.tank_name)}`,
-              params,
-              // Specification shown = green-band spec (e.g. "8.5 +/- 4.5 mm3/STRK").
-              spec: t.primary.spec || '',
-              unit: t.primary.unit || '',
-            });
-            rowOrder.push(pKey);
-          }
-          if (t.secondary) {
-            const sKey = rowKey(pLabel + '|2');
-            if (!rowMap.has(sKey)) {
-              rowMap.set(sKey, {
-                label: `${pLabel}${tankSuffix(t.secondary.tank_name)}`,
-                params,
-                spec: t.secondary.spec || '',
-                unit: t.secondary.unit || '',
-              });
-              rowOrder.push(sKey);
-            }
-          }
-        }
-      }
-
-      // Per-injector lookup: key -> { value(=average flow), status }
-      const injValues = list.map((inj) => {
-        const m = new Map();
-        for (const t of (inj.tests || [])) {
-          if (!t.primary) continue;
-          const pLabel = t.name || t.raw_name || 'Step';
-          m.set(rowKey(pLabel + '|1'), {
-            value: t.primary.average || '',
-            status: t.primary.status,
-          });
-          if (t.secondary) {
-            m.set(rowKey(pLabel + '|2'), {
-              value: t.secondary.average || '',
-              status: t.secondary.status,
-            });
-          }
-        }
-        return m;
-      });
-
-      // ── Header banner (logo + title, then part number + tested date) ──────
-      const bannerH = 54;
-      const top = LM;
-      doc.rect(LM, top, usableW, bannerH).fillColor(NAVY).fill();
-      if (fs.existsSync(LOGO_PATH)) {
-        try { doc.image(LOGO_PATH, LM + 10, top + 14, { height: 26, fit: [90, 26] }); } catch (_) {}
-      }
-
-      const firstInj = list[0] || {};
-      const partNo = numericPartNumber(firstInj.part_number);
-      const testDates = [...new Set(list.map(i => (i.test_datetime || '').slice(0, 10)).filter(Boolean))].sort();
-      const testedText = testDates.length
-        ? `Tested: ${fmtDateMDY(testDates[0])}${testDates.length > 1 ? ' – ' + fmtDateMDY(testDates[testDates.length - 1]) : ''}`
-        : '';
-      const titleX = LM + 112;
-      const titleW = usableW - 122;
-
-      // Line 1: report title.
-      doc.fontSize(14).font('Helvetica-Bold').fillColor(WHITE);
-      doc.text('INJECTOR TEST REPORT', titleX, top + 9, { width: titleW, align: 'center', lineBreak: false });
-
-      // Line 2: Part Number | Test Date — visually distinct (smaller, lighter) subtitle.
-      const subtitle = [partNo, testedText].filter(Boolean).join('   |   ');
-      doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
-      doc.text(subtitle, titleX, top + 30, { width: titleW, align: 'center', lineBreak: false });
-
-      // ── Row height + per-row font sizes ───────────────────────────────────
-      // These depend only on how much vertical space is available and how
-      // many rows there are — NOT on column widths — so they're computed
-      // before the column geometry below, which needs specValFont to size
-      // the Spec column to fit its content.
-      const tableTop = top + bannerH + 10;
-      const n = Math.max(list.length, 1);
-      const headerRowH = 22;
-      const resultRowH = 20; // Pass/Fail summary row at the bottom
-      const availH = pageH - LM - tableTop - headerRowH - resultRowH - 6;
-      const dataRowCount = rowOrder.length || 1;
-      let rowH = Math.floor(availH / dataRowCount);
-      rowH = Math.max(30, Math.min(rowH, 44)); // room for the 4-line parameter stack
-      // If min row height overflows the page, fall back to the largest that fits.
-      if (rowH * dataRowCount > availH) rowH = Math.max(24, Math.floor(availH / dataRowCount));
-      const nameFont = rowH >= 38 ? 8 : (rowH >= 30 ? 7 : 6.2);
-      const subFont = Math.max(5.2, nameFont - 1.6);
-      const paramFont = subFont;
-      const paramLineH = Math.min((rowH - 4) / 4, paramFont + 2.5);
-      const paramBlockH = paramLineH * 4;
-      // Step-name font: fixed size, vertically centered beside its 4-line
-      // parameter stack (a size auto-scaled to match the block's height read as
-      // too large).
-      const stepNameFont = 9;
-      const specValFont = nameFont;
-
-      // ── Column geometry ───────────────────────────────────────────────────
-      // Fixed columns: Test Step (multi-line) + Spec (sized to fit its
-      // content). The remaining width is split evenly across the injector
-      // columns. Test Step is the widest fixed column (holds Step Name +
-      // Pressure/Pulse/Strk/Units lines) but is kept NARROW to free
-      // horizontal space for the injector value columns.
-      let stepW = Math.max(120, Math.min(168, usableW * 0.17));
-
-      // Spec column width fits its content: the "SPEC" header plus the
-      // widest Target/Range string across every row, at the font sizes
-      // above. (Units is no longer shown here — it's already on its own
-      // line in Test Step.)
-      doc.font('Helvetica-Bold').fontSize(8);
-      let specContentW = doc.widthOfString('SPEC');
-      rowOrder.forEach((key) => {
-        const parsed = parseSpecRow(rowMap.get(key));
-        doc.font('Helvetica-Bold').fontSize(specValFont);
-        if (parsed.hasMatch) {
-          specContentW = Math.max(specContentW, doc.widthOfString(parsed.targetLine), doc.widthOfString(parsed.rangeLine));
-        } else if (parsed.fallbackText) {
-          specContentW = Math.max(specContentW, doc.widthOfString(parsed.fallbackText));
-        }
-      });
-      let specW = Math.min(usableW * 0.22, specContentW + 16);
-
-      const MIN_INJ_COL = 44;
-      let injColW = (usableW - stepW - specW) / n;
-      if (injColW < MIN_INJ_COL) {
-        // Shrink the fixed columns to guarantee everything fits on one page.
-        const need = MIN_INJ_COL * n;
-        const leftover = usableW - need;
-        stepW = Math.max(104, leftover * 0.58);
-        specW = Math.max(66, leftover * 0.42);
-        injColW = (usableW - stepW - specW) / n;
-      }
-      const col1X = LM;
-      const col2X = LM + stepW;
-      const injStartX = LM + stepW + specW;
-
-      // ── Dynamic measured-value font scaling ───────────────────────────────
-      // The measured flow value must stay readable but never overflow its
-      // column. Scale the font to the AVAILABLE COLUMN WIDTH (fewer injectors =
-      // wider columns = larger font) as well as the row height. Widest sample
-      // value determines how large we can safely go for the given injColW.
-      let widestVal = 4; // at least a few chars ("—")
-      injValues.forEach((m) => {
-        m.forEach((cell) => {
-          const s = String((cell && cell.value) || '');
-          if (s.length > widestVal) widestVal = s.length;
-        });
-      });
-      const rowValCap = rowH >= 38 ? 11 : (rowH >= 30 ? 9.5 : 8);
-      // Width the value cell can use (minus padding), and the per-char width at
-      // Helvetica-Bold is ~0.6em, so max font ≈ availWidth / (chars * 0.6).
-      const valAvail = injColW - 6;
-      const widthCappedFont = valAvail / (Math.max(widestVal, 1) * 0.6);
-      const valFont = Math.max(6, Math.min(rowValCap, widthCappedFont));
-
-      // ── Draw table header row ─────────────────────────────────────────────
-      let y = tableTop;
-      doc.rect(LM, y, usableW, headerRowH).fillColor(NAVY).fill();
-
-      doc.fontSize(8).font('Helvetica-Bold').fillColor(WHITE);
-      doc.text('TEST STEP', col1X + 4, y + 7, { width: stepW - 8, height: headerRowH - 6, lineBreak: false });
-      doc.text('SPEC', col2X + 6, y + 7, { width: specW - 10, height: headerRowH - 6, lineBreak: false });
-
-      // Header column separators
-      doc.strokeColor('#3A4A6B').lineWidth(0.4).moveTo(col2X, y).lineTo(col2X, y + headerRowH).stroke();
-      doc.strokeColor('#3A4A6B').lineWidth(0.4).moveTo(injStartX, y).lineTo(injStartX, y + headerRowH).stroke();
-
-      // Injector column headers — SERIAL NUMBER ONLY.
-      let x = injStartX;
-      list.forEach((inj) => {
-        doc.strokeColor('#3A4A6B').lineWidth(0.4).moveTo(x, y).lineTo(x, y + headerRowH).stroke();
-        doc.fontSize(injColW < 58 ? 6.5 : 7.5).font('Helvetica-Bold').fillColor(WHITE);
-        const sn = inj.serial_number || '—';
-        doc.text(sn, x + 3, y + 7, { width: injColW - 6, height: headerRowH - 8, align: 'center', lineBreak: false, ellipsis: true });
-        x += injColW;
-      });
-
-      y += headerRowH;
-
-      // ── Draw data rows ────────────────────────────────────────────────────
-      rowOrder.forEach((key, ri) => {
-        const row = rowMap.get(key);
-        const bg = ri % 2 === 1 ? ROWALT : WHITE;
-        doc.rect(LM, y, usableW, rowH).fillColor(bg).fill();
-        doc.strokeColor(BORDER).lineWidth(0.3).moveTo(LM, y + rowH).lineTo(LM + usableW, y + rowH).stroke();
-
-        // ── Column 1: Test Step — name (left, larger) + Pressure/Pulse/Strk
-        // (right, stacked) so the step name and its parameters sit side by side ─
-        const p = row.params || {};
-        const cellInnerW = stepW - 8;
-        const nameW = Math.round(cellInnerW * 0.52);
-        const nameParamsGap = 4;
-        const paramsW = cellInnerW - nameW - nameParamsGap;
-        const paramsX = col1X + 4 + nameW + nameParamsGap;
-
-        doc.fontSize(stepNameFont).font('Helvetica-Bold').fillColor(BLACK);
-        // `height` must cover exactly one line — pdfkit only truncates with an
-        // ellipsis once a 2nd line would overflow it; a taller box just wraps.
-        doc.text(row.label, col1X + 4, y + (rowH - stepNameFont) / 2 - 1, {
-          width: nameW, height: stepNameFont + 2, ellipsis: true,
-        });
-
-        const paramLines = [
-          `Pressure: ${p.rail_pressure || '—'}`,
-          `Pulse: ${p.pulse_width || '—'}`,
-          `Strk: ${p.strk || '—'}`,
-          `Units: ${row.unit || '—'}`,
-        ];
-        let py = y + (rowH - paramBlockH) / 2;
-        paramLines.forEach((t) => {
-          doc.fontSize(paramFont).font('Helvetica').fillColor(DGRAY);
-          doc.text(t, paramsX, py, { width: paramsW, height: paramLineH + 1, lineBreak: false, ellipsis: true });
-          py += paramLineH;
-        });
-
-        // ── Column 2: Spec — Target, Range, all left-justified ────────────
-        const parsed = parseSpecRow(row);
-        const specTextX = col2X + 6;
-        const specTextW = specW - 10;
-        if (parsed.hasMatch) {
-          const gap = 0;
-          const blockH = specValFont * 2 + gap;
-          let sy = y + (rowH - blockH) / 2 - 0.5;
-          doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
-          doc.text(parsed.targetLine, specTextX, sy, { width: specTextW, align: 'left', height: specValFont + 2, ellipsis: true });
-          sy += specValFont + gap;
-          doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
-          doc.text(parsed.rangeLine, specTextX, sy, { width: specTextW, align: 'left', height: specValFont + 2, ellipsis: true });
-        } else if (parsed.fallbackText) {
-          doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
-          doc.text(parsed.fallbackText, specTextX, y + (rowH - specValFont) / 2 - 1, {
-            width: specTextW, align: 'left', height: specValFont + 2, ellipsis: true,
-          });
-        } else {
-          doc.fontSize(nameFont).font('Helvetica').fillColor(DGRAY);
-          doc.text('—', specTextX, y + (rowH - nameFont) / 2 - 1, {
-            width: specTextW, align: 'left', lineBreak: false,
-          });
-        }
-
-        // Fixed-column separators
-        doc.strokeColor(BORDER).lineWidth(0.3).moveTo(col2X, y).lineTo(col2X, y + rowH).stroke();
-        doc.strokeColor(BORDER).lineWidth(0.3).moveTo(injStartX, y).lineTo(injStartX, y + rowH).stroke();
-
-        // ── Injector columns: AVERAGE flow value, green/red ─────────────────
-        let cx = injStartX;
-        injValues.forEach((m) => {
-          doc.strokeColor(BORDER).lineWidth(0.3).moveTo(cx, y).lineTo(cx, y + rowH).stroke();
-          const cell = m.get(key);
-          const val = cell ? (cell.value || '') : '';
-          let color = DGRAY;
-          if (cell) {
-            if (cell.status === 'pass') color = GREEN;
-            else if (cell.status === 'fail') color = RED;
-          }
-          doc.fontSize(valFont).font(cell && (cell.status === 'pass' || cell.status === 'fail') ? 'Helvetica-Bold' : 'Helvetica').fillColor(color);
-          doc.text(val || '—', cx + 2, y + (rowH - valFont) / 2 - 1, { width: injColW - 4, align: 'center', lineBreak: false, ellipsis: true });
-          cx += injColW;
-        });
-
-        y += rowH;
-      });
-
-      // ── Result row (overall Pass/Fail per injector) at the bottom ─────────
-      const resultTop = y;
-      doc.rect(LM, y, usableW, resultRowH).fillColor('#EDF1F7').fill();
-      doc.fontSize(8).font('Helvetica-Bold').fillColor(NAVY);
-      doc.text('RESULT', col1X + 4, y + (resultRowH - 8) / 2, { width: stepW - 8, height: resultRowH - 4, lineBreak: false });
-      doc.text('', col2X + 2, y + 4, { width: specW - 4, align: 'center', lineBreak: false });
-      doc.strokeColor(BORDER).lineWidth(0.3).moveTo(col2X, y).lineTo(col2X, y + resultRowH).stroke();
-      doc.strokeColor(BORDER).lineWidth(0.3).moveTo(injStartX, y).lineTo(injStartX, y + resultRowH).stroke();
-      let rx = injStartX;
-      list.forEach((inj) => {
-        doc.strokeColor(BORDER).lineWidth(0.3).moveTo(rx, y).lineTo(rx, y + resultRowH).stroke();
-        const scored = (inj.tests || []).filter(t => t.primary && t.status !== 'skip');
-        const failed = scored.filter(t => t.status === 'fail').length;
-        const overall = scored.length === 0 ? '—' : (failed === 0 ? 'PASS' : 'FAIL');
-        doc.fontSize(injColW < 58 ? 8 : 9).font('Helvetica-Bold')
-           .fillColor(overall === 'FAIL' ? RED : (overall === 'PASS' ? GREEN : DGRAY));
-        doc.text(overall, rx + 2, y + (resultRowH - 9) / 2, { width: injColW - 4, align: 'center', lineBreak: false });
-        rx += injColW;
-      });
-      y += resultRowH;
-
-      // ── Outer border ──────────────────────────────────────────────────────
-      const tableBottom = y;
-      doc.strokeColor(BORDER).lineWidth(0.6).rect(LM, tableTop, usableW, tableBottom - tableTop).stroke();
-      doc.strokeColor(BORDER).lineWidth(0.4).moveTo(col2X, tableTop).lineTo(col2X, tableBottom).stroke();
-      doc.strokeColor(BORDER).lineWidth(0.4).moveTo(injStartX, tableTop).lineTo(injStartX, tableBottom).stroke();
-      // Line above the result row.
-      doc.strokeColor(NAVY).lineWidth(0.8).moveTo(LM, resultTop).lineTo(LM + usableW, resultTop).stroke();
-
-      // ── Footer ────────────────────────────────────────────────────────────
-      const footY = pageH - LM - 8;
-      if (footY > tableBottom + 2) {
-        doc.fontSize(6.5).font('Helvetica').fillColor(LGRAY);
-        doc.text(
-          `Generated ${new Date().toISOString().slice(0, 19).replace('T', ' ')} · Flow value = average reading · Green = Pass · Red = Fail`,
-          LM, footY, { width: usableW, align: 'right', lineBreak: false, height: 8 }
-        );
-      }
+      drawInjectorComparisonTable(doc, injectors);
 
       doc.end();
     } catch (err) {
       reject(err);
     }
   });
+}
+
+// A step counts as "errored" when the bench flagged a hard error (surfaced by
+// normaliseTests as `errored`, or — for reports synced before that logic
+// existed — detectable from the error text left in the step name).
+function stepIsErrored(t) {
+  return !!(t && (t.errored || /error/i.test(String(t.name || t.raw_name || ''))));
+}
+
+// FL(W) is the internal flush/prep diagnostic. It is never shown as a report
+// row — not even when it errors (the errored variant carries an "…ERROR…"
+// suffix that would otherwise leak a long, column-overflowing row). Its error
+// is surfaced instead as an "ERROR" value in the injector's first empty step.
+function isFlushStep(t) {
+  return /^\s*FL\s*\(\s*W\s*\)/i.test(String((t && (t.name || t.raw_name)) || ''));
+}
+
+/**
+ * Build the shared row/column data model for the injector comparison grid.
+ * Returns:
+ *   list      — the injectors, in order (columns)
+ *   rowOrder  — ordered array of row keys
+ *   rowMap    — key -> { label, spec, unit }
+ *   injValues — per-injector Map: key -> { value, status, error }
+ *   results   — per-injector { overall: 'PASS'|'FAIL'|'—' }
+ */
+function buildInjectorComparisonModel(injectors = []) {
+  const list = Array.isArray(injectors) ? injectors : [];
+  const rowOrder = [];
+  const rowMap = new Map(); // key -> { label, spec, unit }
+  const rowKey = (label) => label.toLowerCase();
+
+  for (const inj of list) {
+    for (const t of (inj.tests || [])) {
+      if (!t.primary || isFlushStep(t)) continue; // flush step is never a row
+      const rawLabel = t.name || t.raw_name || 'Step';
+      // Row KEYS stay based on the step name (stable across injectors);
+      // the DISPLAY label is derived separately from each tank's own code.
+      const pKey = rowKey(rawLabel + '|1');
+      if (!rowMap.has(pKey)) {
+        rowMap.set(pKey, {
+          label: mapStepLabel(rawLabel, 'primary', t.primary.tank_name),
+          // Specification shown = green-band spec (e.g. "8.5 +/- 4.5 mm3/STRK").
+          spec: t.primary.spec || '',
+          unit: t.primary.unit || '',
+        });
+        rowOrder.push(pKey);
+      }
+      if (t.secondary) {
+        const sKey = rowKey(rawLabel + '|2');
+        if (!rowMap.has(sKey)) {
+          rowMap.set(sKey, {
+            label: mapStepLabel(rawLabel, 'secondary', t.secondary.tank_name),
+            spec: t.secondary.spec || '',
+            unit: t.secondary.unit || '',
+          });
+          rowOrder.push(sKey);
+        }
+      }
+    }
+  }
+
+  // Per-injector lookup: key -> { value(=average flow), status, error }
+  const injValues = list.map((inj) => {
+    const m = new Map();
+    for (const t of (inj.tests || [])) {
+      if (!t.primary || isFlushStep(t)) continue; // flush step has no cell
+      const err = stepIsErrored(t);
+      const pLabel = t.name || t.raw_name || 'Step';
+      m.set(rowKey(pLabel + '|1'), {
+        value: err ? 'ERROR' : (t.primary.average || ''),
+        status: err ? 'fail' : t.primary.status,
+        error: err,
+      });
+      if (t.secondary) {
+        m.set(rowKey(pLabel + '|2'), {
+          value: err ? 'ERROR' : (t.secondary.average || ''),
+          status: err ? 'fail' : t.secondary.status,
+          error: err,
+        });
+      }
+    }
+    return m;
+  });
+
+  // A flush-step error aborts the run and is not shown as its own row, so
+  // surface it as "ERROR" in the injector's first empty step (the first row it
+  // never reached). Real (non-flush) errored steps already show ERROR in place.
+  list.forEach((inj, idx) => {
+    const flushErrored = (inj.tests || []).some((t) => isFlushStep(t) && stepIsErrored(t));
+    if (!flushErrored) return;
+    const m = injValues[idx];
+    for (const key of rowOrder) {
+      const c = m.get(key);
+      if (!c || c.value == null || c.value === '') {
+        m.set(key, { value: 'ERROR', status: 'fail', error: true });
+        break;
+      }
+    }
+  });
+
+  // Overall per-injector result: any errored or failing scored step → FAIL.
+  const results = list.map((inj) => {
+    const tests = (inj.tests || []).filter((t) => !isFlushStep(t));
+    const scored = tests.filter((t) => t.primary && t.status !== 'skip');
+    const hasError = (inj.tests || []).some(stepIsErrored);
+    const failed = scored.filter((t) => t.status === 'fail').length;
+    const overall = (hasError || failed > 0) ? 'FAIL' : (scored.length === 0 ? '—' : 'PASS');
+    return { overall };
+  });
+
+  return { list, rowOrder, rowMap, injValues, results };
+}
+
+/**
+ * Draws the injector flow-test comparison table (header banner + grid +
+ * pass/fail result row) onto the CURRENT page of an already-open landscape
+ * PDFDocument.
+ *
+ * `opts.title` overrides the banner title (defaults to "Injector Test
+ * Report"). `opts.skipBanner` omits the navy title banner entirely — in that
+ * case `opts.startY` (required) is where the grid starts, and `opts.maxY`
+ * (default: bottom of the page) is where it must end.
+ */
+function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
+  const LM = 28; // landscape margin
+  const pageW = 792;             // Letter landscape width
+  const pageH = 612;             // Letter landscape height
+  const usableW = pageW - LM * 2;
+
+  // Row/column data model (shared with the on-screen results grid so both
+  // stay in lock-step, including ERROR handling).
+  const model = buildInjectorComparisonModel(injectors);
+  const list = model.list;
+  const rowOrder = model.rowOrder;
+  const rowMap = model.rowMap;
+  const injValues = model.injValues;
+
+  let tableTop;
+  if (opts.skipBanner) {
+    // Caller already drew a combined header above this table.
+    tableTop = opts.startY;
+  } else {
+    // ── Header banner — logo + title left-aligned, RMA/Injector/Tested
+    // stacked and right-aligned on the opposite edge ─────────────────────
+    const top = LM;
+    const bannerH = 60;
+    doc.rect(LM, top, usableW, bannerH).fillColor(NAVY).fill();
+    let logoW = 0;
+    if (fs.existsSync(LOGO_PATH)) {
+      try {
+        const logoH = 34;
+        doc.image(LOGO_PATH, LM + 14, top + (bannerH - logoH) / 2, { height: logoH, fit: [110, logoH] });
+        logoW = 110;
+      } catch (_) {}
+    }
+
+    const firstInj = list[0] || {};
+    const partNo = numericPartNumber(firstInj.part_number);
+    // Fall back to the injectors' own Job # when no explicit RMA number was
+    // supplied.
+    const rmaNumber = opts.rmaNumber || [...new Set(list.map(i => i.job_number).filter(Boolean))].join(', ');
+    const testDates = [...new Set(list.map(i => (i.test_datetime || '').slice(0, 10)).filter(Boolean))].sort();
+    const testedText = testDates.length
+      ? `Tested: ${fmtDateMDY(testDates[0])}${testDates.length > 1 ? ' – ' + fmtDateMDY(testDates[testDates.length - 1]) : ''}`
+      : '';
+
+    // Right-aligned stacked block: Job/RMA #, Injector part #, Tested date range.
+    const rightW = 220;
+    const rightX = LM + usableW - rightW - 14;
+    let ry = top + 9;
+    if (rmaNumber) {
+      doc.fontSize(9.5).font('Helvetica-Bold').fillColor(WHITE);
+      doc.text(rmaNumber, rightX, ry, { width: rightW, align: 'right', lineBreak: false });
+      ry += 13;
+    }
+    if (partNo && partNo !== '—') {
+      doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
+      doc.text(`Injector: ${partNo}`, rightX, ry, { width: rightW, align: 'right', lineBreak: false });
+      ry += 11;
+    }
+    if (testedText) {
+      doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
+      doc.text(testedText, rightX, ry, { width: rightW, align: 'right', lineBreak: false });
+    }
+
+    // Title — left-aligned, vertically centered, immediately right of the logo.
+    const titleX = LM + logoW + 24;
+    const titleW = rightX - titleX - 14;
+    doc.fontSize(16).font('Helvetica-Bold').fillColor(WHITE);
+    doc.text(opts.title || 'Injector Test Report', titleX, top + (bannerH - 16) / 2 - 2, { width: titleW, height: 20, align: 'left', lineBreak: false, ellipsis: true });
+
+    tableTop = top + bannerH + 10;
+  }
+
+  // ── Row height + per-row font sizes ───────────────────────────────────
+  // These depend only on how much vertical space is available and how many
+  // rows there are — NOT on column widths — so they're computed before the
+  // column geometry below, which needs specValFont to size the Spec column
+  // to fit its content.
+  const bottomLimit = opts.maxY != null ? opts.maxY : (pageH - LM);
+  const n = Math.max(list.length, 1);
+  const headerRowH = 22;
+  const resultRowH = 20; // Pass/Fail summary row at the bottom
+  const availH = bottomLimit - tableTop - headerRowH - resultRowH - 6;
+  const dataRowCount = rowOrder.length || 1;
+  let rowH = Math.floor(availH / dataRowCount);
+  rowH = Math.max(20, Math.min(rowH, 32));
+  // If min row height overflows the page, fall back to the largest that fits.
+  if (rowH * dataRowCount > availH) rowH = Math.max(16, Math.floor(availH / dataRowCount));
+  const nameFont = rowH >= 26 ? 8 : (rowH >= 20 ? 7 : 6.2);
+  // Step-name font: fixed size, vertically centered in its row.
+  const stepNameFont = 9;
+  const specValFont = nameFont;
+
+  // ── Column geometry ───────────────────────────────────────────────────
+  // Fixed columns: Test Step (label only, single line) + Spec (sized to fit
+  // its content — range/fallback text plus the unit, shown to the right of
+  // the max value). The remaining width is split evenly across the injector
+  // columns.
+  doc.font('Helvetica-Bold').fontSize(stepNameFont);
+  let stepContentW = doc.widthOfString('TEST STEP');
+  rowOrder.forEach((key) => {
+    const row = rowMap.get(key);
+    doc.font('Helvetica-Bold').fontSize(stepNameFont);
+    stepContentW = Math.max(stepContentW, doc.widthOfString(row.label));
+  });
+  let stepW = Math.min(usableW * 0.22, Math.max(90, stepContentW + 16));
+
+  // Spec column width fits its content: the "SPEC" header plus the widest
+  // Min-Max range (or fallback) string + unit across every row.
+  doc.font('Helvetica-Bold').fontSize(8);
+  let specContentW = doc.widthOfString('SPEC');
+  rowOrder.forEach((key) => {
+    const row = rowMap.get(key);
+    const parsed = parseSpecRow(row);
+    doc.font('Helvetica-Bold').fontSize(specValFont);
+    const text = parsed.hasMatch ? parsed.rangeText : parsed.fallbackText;
+    let w = text ? doc.widthOfString(text) : 0;
+    if (row.unit) w += 3 + unitLabelWidth(doc, row.unit);
+    specContentW = Math.max(specContentW, w);
+  });
+  let specW = Math.min(usableW * 0.22, specContentW + 16);
+
+  const MIN_INJ_COL = 44;
+  let injColW = (usableW - stepW - specW) / n;
+  if (injColW < MIN_INJ_COL) {
+    // Shrink the fixed columns to guarantee everything fits on one page.
+    const need = MIN_INJ_COL * n;
+    const leftover = usableW - need;
+    stepW = Math.max(104, leftover * 0.58);
+    specW = Math.max(66, leftover * 0.42);
+    injColW = (usableW - stepW - specW) / n;
+  }
+  const col1X = LM;
+  const col2X = LM + stepW;
+  const injStartX = LM + stepW + specW;
+
+  // ── Dynamic measured-value font scaling ───────────────────────────────
+  // The measured flow value must stay readable but never overflow its
+  // column. Scale the font to the AVAILABLE COLUMN WIDTH (fewer injectors =
+  // wider columns = larger font) as well as the row height. Widest sample
+  // value determines how large we can safely go for the given injColW.
+  let widestVal = 4; // at least a few chars ("—")
+  injValues.forEach((m) => {
+    m.forEach((cell) => {
+      const s = String((cell && cell.value) || '');
+      if (s.length > widestVal) widestVal = s.length;
+    });
+  });
+  const rowValCap = rowH >= 28 ? 10 : (rowH >= 22 ? 8.5 : 7);
+  // Width the value cell can use (minus padding), and the per-char width at
+  // Helvetica-Bold is ~0.6em, so max font ≈ availWidth / (chars * 0.6).
+  const valAvail = injColW - 6;
+  const widthCappedFont = valAvail / (Math.max(widestVal, 1) * 0.6);
+  const valFont = Math.max(6, Math.min(rowValCap, widthCappedFont));
+
+  // ── Draw table header row ─────────────────────────────────────────────
+  let y = tableTop;
+  doc.rect(LM, y, usableW, headerRowH).fillColor(NAVY).fill();
+
+  doc.fontSize(8).font('Helvetica-Bold').fillColor(WHITE);
+  doc.text('TEST STEP', col1X + 4, y + 7, { width: stepW - 8, height: headerRowH - 6, lineBreak: false });
+  doc.text('SPEC', col2X + 6, y + 7, { width: specW - 10, height: headerRowH - 6, lineBreak: false });
+
+  // Header column separators
+  doc.strokeColor('#3A4A6B').lineWidth(0.4).moveTo(col2X, y).lineTo(col2X, y + headerRowH).stroke();
+  doc.strokeColor('#3A4A6B').lineWidth(0.4).moveTo(injStartX, y).lineTo(injStartX, y + headerRowH).stroke();
+
+  // Injector column headers — SERIAL NUMBER ONLY.
+  let x = injStartX;
+  list.forEach((inj) => {
+    doc.strokeColor('#3A4A6B').lineWidth(0.4).moveTo(x, y).lineTo(x, y + headerRowH).stroke();
+    doc.fontSize(injColW < 58 ? 6.5 : 7.5).font('Helvetica-Bold').fillColor(WHITE);
+    const sn = inj.serial_number || '—';
+    doc.text(sn, x + 3, y + 7, { width: injColW - 6, height: headerRowH - 8, align: 'center', lineBreak: false, ellipsis: true });
+    x += injColW;
+  });
+
+  y += headerRowH;
+
+  // ── Draw data rows ────────────────────────────────────────────────────
+  rowOrder.forEach((key, ri) => {
+    const row = rowMap.get(key);
+    const bg = ri % 2 === 1 ? ROWALT : WHITE;
+    doc.rect(LM, y, usableW, rowH).fillColor(bg).fill();
+    doc.strokeColor(BORDER).lineWidth(0.3).moveTo(LM, y + rowH).lineTo(LM + usableW, y + rowH).stroke();
+
+    // ── Column 1: Test Step — label only ─────────────────────────────────
+    doc.fontSize(stepNameFont).font('Helvetica-Bold').fillColor(BLACK);
+    const labelY = y + (rowH - stepNameFont) / 2 - 1;
+    doc.text(row.label, col1X + 4, labelY, { lineBreak: false });
+
+    // ── Column 2: Spec — "Min - Max" (or fallback), unit to the right of
+    // the max value ───────────────────────────────────────────────────────
+    const parsed = parseSpecRow(row);
+    const specTextX = col2X + 6;
+    const specTextW = specW - 10;
+    const specText = parsed.hasMatch ? parsed.rangeText : parsed.fallbackText;
+    if (specText) {
+      const specY = y + (rowH - specValFont) / 2 - 1;
+      doc.fontSize(specValFont).font('Helvetica-Bold').fillColor(BLACK);
+      doc.text(specText, specTextX, specY, {
+        width: specTextW, align: 'left', height: specValFont + 2, ellipsis: true,
+      });
+      if (row.unit) {
+        const textW = doc.widthOfString(specText);
+        const unitY = specY + (specValFont - UNIT_FONT_SIZE);
+        drawUnitLabel(doc, row.unit, specTextX + textW + 3, unitY, DGRAY);
+      }
+    } else {
+      doc.fontSize(nameFont).font('Helvetica').fillColor(DGRAY);
+      doc.text('—', specTextX, y + (rowH - nameFont) / 2 - 1, {
+        width: specTextW, align: 'left', lineBreak: false,
+      });
+    }
+
+    // Fixed-column separators
+    doc.strokeColor(BORDER).lineWidth(0.3).moveTo(col2X, y).lineTo(col2X, y + rowH).stroke();
+    doc.strokeColor(BORDER).lineWidth(0.3).moveTo(injStartX, y).lineTo(injStartX, y + rowH).stroke();
+
+    // ── Injector columns: AVERAGE flow value, green/red ─────────────────
+    let cx = injStartX;
+    injValues.forEach((m) => {
+      doc.strokeColor(BORDER).lineWidth(0.3).moveTo(cx, y).lineTo(cx, y + rowH).stroke();
+      const cell = m.get(key);
+      const val = cell ? (cell.value || '') : '';
+      let color = DGRAY;
+      if (cell) {
+        if (cell.status === 'pass') color = GREEN;
+        else if (cell.status === 'fail') color = RED;
+      }
+      doc.fontSize(valFont).font(cell && (cell.status === 'pass' || cell.status === 'fail') ? 'Helvetica-Bold' : 'Helvetica').fillColor(color);
+      doc.text(val || '—', cx + 2, y + (rowH - valFont) / 2 - 1, { width: injColW - 4, align: 'center', lineBreak: false, ellipsis: true });
+      cx += injColW;
+    });
+
+    y += rowH;
+  });
+
+  // ── Result row (overall Pass/Fail per injector) at the bottom ─────────
+  const resultTop = y;
+  doc.rect(LM, y, usableW, resultRowH).fillColor('#EDF1F7').fill();
+  doc.fontSize(8).font('Helvetica-Bold').fillColor(NAVY);
+  doc.text('RESULT', col1X + 4, y + (resultRowH - 8) / 2, { width: stepW - 8, height: resultRowH - 4, lineBreak: false });
+  doc.text('', col2X + 2, y + 4, { width: specW - 4, align: 'center', lineBreak: false });
+  doc.strokeColor(BORDER).lineWidth(0.3).moveTo(col2X, y).lineTo(col2X, y + resultRowH).stroke();
+  doc.strokeColor(BORDER).lineWidth(0.3).moveTo(injStartX, y).lineTo(injStartX, y + resultRowH).stroke();
+  let rx = injStartX;
+  list.forEach((inj, idx) => {
+    doc.strokeColor(BORDER).lineWidth(0.3).moveTo(rx, y).lineTo(rx, y + resultRowH).stroke();
+    const overall = (model.results[idx] && model.results[idx].overall) || '—';
+    doc.fontSize(injColW < 58 ? 8 : 9).font('Helvetica-Bold')
+       .fillColor(overall === 'FAIL' ? RED : (overall === 'PASS' ? GREEN : DGRAY));
+    doc.text(overall, rx + 2, y + (resultRowH - 9) / 2, { width: injColW - 4, align: 'center', lineBreak: false });
+    rx += injColW;
+  });
+  y += resultRowH;
+
+  // ── Outer border ──────────────────────────────────────────────────────
+  const tableBottom = y;
+  doc.strokeColor(BORDER).lineWidth(0.6).rect(LM, tableTop, usableW, tableBottom - tableTop).stroke();
+  doc.strokeColor(BORDER).lineWidth(0.4).moveTo(col2X, tableTop).lineTo(col2X, tableBottom).stroke();
+  doc.strokeColor(BORDER).lineWidth(0.4).moveTo(injStartX, tableTop).lineTo(injStartX, tableBottom).stroke();
+  // Line above the result row.
+  doc.strokeColor(NAVY).lineWidth(0.8).moveTo(LM, resultTop).lineTo(LM + usableW, resultTop).stroke();
+
+  // ── Footer ────────────────────────────────────────────────────────────
+  if (!opts.hideFooter) {
+    const footY = bottomLimit - 8;
+    if (footY > tableBottom + 2) {
+      doc.fontSize(6.5).font('Helvetica').fillColor(LGRAY);
+      doc.text(
+        `Generated ${new Date().toISOString().slice(0, 19).replace('T', ' ')} · Flow value = average reading · Green = Pass · Red = Fail`,
+        LM, footY, { width: usableW, align: 'right', lineBreak: false, height: 8 }
+      );
+    }
+  }
+
+  return tableBottom;
 }
 
 module.exports = { generateInspectionPdf, generateInjectorComparisonPdf };
