@@ -1,24 +1,28 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, ClipboardList, PlusCircle, LogOut, Shield, AlertTriangle, Settings, X, Bell, User, BarChart2, FileImage, KeyRound } from 'lucide-react'
+import { LayoutDashboard, ClipboardList, PlusCircle, LogOut, Shield, AlertTriangle, Settings, X, Bell, User, BarChart2, FileImage, KeyRound, Gauge } from 'lucide-react'
 import { useMsal } from '@azure/msal-react'
 import { isEntraConfigured } from '../lib/msalConfig'
 import { getUser, clearAuth } from '../lib/auth'
 import { useQualityAlertCount } from '../hooks/useQualityAlerts'
 import { useToast } from '../hooks/useToast'
 import api from '../lib/api'
+import { NAV_ITEMS, visibleNavItems } from '../lib/nav'
 
-const nav = [
-  { to: '/',                icon: LayoutDashboard, label: 'Dashboard',       end: true, permKey: 'dashboard' },
-  { to: '/my-inspections',  icon: User,            label: 'My Inspections',             permKey: 'my_inspections', hideForAdmin: true },
-  { to: '/inspections',     icon: ClipboardList,   label: 'Inspections',                permKey: 'inspections' },
-  { to: '/inspections/new', icon: PlusCircle,      label: 'New Inspection', accent: true, permKey: 'new_inspection' },
-  { to: '/ncrs',            icon: AlertTriangle,   label: 'NCRs',                       permKey: 'ncrs' },
-  { to: '/quality-alerts',  icon: Bell,            label: 'Quality Alerts', alertKey: 'qualityAlerts', permKey: 'quality_alerts' },
-  { to: '/drawings',        icon: FileImage,       label: 'Drawings',                   permKey: 'drawings' },
-  { to: '/reports',         icon: BarChart2,       label: 'Reports',        adminOnly: true },
-  { to: '/admin',           icon: Settings,        label: 'Admin',          adminOnly: true },
-]
+// Icon components for the shared nav definition (see lib/nav.js — kept there,
+// icon-free, so the visibility rules can be reused by the route guards).
+const NAV_ICONS = {
+  dashboard: LayoutDashboard,
+  user: User,
+  clipboard: ClipboardList,
+  plus: PlusCircle,
+  alert: AlertTriangle,
+  bell: Bell,
+  drawing: FileImage,
+  chart: BarChart2,
+  settings: Settings,
+  gauge: Gauge,
+}
 
 function ChangePasswordModal({ onClose }) {
   const [form, setForm] = useState({ current: '', next: '', confirm: '' })
@@ -147,23 +151,9 @@ export default function Sidebar({ open = false, onClose }) {
     if (onClose) onClose()
   }
 
-  const isAdminRole = user && (user.role === 'admin' || user.role === 'qc_manager')
-
-  // Parse per-user page permissions (null = no restrictions = show all)
-  let allowedTabs = null
-  if (user?.permissions && !isAdminRole) {
-    try {
-      const perms = typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions
-      if (Array.isArray(perms?.tabs)) allowedTabs = perms.tabs
-    } catch (_) {}
-  }
-
-  function isNavVisible(item) {
-    if (item.adminOnly) return isAdminRole
-    if (item.hideForAdmin && isAdminRole) return false
-    if (allowedTabs && item.permKey && !allowedTabs.includes(item.permKey)) return false
-    return true
-  }
+  // Visibility (admin-only items, per-user page permissions) lives in lib/nav.js
+  // so the sidebar and the route guards can never disagree.
+  const navItems = visibleNavItems(user, NAV_ITEMS)
 
   return (
     <>
@@ -203,7 +193,9 @@ export default function Sidebar({ open = false, onClose }) {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-3 py-5 space-y-1">
-          {nav.filter(item => isNavVisible(item)).map(({ to, icon: Icon, label, end, accent, alertKey }) => (
+          {navItems.map(({ to, icon, label, end, accent, alertKey }) => {
+            const Icon = NAV_ICONS[icon] || LayoutDashboard
+            return (
             <NavLink
               key={to}
               to={to}
@@ -229,7 +221,8 @@ export default function Sidebar({ open = false, onClose }) {
                 </span>
               )}
             </NavLink>
-          ))}
+            )
+          })}
         </nav>
 
         <div className="px-3 py-4 border-t border-white/10">

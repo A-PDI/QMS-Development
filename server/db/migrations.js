@@ -417,6 +417,17 @@ function applyMigrations(db) {
       console.log(`[Migration] Inserted template: ${formNo}`);
     }
   });
+
+  // ── Migration: index injector reports by job number ───────────────────────
+  // The Injector Tests page groups and filters the selection list by job
+  // number before generating reports, so that column needs an index on
+  // existing databases too (new ones get it from sqlite.js).
+  once('injector_reports_job_number_index', () => {
+    const info = db.all('PRAGMA table_info(injector_test_reports)', []);
+    if (!info || info.length === 0) return; // table created later by sqlite.js
+    if (!info.some(c => c.name === 'job_number')) return;
+    db.exec('CREATE INDEX IF NOT EXISTS idx_injector_reports_job ON injector_test_reports(job_number)');
+  });
 }
 
 module.exports = { applyMigrations };

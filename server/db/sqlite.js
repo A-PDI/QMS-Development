@@ -256,6 +256,8 @@ function migrateSchema() {
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_injector_reports_unique ON injector_test_reports(report_ext_id, slot_position)`,
     `CREATE INDEX IF NOT EXISTS idx_injector_reports_datetime ON injector_test_reports(test_datetime DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_injector_reports_serial ON injector_test_reports(serial_number)`,
+    // Selection on the Injector Tests page groups/filters by job number.
+    `CREATE INDEX IF NOT EXISTS idx_injector_reports_job ON injector_test_reports(job_number)`,
   ];
   for (const sql of tableMigrations) {
     try { rawDb.exec(sql); } catch (_) {}

@@ -23,6 +23,14 @@
  */
 
 const db = require('../db/adapter');
+const {
+  splitStepName,
+  normaliseStepCode,
+  isFlushStep,
+  stepDisplayName,
+  formatErrorDescription,
+  formatErrorValue,
+} = require('./injectorSteps');
 
 const CARBONZAPP_URL = 'https://cloudx.carbonzapp.com/userapi/v1/client/getReports';
 
@@ -95,28 +103,31 @@ function toNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
-// FL(W) is an internal bench diagnostic step, not a customer-facing test —
-// exclude it everywhere test steps are consumed (reports, pass/fail totals,
-// dimensional inspection sections) rather than filtering it per-consumer.
-function isInternalTestStep(testInfo) {
-  const raw = String((testInfo && testInfo.test_name) || '')
-    .replace(/\s*:\s*SKIPPED\s*$/i, '')
-    .trim();
-  return /^FL\s*\(\s*W\s*\)$/i.test(raw);
-}
-
 /**
  * Build a normalised list of test steps for a single injector report object.
- * Each step: { name, category, conditions, spec, unit, results, status,
- *              secondary: {...}|null }
+ * Each step: { code, name, display_name, category, conditions, spec, unit,
+ *              results, status, errored, error_description, error_raw,
+ *              internal, secondary: {...}|null }
+ *
+ * NAME vs ERROR: the bench appends anomaly text to the step name itself
+ * ("iVM.06 : HP ERROR (out of range) #1000"). `name` is always the step code
+ * with that text removed, so a failing result can never rename a test step;
+ * the error only ever surfaces through `errored` / `error_description` and the
+ * result value ("Error: Out of Range").
+ *
+ * FL(W) — the internal flush/prep diagnostic — is kept in the list but flagged
+ * `internal: true` so consumers can exclude it from customer-facing rows while
+ * still seeing an aborted-run error.
  */
 function normaliseTests(report) {
   const tests = Array.isArray(report.AllTests) ? report.AllTests : [];
-  return tests.filter((t) => !isInternalTestStep(t.TestInfo || {})).map((t) => {
+  return tests.map((t) => {
     const ti = t.TestInfo || {};
     const pt = t.PrimaryTank || null;
     const st = t.SecondaryTank || null;
-    const skipped = Number(ti.status) === 1;
+    const parsed = splitStepName(ti.test_name);
+    const errored = parsed.errored;
+    const skipped = Number(ti.status) === 1 && !errored;
 
     const conditionParts = [];
     if (ti.rpm != null && ti.rpm !== '') conditionParts.push(`RPM ${ti.rpm}`);
@@ -136,37 +147,52 @@ function normaliseTests(report) {
       strk: clean(ti.strk),
     };
 
-    function tankView(tank) {
-      if (!tank) return null;
-      const specText = tank.text_green != null && tank.text_green !== ''
-        ? `${tank.text_green}${tank.tank_unit ? ' ' + tank.tank_unit : ''}`
-        : (tank.tank_unit || '');
-      const avr = toNum(tank.AvrResult);
+    // The API error description, preserved verbatim plus a cleaned-up form for
+    // display ("HP ERROR (out of range) #1000" → "Out of Range").
+    const errorRaw = errored ? parsed.errorRaw : '';
+    const errorDescription = errored ? formatErrorDescription(errorRaw) : '';
+    const errorValue = errored ? formatErrorValue(errorDescription) : '';
+
+    function tankView(tank, role) {
+      if (!tank && !errored) return null;
+      const t2 = tank || {};
+      const specText = t2.text_green != null && t2.text_green !== ''
+        ? `${t2.text_green}${t2.tank_unit ? ' ' + t2.tank_unit : ''}`
+        : (t2.tank_unit || '');
+      const avr = toNum(t2.AvrResult);
       return {
-        tank_name: tank.tank_name || '',
-        unit: tank.tank_unit || '',
+        tank_name: t2.tank_name || '',
+        unit: t2.tank_unit || '',
         // Human-readable green-band spec, e.g. "8.5 +/- 4.5 mm3/STRK".
         spec: specText,
         // Structured specification pieces for the comparison report columns.
-        target: tank.target_blue != null ? String(tank.target_blue) : '',
-        tolerance: tank.tol_blue != null ? String(tank.tol_blue) : '',
+        target: t2.target_blue != null ? String(t2.target_blue) : '',
+        tolerance: t2.tol_blue != null ? String(t2.tol_blue) : '',
         // Green acceptance band (the true pass/fail range).
-        min_green: toNum(tank.min_green),
-        max_green: toNum(tank.max_green),
-        results: tank.results != null ? String(tank.results) : '',
+        min_green: toNum(t2.min_green),
+        max_green: toNum(t2.max_green),
+        results: t2.results != null ? String(t2.results) : '',
         // The single "flow" value reported per injector = the average reading.
-        average: avr != null ? String(avr) : '',
-        status: tankStatus(tank),
+        // An errored step has no trustworthy measurement, so the value cell
+        // carries the error text instead — the step NAME is left untouched.
+        average: errored ? errorValue : (avr != null ? String(avr) : ''),
+        error: errored,
+        error_description: errorDescription,
+        status: errored ? FAIL : tankStatus(t2),
+        // Which display label this tank uses ("Resistance" vs "Inductance").
+        role,
       };
     }
 
-    const primary = tankView(pt);
-    const secondary = tankView(st);
+    const primary = tankView(pt, 'primary');
+    const secondary = st ? tankView(st, 'secondary') : null;
 
-    // Overall step status: skipped if TestInfo says so or no tank; otherwise the
-    // worst of primary/secondary (FAIL beats PASS).
+    // Overall step status: errors always fail; otherwise skipped if TestInfo
+    // says so or no tank; otherwise the worst of primary/secondary.
     let status = SKIP;
-    if (!skipped && primary) {
+    if (errored) {
+      status = FAIL;
+    } else if (!skipped && primary) {
       const parts = [primary.status, secondary ? secondary.status : null].filter(Boolean);
       if (parts.includes(FAIL)) status = FAIL;
       else if (parts.includes(PASS)) status = PASS;
@@ -174,7 +200,10 @@ function normaliseTests(report) {
     }
 
     return {
-      name: (ti.test_name || '').replace(/\s*:\s*SKIPPED\s*$/i, '').trim() || (ti.test_name || ''),
+      // Step code with any bench anomaly text removed — never the error message.
+      name: parsed.base || (ti.test_name || ''),
+      code: normaliseStepCode(parsed.base),
+      display_name: stepDisplayName(parsed.base, 'primary', pt && pt.tank_name),
       raw_name: ti.test_name || '',
       order: ti.test_order != null ? Number(ti.test_order) : 0,
       category: ti.test_category_id != null ? Number(ti.test_category_id) : null,
@@ -182,6 +211,11 @@ function normaliseTests(report) {
       params,
       skipped,
       status,
+      errored,
+      error_description: errorDescription,
+      // The untouched API text, kept for troubleshooting (never shown raw).
+      error_raw: errorRaw,
+      internal: isFlushStep(parsed.base),
       primary,
       secondary,
     };
@@ -194,10 +228,16 @@ function normaliseTests(report) {
 function mapReportToInjector(report) {
   const slot = report.SlotsData || {};
   const tests = normaliseTests(report);
-  const scored = tests.filter((t) => !t.skipped && t.primary);
+  // Customer-facing steps only (FL(W) is internal). An errored step is scored
+  // as a FAIL — a step the bench could not measure is not a pass.
+  const scored = tests.filter((t) => !t.internal && !t.skipped && (t.primary || t.errored));
   const failed = scored.filter((t) => t.status === FAIL).length;
   const passed = scored.filter((t) => t.status === PASS).length;
-  const overallPass = scored.length > 0 && failed === 0 ? 1 : (scored.length === 0 ? null : 0);
+  // An error on the internal flush step aborts the whole run → not a pass.
+  const internalError = tests.some((t) => t.internal && t.errored);
+  const overallPass = internalError
+    ? 0
+    : (scored.length === 0 ? null : (failed === 0 ? 1 : 0));
 
   return {
     report_ext_id: report._id != null ? String(report._id) : '',
@@ -552,31 +592,12 @@ async function syncNow({ apiKey, fullResync = false } = {}) {
   console.log(`[CarbonZapp] Fetched ${fetched.length} report object(s) from the bench (${excludedByRouting} excluded by job-number routing).`);
   const result = upsertReports(raw);
 
-  // Auto-create/fill inspections — ONE inspection per test report, grouping all
-  // injectors that share the same report_ext_id into a single multi-item form.
-  const { autoFillReportInspection } = require('./injectorInspection');
-  const byReport = new Map();
-  for (const inj of result.injectors) {
-    const key = inj.report_ext_id;
-    if (!byReport.has(key)) byReport.set(key, []);
-    byReport.get(key).push(inj);
-  }
-  let inspectionsCreated = 0;
-  for (const [reportExtId] of byReport) {
-    try {
-      // Load ALL injectors for this report from the DB (not just the ones that
-      // changed in this sync) so an incremental sync never drops sibling
-      // injectors from the multi-item inspection.
-      const rows = db.all(
-        'SELECT * FROM injector_test_reports WHERE report_ext_id = ? ORDER BY slot_position',
-        [reportExtId]
-      ).map(hydrateInjectorRow);
-      const created = autoFillReportInspection(reportExtId, rows);
-      if (created) inspectionsCreated += 1;
-    } catch (err) {
-      console.error('[CarbonZapp] auto-fill inspection failed:', err.message);
-    }
-  }
+  // NOTE: synchronisation IMPORTS TEST RECORDS ONLY. Inspection reports are no
+  // longer created here — the user selects the injectors they want on the
+  // Injector Tests page and generates reports explicitly (see
+  // services/injectorReports.js). Keeping the two workflows separate stops the
+  // bench from filling the app with unwanted draft inspections.
+  const inspectionsCreated = 0;
 
   // Deletion handling: a normal incremental sync only returns RECENT reports,
   // so a missing report does NOT imply deletion. Only a full resync fetches the
@@ -592,7 +613,7 @@ async function syncNow({ apiKey, fullResync = false } = {}) {
 
   const now = new Date().toISOString();
   setSetting('carbonzapp_last_sync', now);
-  console.log(`[CarbonZapp] Sync complete: ${result.imported} new, ${result.updated} updated, ${inspectionsCreated} inspection(s) created, ${deletion.reportsDeleted} pruned.`);
+  console.log(`[CarbonZapp] Sync complete: ${result.imported} new, ${result.updated} updated, ${deletion.reportsDeleted} pruned (no inspections created — reports are generated manually).`);
 
   return {
     fetched: raw.length,

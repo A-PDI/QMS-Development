@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { getToken } from './lib/auth'
+import { getToken, getUser } from './lib/auth'
+import { isAdminUser } from './lib/nav'
 import Layout from './components/Layout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -15,6 +16,7 @@ import MyInspections from './pages/MyInspections'
 import QualityAlerts from './pages/QualityAlerts'
 import Reports from './pages/Reports'
 import Admin from './pages/Admin'
+import InjectorTests from './pages/InjectorTests'
 import Drawings from './pages/Drawings'
 import NotFound from './pages/NotFound'
 
@@ -29,6 +31,13 @@ function PrivateRoute({ children }) {
 // Redirects already-authenticated users away from /login to the dashboard.
 function PublicRoute({ children }) {
   return getToken() ? <Navigate to="/" replace /> : children
+}
+
+// Guards admin-only pages (e.g. Injector Tests). A non-admin who types the URL
+// is sent back to the dashboard; the matching API routes reject them too, so
+// the data is protected even if this check is bypassed.
+function AdminRoute({ children }) {
+  return isAdminUser(getUser()) ? children : <Navigate to="/" replace />
 }
 
 export default function App() {
@@ -65,6 +74,14 @@ export default function App() {
           <Route path="drawings" element={<Drawings />} />
           <Route path="reports" element={<Reports />} />
           <Route path="admin" element={<Admin />} />
+          <Route
+            path="injector-tests"
+            element={
+              <AdminRoute>
+                <InjectorTests />
+              </AdminRoute>
+            }
+          />
           <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>
