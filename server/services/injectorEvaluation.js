@@ -153,6 +153,12 @@ function failuresByTestPoint(injectors = []) {
  *
  * A LOWER average absolute percentage deviation means a more consistent group.
  *
+ * Two spread figures are reported alongside it:
+ *   rangeDeviationPct         = (max − min) / min × 100 — how much higher the
+ *                               highest passing injector is than the lowest
+ *                               ("Maximum Deviation" on the report)
+ *   maxIndividualDeviationPct = the largest single deviation from the mean
+ *
  * Data handling:
  *   • failed injectors are excluded entirely
  *   • missing / non-numeric / error values are excluded from THAT test point
@@ -180,27 +186,32 @@ function consistencyOfPassingInjectors(injectors = [], codes = IVM_FLOW_CODES) {
     }
 
     const sampleCount = measurements.length;
+    const empty = {
+      code, label, unit, sampleCount, excludedCount: excluded,
+      mean: null, minValue: null, maxValue: null,
+      avgDeviationPct: null, rangeDeviationPct: null, maxIndividualDeviationPct: null,
+      insufficient: true,
+    };
     if (sampleCount === 0) {
-      return {
-        code, label, unit, sampleCount, excludedCount: excluded,
-        mean: null, avgDeviationPct: null, maxDeviationPct: null,
-        insufficient: true,
-        note: 'No valid measurements from passing injectors',
-      };
+      return { ...empty, note: 'No valid measurements from passing injectors' };
     }
 
+    const minValue = Math.min(...measurements);
+    const maxValue = Math.max(...measurements);
     const mean = measurements.reduce((a, b) => a + b, 0) / sampleCount;
     if (mean === 0) {
       return {
-        code, label, unit, sampleCount, excludedCount: excluded,
-        mean, avgDeviationPct: null, maxDeviationPct: null,
-        insufficient: true,
+        ...empty,
+        mean, minValue, maxValue,
         note: 'Mean is zero — percentage deviation is undefined',
       };
     }
 
     const deviations = measurements.map((v) => Math.abs((v - mean) / mean) * 100);
     const avgDeviationPct = deviations.reduce((a, b) => a + b, 0) / sampleCount;
+    // "Maximum Deviation": how much higher the highest passing injector reads
+    // than the lowest. Undefined when the lowest reading is zero.
+    const rangeDeviationPct = minValue === 0 ? null : ((maxValue - minValue) / minValue) * 100;
 
     return {
       code,
@@ -209,8 +220,11 @@ function consistencyOfPassingInjectors(injectors = [], codes = IVM_FLOW_CODES) {
       sampleCount,
       excludedCount: excluded,
       mean,
+      minValue,
+      maxValue,
       avgDeviationPct,
-      maxDeviationPct: Math.max(...deviations),
+      rangeDeviationPct,
+      maxIndividualDeviationPct: Math.max(...deviations),
       // One measurement cannot describe group consistency.
       insufficient: sampleCount < 2,
       note: sampleCount < 2 ? 'Only one valid measurement — consistency not meaningful' : '',
@@ -232,13 +246,18 @@ function evaluateShipment(injectors = []) {
     summary,
     failures,
     consistency,
-    // Group-level roll-up of the consistency analysis, for the chart caption.
+    // Group-level roll-up of the deviation analysis, for the chart captions.
     consistencyOverall: rated.length
       ? {
           averageDeviationPct: rated.reduce((a, c) => a + c.avgDeviationPct, 0) / rated.length,
           bestPoint: rated.reduce((a, c) => (c.avgDeviationPct < a.avgDeviationPct ? c : a)),
           worstPoint: rated.reduce((a, c) => (c.avgDeviationPct > a.avgDeviationPct ? c : a)),
           ratedPoints: rated.length,
+          // Widest lowest-to-highest spread across the rated test points.
+          maxRangeDeviationPct: rated.reduce(
+            (a, c) => (c.rangeDeviationPct != null && c.rangeDeviationPct > a ? c.rangeDeviationPct : a),
+            0
+          ),
         }
       : null,
     outcomes: list.map((inj) => ({

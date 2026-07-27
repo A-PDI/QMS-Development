@@ -3,9 +3,9 @@
  * Test-step naming and error handling.
  *
  * Covers requirement scenarios 1–3: a valid result keeps its step name and
- * value; an out-of-range result keeps the step name and shows
- * "Error: Out of Range"; and different API error messages never change the
- * step name.
+ * value; an out-of-range result keeps the step name and shows the named
+ * condition ("Excess Return"); and different API error messages never change
+ * the step name.
  */
 
 const test = require('node:test');
@@ -74,12 +74,18 @@ test('splits a bench name into step code and error description', () => {
 });
 
 test('formats API error descriptions for display', () => {
-  assert.strictEqual(formatErrorDescription('HP ERROR (out of range) #1000'), 'Out of Range');
+  // An out-of-range result is the known EXCESS RETURN condition, so it is named
+  // rather than reported as a generic error.
+  assert.strictEqual(formatErrorDescription('HP ERROR (out of range) #1000'), 'Excess Return');
+  assert.strictEqual(formatErrorDescription('LP ERROR (Out Of Range)'), 'Excess Return');
+  assert.strictEqual(formatErrorValue('Excess Return'), 'Excess Return', 'no "Error:" prefix on a named condition');
+
+  // Machine faults keep the API wording behind the "Error:" prefix.
   assert.strictEqual(formatErrorDescription('ERROR: Communication Failure'), 'Communication Failure');
   assert.strictEqual(formatErrorDescription('Invalid Measurement'), 'Invalid Measurement');
   assert.strictEqual(formatErrorDescription('(timeout)'), 'Timeout');
   assert.strictEqual(formatErrorDescription(''), 'Test Error');
-  assert.strictEqual(formatErrorValue('Out of Range'), 'Error: Out of Range');
+  assert.strictEqual(formatErrorValue('Communication Failure'), 'Error: Communication Failure');
 });
 
 test('different API errors never change the test-step name', () => {
@@ -90,7 +96,7 @@ test('different API errors never change the test-step name', () => {
     'ERROR (timeout) #77',
   ];
   const expectedValues = [
-    'Error: Out of Range',
+    'Excess Return',
     'Error: Communication Failure',
     'Error: Invalid Measurement',
     'Error: Timeout',
@@ -109,8 +115,9 @@ test('a valid result keeps its numeric value', () => {
   assert.strictEqual(stepResultValue(step, { average: '224.5' }), '224.5');
   assert.strictEqual(numericValue('224.5'), 224.5);
   assert.strictEqual(isErrorValue('224.5'), false);
-  assert.strictEqual(isErrorValue('Error: Out of Range'), true);
-  assert.strictEqual(numericValue('Error: Out of Range'), null);
+  assert.strictEqual(isErrorValue('Error: Communication Failure'), true);
+  assert.strictEqual(isErrorValue('Excess Return'), true, 'a named condition is an error value, not a number');
+  assert.strictEqual(numericValue('Excess Return'), null);
 });
 
 test('the internal FL(W) flush step is recognised', () => {
@@ -152,9 +159,9 @@ test('sync keeps the step name and moves the error into the value', () => {
   assert.strictEqual(step.name, 'iVM.06', 'step name must not contain the error text');
   assert.strictEqual(step.display_name, 'Peak Torque');
   assert.ok(step.errored);
-  assert.strictEqual(step.error_description, 'Out of Range');
-  assert.strictEqual(step.error_raw, 'HP ERROR (out of range) #1000');
-  assert.strictEqual(step.primary.average, 'Error: Out of Range');
+  assert.strictEqual(step.error_description, 'Excess Return');
+  assert.strictEqual(step.error_raw, 'HP ERROR (out of range) #1000', 'the API text is preserved');
+  assert.strictEqual(step.primary.average, 'Excess Return');
   assert.strictEqual(step.status, 'fail');
 
   // A valid step in the same report is unaffected.

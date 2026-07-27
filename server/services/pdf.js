@@ -12,7 +12,7 @@ const {
 } = require('./injectorSteps');
 const { MIN_INJECTOR_COL_W, planInjectorPages } = require('./reportPagination');
 const { evaluateShipment } = require('./injectorEvaluation');
-const { drawHorizontalBarChart, drawStatCards, drawCompactTable } = require('./pdfCharts');
+const { drawHorizontalBarChart, drawStatCards } = require('./pdfCharts');
 
 const LOGO_PATH = path.join(__dirname, '../assets/pdi-logo.png');
 
@@ -1567,7 +1567,9 @@ function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
       doc.strokeColor(BORDER).lineWidth(0.3).moveTo(cx, y).lineTo(cx, y + rowH).stroke();
       const cell = m.get(key);
       if (cell && cell.error) {
-        drawErrorValue(doc, cell.error_description, cx, y, injColW, rowH, valFont);
+        // cell.value already carries the display form ("Excess Return" /
+        // "Error: Communication Failure").
+        drawErrorValue(doc, cell.value || formatErrorValue(cell.error_description), cx, y, injColW, rowH, valFont);
       } else {
         const val = cell ? (cell.value || '') : '';
         let color = DGRAY;
@@ -1627,39 +1629,47 @@ function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
 }
 
 /**
- * Render "Error: <description>" inside one injector cell.
+ * Render an error result — "Excess Return", "Error: Communication Failure" — in
+ * one injector cell.
  *
- * The step NAME column is never touched — only this value cell changes — so the
- * text is shrunk (and stacked onto a second line) until it fits the column
- * rather than overflowing into its neighbours.
+ * The step NAME column is never touched: only this value cell changes. The text
+ * is shrunk, and split onto a second line, until it fits the column rather than
+ * overflowing into its neighbours.
  */
-function drawErrorValue(doc, description, x, y, w, h, maxFont) {
-  const desc = String(description || '').trim() || 'Test Error';
-  const label = 'Error:';
+function drawErrorValue(doc, value, x, y, w, h, maxFont) {
+  const text = String(value || '').trim() || 'Error: Test Error';
   const availW = Math.max(8, w - 4);
-  const fits = (size, text) => {
+  const fits = (size, s) => {
     doc.font('Helvetica-Bold').fontSize(size);
-    return doc.widthOfString(text) <= availW;
+    return doc.widthOfString(s) <= availW;
   };
 
   // Preferred: the whole message on one line (wide columns / few injectors).
   const oneLineFont = Math.max(5.2, Math.min(maxFont, h - 6));
-  if (fits(oneLineFont, `${label} ${desc}`)) {
+  if (fits(oneLineFont, text)) {
     doc.fontSize(oneLineFont).font('Helvetica-Bold').fillColor(RED);
-    doc.text(`${label} ${desc}`, x + 2, y + (h - oneLineFont) / 2 - 1, {
+    doc.text(text, x + 2, y + (h - oneLineFont) / 2 - 1, {
       width: availW, align: 'center', lineBreak: false,
     });
     return;
   }
 
-  // Otherwise stack "Error:" above the description and shrink to fit.
+  // Otherwise split into two lines — after the "Error:" prefix when there is
+  // one, else at the last space — and shrink until both lines fit.
+  const colon = text.indexOf(':');
+  const splitAt = colon > -1 ? colon + 1 : text.lastIndexOf(' ');
+  const first = (splitAt > 0 ? text.slice(0, splitAt) : text).trim();
+  const second = (splitAt > 0 ? text.slice(splitAt) : '').trim();
+
   let font = Math.min(maxFont, (h - 4) / 2 - 0.3, 8);
-  while (font > 4.8 && !(fits(font, label) && fits(font, desc))) font -= 0.25;
+  while (font > 4.8 && !(fits(font, first) && fits(font, second))) font -= 0.25;
   const lineH = font + 1.2;
-  const top = y + (h - lineH * 2) / 2;
+  const top = y + (h - lineH * (second ? 2 : 1)) / 2;
   doc.fontSize(font).font('Helvetica-Bold').fillColor(RED);
-  doc.text(label, x + 2, top, { width: availW, align: 'center', lineBreak: false });
-  doc.text(desc, x + 2, top + lineH, { width: availW, align: 'center', lineBreak: false, ellipsis: true });
+  doc.text(first, x + 2, top, { width: availW, align: 'center', lineBreak: false, ellipsis: true });
+  if (second) {
+    doc.text(second, x + 2, top + lineH, { width: availW, align: 'center', lineBreak: false, ellipsis: true });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1691,6 +1701,9 @@ function generateShipmentEvaluationPdf(injectors = [], opts = {}) {
       drawInjectorComparisonPages(doc, list, {
         ...opts,
         title: opts.detailTitle || 'Shipment Evaluation — Test Detail',
+        // The detail header identifies the shipment by vendor, matching the
+        // summary page (a shipment evaluation is not job-scoped).
+        rmaNumber: opts.vendorName ? `Vendor: ${opts.vendorName}` : '',
         // The summary is page 1, so the detail grid continues from page 2.
         pageOffset: 1,
       });
@@ -1702,7 +1715,11 @@ function generateShipmentEvaluationPdf(injectors = [], opts = {}) {
   });
 }
 
-/** Navy banner used by the evaluation summary page. */
+/**
+ * Navy banner used by the evaluation report. It identifies the shipment by
+ * PART NUMBER, VENDOR NAME and REPORT DATE — a shipment evaluation is about a
+ * vendor's batch, so the job number is deliberately not shown here.
+ */
 function drawEvaluationBanner(doc, title, summary, opts = {}) {
   const LM = INJ_LM;
   const usableW = INJ_USABLE_W;
@@ -1719,29 +1736,27 @@ function drawEvaluationBanner(doc, title, summary, opts = {}) {
     } catch (_) {}
   }
 
-  const rightW = 240;
+  const rightW = 260;
   const rightX = LM + usableW - rightW - 14;
   let ry = top + 9;
-  const jobText = opts.rmaNumber || summary.jobNumbers.join(', ');
-  if (jobText) {
+
+  const partText = summary.partNumbers.length
+    ? summary.partNumbers.map(numericPartNumber).join(', ')
+    : '';
+  if (partText) {
     doc.fontSize(9.5).font('Helvetica-Bold').fillColor(WHITE);
-    doc.text(jobText, rightX, ry, { width: rightW, align: 'right', lineBreak: false, ellipsis: true });
+    doc.text(`Part: ${partText}`, rightX, ry, { width: rightW, align: 'right', lineBreak: false, ellipsis: true });
     ry += 13;
   }
-  if (summary.partNumbers.length) {
-    doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
-    doc.text(`Injector: ${summary.partNumbers.map(numericPartNumber).join(', ')}`, rightX, ry, {
-      width: rightW, align: 'right', lineBreak: false, ellipsis: true,
-    });
-    ry += 11;
-  }
-  if (summary.dateFrom) {
-    const range = summary.dateTo && summary.dateTo !== summary.dateFrom
-      ? `${fmtDateMDY(summary.dateFrom)} – ${fmtDateMDY(summary.dateTo)}`
-      : fmtDateMDY(summary.dateFrom);
-    doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
-    doc.text(`Tested: ${range}`, rightX, ry, { width: rightW, align: 'right', lineBreak: false });
-  }
+  doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
+  doc.text(`Vendor: ${opts.vendorName || '—'}`, rightX, ry, {
+    width: rightW, align: 'right', lineBreak: false, ellipsis: true,
+  });
+  ry += 11;
+  doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
+  doc.text(`Report Date: ${fmtDateMDY(new Date().toISOString().slice(0, 10))}`, rightX, ry, {
+    width: rightW, align: 'right', lineBreak: false,
+  });
 
   const titleX = LM + logoW + 24;
   doc.fontSize(16).font('Helvetica-Bold').fillColor(WHITE);
@@ -1760,28 +1775,9 @@ function drawShipmentSummaryPage(doc, evaluation, opts = {}) {
 
   drawEvaluationBanner(doc, opts.title || 'Shipment Evaluation Report', summary, opts);
 
-  // ── Identification strip ───────────────────────────────────────────────
-  let y = LM + INJ_BANNER_H + 8;
-  const identH = 30;
-  doc.rect(LM, y, usableW, identH).fillColor(SECBG).fill();
-  doc.strokeColor(BORDER).lineWidth(0.5).rect(LM, y, usableW, identH).stroke();
-  const identFields = [
-    { label: 'Part Number', value: summary.partNumbers.join(', ') || '—' },
-    { label: 'Job Number', value: summary.jobNumbers.join(', ') || '—' },
-    { label: 'Injectors Tested', value: String(summary.total) },
-    { label: 'Brand / Type', value: [summary.brands.join(', '), summary.injectorTypes.join(', ')].filter(Boolean).join(' · ') || '—' },
-    { label: 'Report Date', value: new Date().toISOString().slice(0, 10) },
-  ];
-  const fieldW = usableW / identFields.length;
-  identFields.forEach((f, i) => {
-    const fx = LM + i * fieldW;
-    if (i > 0) doc.strokeColor(BORDER).lineWidth(0.4).moveTo(fx, y).lineTo(fx, y + identH).stroke();
-    doc.fontSize(6.5).font('Helvetica-Bold').fillColor(MGRAY);
-    doc.text(f.label.toUpperCase(), fx + 8, y + 6, { width: fieldW - 16, lineBreak: false, ellipsis: true });
-    doc.fontSize(9).font('Helvetica-Bold').fillColor(BLACK);
-    doc.text(f.value, fx + 8, y + 16, { width: fieldW - 16, lineBreak: false, ellipsis: true });
-  });
-  y += identH + 8;
+  // The shipment is identified in the banner (part number, vendor, report
+  // date), so the summary goes straight into the numbers.
+  let y = LM + INJ_BANNER_H + 10;
 
   // ── KPI cards ──────────────────────────────────────────────────────────
   const pct = (v) => `${v.toFixed(1)}%`;
@@ -1800,65 +1796,68 @@ function drawShipmentSummaryPage(doc, evaluation, opts = {}) {
   });
   y += 58 + 8;
 
-  // ── Failure analysis: table + chart ────────────────────────────────────
-  const panelH = 158;
-  const gap = 10;
-  const tableW = usableW * 0.44;
-  const chartW = usableW - tableW - gap;
+  // ── Failure analysis ───────────────────────────────────────────────────
+  // ONE representation of the failure counts: a ranked chart that carries the
+  // count and the percentage on each bar.
+  const failureH = 150;
   const failureRows = failures.filter((f) => f.count > 0);
 
-  drawCompactTable(doc, {
-    x: LM, y, width: tableW, height: panelH,
-    title: 'Failure Count by Test Point',
-    note: 'An injector can fail more than one test point, so these counts may total more than the number of failed injectors.',
-    columns: [
-      { header: 'Test Point', key: 'label', width: 46, bold: true },
-      { header: 'Code', key: 'code', width: 20 },
-      { header: 'Failed', key: 'count', width: 17, align: 'right' },
-      { header: '% of Batch', key: 'pctText', width: 22, align: 'right' },
-    ],
-    rows: failureRows.map((f) => ({
-      label: f.label, code: f.code, count: f.count, pctText: `${f.pct.toFixed(1)}%`,
-    })),
-    emptyMessage: summary.total === 0 ? 'No injectors selected' : 'No test-point failures in this batch',
-  });
-
   drawHorizontalBarChart(doc, {
-    x: LM + tableW + gap, y, width: chartW, height: panelH,
-    title: 'Most Common Failure Points',
-    note: 'Injectors that failed each test point, ranked most to least common.',
+    x: LM, y, width: usableW, height: failureH,
+    title: 'Failure Count by Test Point',
+    note: 'Injectors that failed each test point, ranked most to least common. An injector can fail more than one test point, so these counts may total more than the number of failed injectors.',
     rows: failureRows.slice(0, 8).map((f) => ({
-      label: f.label,
+      label: `${f.label} (${f.code})`,
       value: f.count,
-      valueText: `${f.count} (${f.pct.toFixed(0)}%)`,
+      valueText: `${f.count} failed  ·  ${f.pct.toFixed(1)}% of batch`,
       color: RED,
     })),
     color: RED,
-    emptyMessage: summary.total === 0 ? 'No injectors selected' : 'No failures to chart',
+    emptyMessage: summary.total === 0 ? 'No injectors selected' : 'No test-point failures in this batch',
   });
-  y += panelH + 8;
+  y += failureH + 8;
 
-  // ── Passing-injector consistency ───────────────────────────────────────
-  const consistencyH = Math.max(120, (INJ_PAGE_H - INJ_LM - 18) - y);
+  // ── Deviation analysis (passing injectors only) ────────────────────────
+  const deviationH = Math.max(120, (INJ_PAGE_H - INJ_LM - 18) - y);
+  const gap = 10;
+  const halfW = (usableW - gap) / 2;
   const passingCount = summary.passed;
-  const overallNote = consistencyOverall
-    ? ` Group average across rated test points: ${consistencyOverall.averageDeviationPct.toFixed(2)}%.`
-    : '';
+  const passingNote = `Passing injectors only (${passingCount} of ${summary.total}); failed injectors are excluded.`;
+
   drawHorizontalBarChart(doc, {
-    x: LM, y, width: usableW, height: consistencyH,
-    title: 'Passing-Injector Consistency — Average Absolute % Deviation from the Mean Delivery Flow',
-    note: `Passing injectors only (${passingCount} of ${summary.total}); failed injectors are excluded. Lower is more consistent.${overallNote}`,
+    x: LM, y, width: halfW, height: deviationH,
+    title: 'Average Deviation',
+    note: `${passingNote} Average absolute % deviation from the mean delivery flow at each test point. Lower is more consistent.`
+      + (consistencyOverall ? ` Group average: ${consistencyOverall.averageDeviationPct.toFixed(2)}%.` : ''),
     rows: consistency.map((c) => ({
       label: `${c.label} (${c.code})`,
       value: c.avgDeviationPct == null ? 0 : c.avgDeviationPct,
       valueText: c.avgDeviationPct == null
         ? (c.note || 'Insufficient data')
-        : `${c.avgDeviationPct.toFixed(2)}%  ·  mean ${formatMeasurement(c.mean)}${c.unit ? ' ' + c.unit : ''}  ·  n=${c.sampleCount}${c.insufficient ? ' (insufficient)' : ''}`,
+        : `${c.avgDeviationPct.toFixed(2)}%`,
       color: TEAL,
       muted: c.avgDeviationPct == null,
     })),
     color: TEAL,
-    emptyMessage: 'No passing injectors — consistency cannot be calculated',
+    emptyMessage: 'No passing injectors — deviation cannot be calculated',
+  });
+
+  drawHorizontalBarChart(doc, {
+    x: LM + halfW + gap, y, width: halfW, height: deviationH,
+    title: 'Maximum Deviation',
+    note: `${passingNote} % difference between the lowest and the highest passing reading at each test point.`
+      + (consistencyOverall ? ` Widest spread: ${consistencyOverall.maxRangeDeviationPct.toFixed(2)}%.` : ''),
+    rows: consistency.map((c) => ({
+      label: `${c.label} (${c.code})`,
+      value: c.rangeDeviationPct == null ? 0 : c.rangeDeviationPct,
+      valueText: c.rangeDeviationPct == null
+        ? (c.note || 'Insufficient data')
+        : `${c.rangeDeviationPct.toFixed(2)}%`,
+      color: AMBER,
+      muted: c.rangeDeviationPct == null,
+    })),
+    color: AMBER,
+    emptyMessage: 'No passing injectors — deviation cannot be calculated',
   });
 
   // ── Footer ─────────────────────────────────────────────────────────────
@@ -1868,15 +1867,6 @@ function drawShipmentSummaryPage(doc, evaluation, opts = {}) {
     `Shipment Evaluation · Generated ${new Date().toISOString().slice(0, 19).replace('T', ' ')} · Test detail follows on the next page(s)`,
     LM, footY, { width: usableW, align: 'right', lineBreak: false, height: 8 }
   );
-}
-
-// Present a mean flow value with enough precision to be useful but no noise.
-function formatMeasurement(value) {
-  if (value == null || !Number.isFinite(Number(value))) return '—';
-  const n = Number(value);
-  const abs = Math.abs(n);
-  const decimals = abs >= 100 ? 1 : (abs >= 1 ? 2 : 3);
-  return n.toFixed(decimals);
 }
 
 module.exports = {

@@ -8,11 +8,13 @@
  *   POST /sync                          → "Sync Now" — import test records ONLY
  *   POST /reports/customer              → comparison PDF for selected injectors
  *   POST /reports/inspection            → create/refresh inspection record(s)
- *   POST /reports/shipment-evaluation   → Shipment Evaluation PDF (supplier_evaluation)
+ *   POST /reports/shipment-evaluation   → Shipment Evaluation PDF (supplier_evaluation;
+ *                                          requires vendor_name)
  *   POST /report                        → legacy alias of /reports/customer
  *
- * EVERY route in this file is admin-only (see requireAdmin) — the client hides
- * the page for other roles, and this is the matching server-side enforcement.
+ * EVERY route in this file is restricted to the ADMIN role (see requireAdmin) —
+ * the client hides the page and blocks the route for everyone else, and this is
+ * the matching server-side enforcement.
  */
 
 const express = require('express');
@@ -29,9 +31,10 @@ const {
   generateInspectionReports,
 } = require('../services/injectorReports');
 
-// Roles allowed to reach the Injector Tests feature. Matches the client's
-// `adminOnly` navigation rule so the UI and the API agree.
-const ADMIN_ROLES = ['admin', 'qc_manager'];
+// Roles allowed to reach the Injector Tests feature: the ADMIN role only.
+// Matches the `roles` restriction on the sidebar item in client/src/lib/nav.js
+// so the UI and the API agree (qc_manager keeps the other admin pages).
+const ADMIN_ROLES = ['admin'];
 
 // Upper bound on one report request — a guard against a runaway selection
 // tying the server up generating a thousand-column PDF.
@@ -237,12 +240,20 @@ router.post('/reports/inspection', requireAdmin, (req, res, next) => {
 });
 
 // Shipment Evaluation Report (internal type: supplier_evaluation).
+// Requires a vendor name — it identifies the shipment on both report headers.
 async function handleShipmentEvaluation(req, res, next) {
   let count = 0;
   try {
+    const vendorName = String((req.body && req.body.vendor_name) || '').trim();
+    if (!vendorName) {
+      throw new AppError('A vendor name is required for the Shipment Evaluation Report.', 400, 'VALIDATION_ERROR');
+    }
+    if (vendorName.length > 120) {
+      throw new AppError('The vendor name is too long (120 characters maximum).', 400, 'VALIDATION_ERROR');
+    }
     const { injectors, validation } = resolveSelection(req);
     count = injectors.length;
-    const { buffer, filename } = await buildShipmentEvaluationReport(injectors);
+    const { buffer, filename } = await buildShipmentEvaluationReport(injectors, { vendorName });
     console.log(`[InjectorReports] shipment evaluation: ${count} injector(s) → ${filename} (user=${req.user?.id})`);
     sendPdf(res, buffer, filename, validation.warnings);
   } catch (err) {

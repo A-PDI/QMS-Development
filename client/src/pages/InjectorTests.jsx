@@ -68,6 +68,7 @@ export default function InjectorTests() {
   const [syncing, setSyncing] = useState(false)
   const [generating, setGenerating] = useState(null)   // report kind currently running
   const generatingRef = useRef(false)                  // blocks repeated clicks
+  const [vendorName, setVendorName] = useState('')     // remembered between evaluations
   const [showSettings, setShowSettings] = useState(false)
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [savingKey, setSavingKey] = useState(false)
@@ -206,9 +207,9 @@ export default function InjectorTests() {
 
   // ── Report generation ──────────────────────────────────────────────────────
   /**
-   * Ask for a filename FIRST (while the click gesture is still active, which
-   * the browser's save dialog requires), then generate. Cancelling the dialog
-   * therefore means no request and no download at all.
+   * Ask for everything the report needs FIRST (while the click gesture is still
+   * active, which the browser's save dialog requires), then generate.
+   * Cancelling any prompt means no request and no download at all.
    */
   const runGeneration = async (kind) => {
     if (generatingRef.current) return          // repeated clicks are ignored
@@ -222,7 +223,29 @@ export default function InjectorTests() {
     }
     const ids = selection.map(i => i.id)
 
-    const target = await chooseSaveTarget(suggestReportName(kindInfo.prefix, selection), {
+    // The Shipment Evaluation is an assessment of a vendor's batch, so it is
+    // headed by the vendor name rather than the job number — ask for it.
+    let vendor = vendorName
+    if (kind === 'evaluation') {
+      const answer = window.prompt('Vendor name for the Shipment Evaluation Report', vendorName)
+      if (answer === null) {
+        showToast('Cancelled — no report was generated', 'info')
+        return
+      }
+      vendor = String(answer).trim()
+      if (!vendor) {
+        const msg = 'A vendor name is required for the Shipment Evaluation Report.'
+        setStatusMsg({ type: 'error', text: msg })
+        showToast(msg, 'error')
+        return
+      }
+      setVendorName(vendor)   // remembered as the default for the next report
+    }
+
+    const suggestion = kind === 'evaluation'
+      ? suggestReportName(kindInfo.prefix, selection, { vendor })
+      : suggestReportName(kindInfo.prefix, selection)
+    const target = await chooseSaveTarget(suggestion, {
       promptMessage: `File name for the ${kindInfo.label.toLowerCase()}`,
     })
     if (target.cancelled) {
@@ -246,7 +269,11 @@ export default function InjectorTests() {
       }
 
       if (kind === 'evaluation') {
-        const res = await api.post('/injector-tests/reports/shipment-evaluation', { injector_ids: ids }, { responseType: 'blob' })
+        const res = await api.post(
+          '/injector-tests/reports/shipment-evaluation',
+          { injector_ids: ids, vendor_name: vendor },
+          { responseType: 'blob' }
+        )
         await writeBlobToTarget(target, new Blob([res.data], { type: 'application/pdf' }))
         savedFiles.push(target.filename)
         const w = warningsFrom(res); if (w) warnings.push(w)

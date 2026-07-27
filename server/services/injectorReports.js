@@ -134,13 +134,18 @@ async function buildCustomerReport(injectors = [], opts = {}) {
   return { buffer, filename: `InjectorReport_${part}_${list.length}.pdf` };
 }
 
-/** Shipment Evaluation Report (summary page + test detail pages). */
+/**
+ * Shipment Evaluation Report (summary page + test detail pages).
+ * `opts.vendorName` identifies the shipment on both headers and is required —
+ * the report is an assessment of a vendor's batch.
+ */
 async function buildShipmentEvaluationReport(injectors = [], opts = {}) {
   const list = toReportInjectors(injectors);
-  const buffer = await generateShipmentEvaluationPdf(list, opts);
+  const vendorName = String(opts.vendorName || '').trim();
+  const buffer = await generateShipmentEvaluationPdf(list, { ...opts, vendorName });
   const part = sanitiseFilePart(list[0] && list[0].part_number, 'Injectors');
-  const job = sanitiseFilePart(list[0] && list[0].job_number, '');
-  const name = ['ShipmentEvaluation', part, job, String(list.length)].filter(Boolean).join('_');
+  const vendor = sanitiseFilePart(vendorName, '');
+  const name = ['ShipmentEvaluation', part, vendor, String(list.length)].filter(Boolean).join('_');
   return { buffer, filename: `${name}.pdf` };
 }
 
