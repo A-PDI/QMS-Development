@@ -191,7 +191,7 @@ test('inspection reports use the mapped test-step names, not error text', async 
 
   assert.ok(dimensional.includes('Peak Torque'), `expected Peak Torque in ${JSON.stringify(dimensional)}`);
   assert.ok(!dimensional.some((m) => /error/i.test(m)), 'no step name carries error text');
-  assert.ok(values.includes('Error: Out of Range'), `expected the error as a value, got ${JSON.stringify(values)}`);
+  assert.ok(values.includes('Excess Return'), `expected the error as a value, got ${JSON.stringify(values)}`);
 });
 
 // ── Scenario 10: large batches paginate ──────────────────────────────────────
@@ -275,17 +275,31 @@ test('the shipment evaluation report has a summary page plus detail pages', asyn
   }));
   const selected = loadSelectedInjectors(storedInjectors().map((r) => r.id));
 
-  const { buffer, filename } = await buildShipmentEvaluationReport(selected);
+  const { buffer, filename } = await buildShipmentEvaluationReport(selected, { vendorName: 'Acme Diesel Supply' });
   const pages = extractPdfPages(buffer);
   const summary = pages[0].join('\n');
 
   assert.ok(pages.length >= 2, 'at least a summary page and one detail page');
-  assert.match(filename, /^ShipmentEvaluation_/);
+  assert.match(filename, /^ShipmentEvaluation_.*Acme/);
   assert.ok(summary.includes('Shipment Evaluation Report'));
   assert.ok(summary.includes('TOTAL TESTED'));
+
+  // Header identifies the shipment by part number, vendor and report date —
+  // there is no job number and no identification strip below the banner.
+  assert.ok(summary.includes('Vendor: Acme Diesel Supply'), 'vendor name in the header');
+  assert.ok(/Part: /.test(summary), 'part number in the header');
+  assert.ok(/Report Date: /.test(summary), 'report date in the header');
+  assert.ok(!summary.includes('QMS-724-3'), 'the job number is not shown on the evaluation');
+  assert.ok(!summary.includes('INJECTORS TESTED'), 'the identification strip is gone');
+
+  // One failure representation, and the two deviation charts.
   assert.ok(summary.includes('Failure Count by Test Point'));
-  assert.ok(summary.includes('Most Common Failure Points'));
-  assert.ok(/Passing-Injector Consistency/.test(summary));
+  assert.ok(!summary.includes('Most Common Failure Points'), 'the duplicate failure panel is gone');
+  assert.ok(summary.includes('Average Deviation'));
+  assert.ok(summary.includes('Maximum Deviation'));
+  assert.ok(!/Passing-Injector Consistency/.test(summary), 'renamed to Average Deviation');
+  assert.ok(!/mean \d/.test(summary), 'the mean is no longer shown on the deviation rows');
+  assert.ok(!/n=\d/.test(summary), 'the sample count is no longer shown on the deviation rows');
   // Failure analysis uses normalised step names, never raw API error text.
   assert.ok(summary.includes('Peak HP'), 'failing test point named by its display name');
   assert.ok(summary.includes('Peak Torque'), 'errored test point named by its display name');
@@ -293,6 +307,6 @@ test('the shipment evaluation report has a summary page plus detail pages', asyn
 
   const detail = pages.slice(1).map((p) => p.join('\n')).join('\n');
   assert.ok(detail.includes('TEST STEP'), 'detail pages use the comparison grid');
-  assert.ok(detail.includes('Error: Out of Range') || detail.includes('Out of Range'),
-    'errored measurements are shown as error values in the detail grid');
+  assert.ok(detail.includes('Excess') && detail.includes('Return'),
+    'an out-of-range result reads as "Excess Return" in the detail grid');
 });

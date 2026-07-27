@@ -21,9 +21,10 @@ export const NAV_ITEMS = [
   { to: '/drawings',        icon: 'drawing',       label: 'Drawings',                   permKey: 'drawings' },
   { to: '/reports',         icon: 'chart',         label: 'Reports',        adminOnly: true },
   { to: '/admin',           icon: 'settings',      label: 'Admin',          adminOnly: true },
-  // Injector Tests sits directly below Admin and is admin-only, both here and
-  // on the route (see App.jsx) and the API (routes/injector-tests.js).
-  { to: '/injector-tests',  icon: 'gauge',         label: 'Injector Tests', adminOnly: true },
+  // Injector Tests sits directly below Admin and is restricted to the ADMIN
+  // role alone (not qc_manager, unlike the other admin pages) — here, on the
+  // route (see App.jsx) and on the API (routes/injector-tests.js).
+  { to: '/injector-tests',  icon: 'gauge',         label: 'Injector Tests', adminOnly: true, roles: ['admin'] },
 ]
 
 /**
@@ -55,6 +56,9 @@ export function allowedTabsFor(user) {
 /** Should this nav item be shown to this user? */
 export function isNavVisible(item, user) {
   if (!item) return false
+  // An item may name the exact roles allowed (Injector Tests: admin only);
+  // otherwise adminOnly means the usual admin group.
+  if (Array.isArray(item.roles)) return !!user && item.roles.includes(user.role)
   if (item.adminOnly) return isAdminUser(user)
   if (item.hideForAdmin && isAdminUser(user)) return false
   const allowedTabs = allowedTabsFor(user)

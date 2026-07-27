@@ -49,6 +49,32 @@ const SMALL_WORDS = new Set(['of', 'the', 'a', 'an', 'and', 'or', 'in', 'to', 'a
 const ERROR_HINTS = /(error|fail|out\s*of\s*range|invalid|timeout|timed\s*out|communication|abort|overflow|no\s*result|not\s*measured)/i;
 
 /**
+ * Bench errors that describe a KNOWN physical condition rather than a machine
+ * fault. These are shown by their quality-department name and WITHOUT the
+ * "Error:" prefix, because they are a test outcome the inspector recognises —
+ * e.g. the bench's "out of range" on the return tank is an EXCESS RETURN.
+ *
+ * They are still failures: any step with one of these conditions fails, which
+ * fails the injector in every downstream report.
+ */
+const NAMED_ERROR_CONDITIONS = [
+  { match: /out\s*of\s*range/i, term: 'Excess Return' },
+];
+
+/** The named condition for a raw API error description, or null. */
+function namedErrorCondition(rawText) {
+  const raw = String(rawText == null ? '' : rawText);
+  const hit = NAMED_ERROR_CONDITIONS.find((c) => c.match.test(raw));
+  return hit ? hit.term : null;
+}
+
+/** True when a description is already a named condition (no "Error:" prefix). */
+function isNamedErrorTerm(description) {
+  const desc = String(description == null ? '' : description).trim().toLowerCase();
+  return NAMED_ERROR_CONDITIONS.some((c) => c.term.toLowerCase() === desc);
+}
+
+/**
  * Split a raw bench step name into its code and any trailing status note.
  * Returns { raw, base, suffix, skipped, errored, errorRaw }.
  *   base     — the step code with the note removed ("iVM.06")
@@ -147,15 +173,19 @@ function titleCase(text) {
 }
 
 /**
- * Turn the API's raw error text into a short human description, preserving the
+ * Turn the API's raw error text into a short human description. Known physical
+ * conditions get their quality-department name; everything else preserves the
  * API's own wording:
- *   "HP ERROR (out of range) #1000" → "Out of Range"
+ *   "HP ERROR (out of range) #1000" → "Excess Return"
  *   "ERROR: Communication Failure"  → "Communication Failure"
  *   "Invalid Measurement"           → "Invalid Measurement"
  */
 function formatErrorDescription(rawText) {
   const raw = String(rawText == null ? '' : rawText).trim();
   if (!raw) return 'Test Error';
+
+  const named = namedErrorCondition(raw);
+  if (named) return named;
 
   let text;
   const paren = raw.match(/\(([^)]*[A-Za-z][^)]*)\)/);
@@ -174,15 +204,23 @@ function formatErrorDescription(rawText) {
   return titleCase(text);
 }
 
-/** The value shown in a result cell for an errored step. */
+/**
+ * The value shown in a result cell for an errored step. Named conditions stand
+ * on their own ("Excess Return"); anything else keeps the "Error:" prefix so a
+ * machine fault reads clearly as one ("Error: Communication Failure").
+ */
 function formatErrorValue(description) {
   const desc = String(description || '').trim();
-  return `Error: ${desc || 'Test Error'}`;
+  if (!desc) return 'Error: Test Error';
+  return isNamedErrorTerm(desc) ? desc : `Error: ${desc}`;
 }
 
 /** True when a stored result value is an error marker rather than a number. */
 function isErrorValue(value) {
-  return /^\s*error\b/i.test(String(value == null ? '' : value));
+  const text = String(value == null ? '' : value).trim();
+  if (!text) return false;
+  if (/^error\b/i.test(text)) return true;
+  return isNamedErrorTerm(text);
 }
 
 /**
@@ -249,6 +287,9 @@ function stepResultValue(step, tank) {
 
 module.exports = {
   STEP_DISPLAY_NAMES,
+  NAMED_ERROR_CONDITIONS,
+  namedErrorCondition,
+  isNamedErrorTerm,
   IVM_FLOW_CODES,
   FLUSH_CODE,
   splitStepName,

@@ -31,27 +31,28 @@ test('Injector Tests sits directly below Admin in the sidebar', () => {
   assert.strictEqual(labels[adminIdx + 1], 'Injector Tests')
 })
 
-test('the Injector Tests item is admin-only', () => {
+test('the Injector Tests item is restricted to the admin role', () => {
   assert.ok(injectorItem, 'nav item exists')
   assert.strictEqual(injectorItem.adminOnly, true)
+  assert.deepStrictEqual(injectorItem.roles, ['admin'], 'admin role only — not qc_manager')
 })
 
 test('admin users see and can access Injector Tests', () => {
-  for (const user of [admin, qcManager]) {
-    assert.ok(isAdminUser(user))
-    assert.ok(isNavVisible(injectorItem, user), `${user.role} should see the item`)
-    assert.ok(visibleNavItems(user).some((i) => i.to === '/injector-tests'))
-    assert.ok(canAccessRoute('/injector-tests', user))
-  }
+  assert.ok(isNavVisible(injectorItem, admin))
+  assert.ok(visibleNavItems(admin).some((i) => i.to === '/injector-tests'))
+  assert.ok(canAccessRoute('/injector-tests', admin))
 })
 
-test('non-admin users cannot see or access Injector Tests', () => {
-  for (const user of [inspector, restricted, null, undefined]) {
-    assert.ok(!isAdminUser(user))
-    assert.strictEqual(isNavVisible(injectorItem, user), false)
+test('nobody but an admin can see or access Injector Tests', () => {
+  for (const user of [qcManager, inspector, restricted, null, undefined]) {
+    assert.strictEqual(isNavVisible(injectorItem, user), false, `${user?.role || 'anonymous'} must not see it`)
     assert.ok(!visibleNavItems(user).some((i) => i.to === '/injector-tests'))
     assert.strictEqual(canAccessRoute('/injector-tests', user), false, 'direct navigation is blocked')
   }
+  // qc_manager keeps the other admin pages it had before.
+  assert.ok(isAdminUser(qcManager))
+  assert.ok(canAccessRoute('/admin', qcManager))
+  assert.ok(canAccessRoute('/reports', qcManager))
 })
 
 test('moving the item did not change the rest of the navigation rules', () => {

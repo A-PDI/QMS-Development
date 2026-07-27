@@ -156,3 +156,15 @@ test('a suggested filename includes the part and job number', () => {
   )
   assert.strictEqual(suggestReportName('ShipmentEvaluation', []), 'ShipmentEvaluation_0')
 })
+
+test('the shipment evaluation filename is scoped by vendor, not job number', () => {
+  assert.strictEqual(
+    suggestReportName('ShipmentEvaluation', [list[0], list[1]], { vendor: 'Acme Diesel Supply' }),
+    'ShipmentEvaluation_6513589PX_Acme-Diesel-Supply_2'
+  )
+  // No vendor given → falls back to the job number.
+  assert.strictEqual(
+    suggestReportName('ShipmentEvaluation', [list[0]], { vendor: '' }),
+    'ShipmentEvaluation_6513589PX_QMS-100_1'
+  )
+})

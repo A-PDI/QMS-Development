@@ -160,11 +160,16 @@ export function describeSelection(selected = []) {
   return parts.join(' · ')
 }
 
-/** Suggested filename stem for a report over the given selection. */
-export function suggestReportName(prefix, selected = []) {
+/**
+ * Suggested filename stem for a report over the given selection.
+ * Pass `{ vendor }` for the Shipment Evaluation, which is identified by vendor
+ * rather than by job number.
+ */
+export function suggestReportName(prefix, selected = [], { vendor = '' } = {}) {
   const part = selected.find((i) => i.part_number)?.part_number
   const job = selected.find((i) => String(i.job_number ?? '').trim())?.job_number
-  return [prefix, part, job, `${selected.length}`]
+  const scope = String(vendor ?? '').trim() || job
+  return [prefix, part, scope, `${selected.length}`]
     .filter(Boolean)
     .map((v) => String(v).trim().replace(/\s+/g, '-'))
     .join('_')

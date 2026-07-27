@@ -138,9 +138,10 @@ test('counts how many injectors failed each test point, ranked', () => {
   assert.strictEqual(summarise(list).failed, 5);
 });
 
-test('an errored step counts as a failure of that test point', () => {
+test('an excess-return result counts as a failure of that test point', () => {
   const list = [
     injector({ serial: 'A', steps: flowSteps({ IVM01: 10, IVM06: 60 }) }),
+    // Bench "out of range" = the EXCESS RETURN condition.
     injector({ serial: 'B', steps: [{ name: 'iVM.01', value: 10 }, { name: 'iVM.06', errored: true }] }),
   ];
   const failures = failuresByTestPoint(list);
@@ -148,6 +149,14 @@ test('an errored step counts as a failure of that test point', () => {
 
   assert.strictEqual(ivm06.count, 1);
   assert.strictEqual(ivm06.label, 'Peak Torque', 'the error does not rename the test point');
+  // …and the injector itself is a failure everywhere downstream.
+  assert.strictEqual(injectorOutcome(list[1]), 'fail');
+  const s = summarise(list);
+  assert.strictEqual(s.failed, 1);
+  assert.strictEqual(s.passed, 1);
+  // Excluded from the deviation analysis, which is passing injectors only.
+  const [ivm06Consistency] = consistencyOfPassingInjectors(list, ['IVM06']);
+  assert.strictEqual(ivm06Consistency.sampleCount, 1);
 });
 
 // ── Scenario 12: consistency uses only fully passing injectors ───────────────
@@ -180,6 +189,43 @@ test('average absolute percentage deviation matches the documented formula', () 
   assert.strictEqual(point.mean, mean);
   assert.ok(Math.abs(point.avgDeviationPct - expected) < 1e-12, 'full precision is preserved');
   assert.strictEqual(point.label, 'Low Idle');
+});
+
+// ── Maximum Deviation (lowest → highest spread) ──────────────────────────────
+test('maximum deviation is the % difference from the lowest to the highest value', () => {
+  const values = [100, 105, 110]; // (110 − 100) / 100 × 100 = 10%
+  const list = values.map((v, i) => injector({ serial: `P${i}`, steps: flowSteps({ IVM05: v }) }));
+
+  const [point] = consistencyOfPassingInjectors(list, ['IVM05']);
+  assert.strictEqual(point.minValue, 100);
+  assert.strictEqual(point.maxValue, 110);
+  assert.ok(Math.abs(point.rangeDeviationPct - 10) < 1e-12);
+});
+
+test('maximum deviation ignores failed injectors, like the average does', () => {
+  const list = [
+    injector({ serial: 'P1', steps: flowSteps({ IVM05: 100 }) }),
+    injector({ serial: 'P2', steps: flowSteps({ IVM05: 110 }) }),
+    injector({ serial: 'F1', steps: [
+      { name: 'iVM.05', value: 500 },
+      { name: 'iVM.01', value: 99, status: 'fail' },
+    ] }),
+  ];
+  const [point] = consistencyOfPassingInjectors(list, ['IVM05']);
+  assert.strictEqual(point.maxValue, 110, 'the failing injector\'s 500 is excluded');
+  assert.ok(Math.abs(point.rangeDeviationPct - 10) < 1e-12);
+});
+
+test('a zero lowest reading leaves the maximum deviation undefined', () => {
+  const list = [
+    injector({ serial: 'A', steps: flowSteps({ IVM05: 0 }) }),
+    injector({ serial: 'B', steps: flowSteps({ IVM05: 4 }) }),
+  ];
+  const [point] = consistencyOfPassingInjectors(list, ['IVM05']);
+
+  assert.strictEqual(point.minValue, 0);
+  assert.strictEqual(point.rangeDeviationPct, null, 'no division by zero');
+  assert.notStrictEqual(point.avgDeviationPct, null, 'the average is still calculable');
 });
 
 // ── Scenario 13: missing / errored measurements ──────────────────────────────

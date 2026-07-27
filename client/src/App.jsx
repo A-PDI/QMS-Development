@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { getToken, getUser } from './lib/auth'
-import { isAdminUser } from './lib/nav'
+import { canAccessRoute } from './lib/nav'
 import Layout from './components/Layout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -33,11 +33,12 @@ function PublicRoute({ children }) {
   return getToken() ? <Navigate to="/" replace /> : children
 }
 
-// Guards admin-only pages (e.g. Injector Tests). A non-admin who types the URL
-// is sent back to the dashboard; the matching API routes reject them too, so
-// the data is protected even if this check is bypassed.
-function AdminRoute({ children }) {
-  return isAdminUser(getUser()) ? children : <Navigate to="/" replace />
+// Guards restricted pages using the SAME rule as the sidebar (lib/nav.js), so
+// a page can never be hidden from the menu but reachable by URL. Injector Tests
+// is admin-only; a user without the role is sent back to the dashboard, and the
+// matching API routes reject them too.
+function RoleRoute({ path, children }) {
+  return canAccessRoute(path, getUser()) ? children : <Navigate to="/" replace />
 }
 
 export default function App() {
@@ -77,9 +78,9 @@ export default function App() {
           <Route
             path="injector-tests"
             element={
-              <AdminRoute>
+              <RoleRoute path="/injector-tests">
                 <InjectorTests />
-              </AdminRoute>
+              </RoleRoute>
             }
           />
           <Route path="*" element={<NotFound />} />
