@@ -364,17 +364,130 @@ async function fetchReports({ apiKey, dateFrom, id, idFrom } = {}) {
   return data;
 }
 
+// ── Paged fetching ────────────────────────────────────────────────────────────
+// The bench answers ONE request with at most a page of reports (observed: ~39),
+// oldest first. A single request therefore shows only a slice of the history —
+// which is why a sync could see nothing but the oldest jobs while newer ones sat
+// on the bench. `date_from` is the only filter available, so we page forward
+// with it: each round asks for reports from the newest timestamp the previous
+// round returned, until a round brings nothing new.
+// Read per call so the limits can be changed without restarting the process.
+const maxFetchPages = () => Number(process.env.CARBONZAPP_MAX_PAGES) || 100;
+const fetchBudgetMs = () => Number(process.env.CARBONZAPP_FETCH_BUDGET_MS) || 240000;
+
 /**
- * Lightweight connectivity/auth test that doesn't persist anything.
- * Returns { ok, count, sampleDate }.
+ * Unique key for one report object = one INJECTOR. A single bench test returns
+ * several objects sharing `_id`, one per slot, so the slot is part of the key
+ * (this mirrors the injector_test_reports unique index).
+ */
+function reportKey(report) {
+  if (!report || report._id == null) return null;
+  const slot = report.SlotsData && report.SlotsData.position != null
+    ? Number(report.SlotsData.position)
+    : 0;
+  return `${String(report._id)}|${slot}`;
+}
+
+/** The report's test timestamp as a Date, or null. */
+function reportDate(report) {
+  const raw = report && (report.datetime || report.created_at);
+  if (!raw) return null;
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/** Oldest/newest test date across a set of reports (ISO strings). */
+function reportDateRange(reports = []) {
+  const dates = reports.map(reportDate).filter(Boolean).sort((a, b) => a - b);
+  if (!dates.length) return { from: null, to: null };
+  return { from: dates[0].toISOString(), to: dates[dates.length - 1].toISOString() };
+}
+
+/**
+ * Fetch reports from `dateFrom` onwards, following the bench's paging until it
+ * stops producing new reports.
+ *
+ * Returns { reports, pages, truncated } — `truncated` means we stopped on the
+ * page/time budget rather than because the bench ran out, i.e. the result is
+ * NOT a complete view and must never be used to prune local records.
+ */
+async function fetchAllReports({ apiKey, dateFrom = null, maxPages = null } = {}) {
+  const pageLimit = maxPages || maxFetchPages();
+  const budgetMs = fetchBudgetMs();
+  const byId = new Map();
+  const startedAt = Date.now();
+  let cursor = dateFrom;
+  let pages = 0;
+  let truncated = false;
+
+  while (pages < pageLimit) {
+    const batch = await fetchReports({ apiKey, dateFrom: cursor });
+    pages += 1;
+
+    let added = 0;
+    let newest = null;
+    for (const r of batch) {
+      // One physical test arrives as SEVERAL report objects that share `_id`
+      // and differ by slot — the same key the injector table is unique on. Key
+      // the page cache the same way or sibling injectors are dropped.
+      const key = reportKey(r);
+      if (!key) continue;
+      if (!byId.has(key)) { byId.set(key, r); added += 1; }
+      const d = reportDate(r);
+      if (d && (!newest || d > newest)) newest = d;
+    }
+
+    // The bench has nothing more to give: an empty page, a page we have already
+    // seen in full, or reports with no usable timestamp to page on.
+    if (batch.length === 0 || added === 0 || !newest) break;
+
+    // `date_from` is inclusive, so the newest report of this page repeats on the
+    // next one and is deduped — that repetition is what proves we are done.
+    const next = newest.toISOString();
+    if (cursor && next <= cursor) break; // no forward progress
+    cursor = next;
+
+    if (Date.now() - startedAt > budgetMs) { truncated = true; break; }
+    if (pages >= pageLimit) { truncated = true; break; }
+  }
+
+  if (pages > 1) {
+    const range = reportDateRange([...byId.values()]);
+    console.log(`[CarbonZapp] Fetched ${byId.size} report(s) over ${pages} page(s)`
+      + `${range.from ? ` covering ${range.from.slice(0, 10)} → ${range.to.slice(0, 10)}` : ''}`
+      + `${truncated ? ' (STOPPED on the page/time budget — result is incomplete)' : ''}.`);
+  }
+  return { reports: [...byId.values()], pages, truncated };
+}
+
+/**
+ * Lightweight connectivity/auth test that doesn't persist anything. Reports what
+ * the API key can actually see, which is the fastest way to tell a key/scope
+ * problem from a job-number-routing one.
  */
 async function testConnection({ apiKey } = {}) {
-  const reports = await fetchReports({ apiKey });
-  const dates = reports.map(r => r && (r.datetime || r.created_at)).filter(Boolean).sort();
+  const { reports, pages, truncated } = await fetchAllReports({ apiKey });
+  const range = reportDateRange(reports);
+  const matching = reports.filter(belongsToThisApp);
+  const jobNumbers = [...new Set(reports.map(r => jobNumberOf(r) || '(blank)'))];
+  // Newest first — the ones the user is most likely to recognise.
+  const newestJobNumbers = [...reports]
+    .sort((a, b) => (reportDate(b) || 0) - (reportDate(a) || 0))
+    .map(r => jobNumberOf(r) || '(blank)')
+    .filter((job, i, all) => all.indexOf(job) === i)
+    .slice(0, 8);
+
   return {
     ok: true,
     count: reports.length,
-    sampleDate: dates.length ? dates[dates.length - 1] : null,
+    pages,
+    truncated,
+    sampleDate: range.to,
+    dateRange: range,
+    jobNumberCount: jobNumbers.length,
+    newestJobNumbers,
+    matchingCount: matching.length,
+    jobPrefix: routingDisabled() ? null : jobPrefix(),
   };
 }
 
@@ -656,7 +769,10 @@ async function syncNow({ apiKey, fullResync = false, allowLargePrune = false } =
   }
 
   console.log(`[CarbonZapp] Sync starting (fullResync=${fullResync}, dateFrom=${dateFrom || 'none'}, jobPrefix=${routingDisabled() ? 'disabled' : jobPrefix()})`);
-  const fetched = await fetchReports({ apiKey, dateFrom });
+  // Paged: one request only returns a slice of the bench's history.
+  const { reports: fetched, pages: pagesFetched, truncated: fetchTruncated } =
+    await fetchAllReports({ apiKey, dateFrom });
+  const fetchedRange = reportDateRange(fetched);
   // Route by Job # prefix — reports belonging to the Warranty app are excluded
   // here.
   const raw = fetched.filter(belongsToThisApp);
@@ -686,7 +802,19 @@ async function syncNow({ apiKey, fullResync = false, allowLargePrune = false } =
       .filter(r => r && r._id != null)
       .map(r => String(r._id));
 
-    if (presentExtIds.length === 0) {
+    if (fetchTruncated) {
+      // The paged fetch stopped on its budget, so this is not the complete set.
+      const impact = stalePruneImpact(presentExtIds);
+      if (impact.staleRows > 0) {
+        pruneSkipped = {
+          reason: 'incomplete_fetch',
+          wouldDeleteRows: impact.staleRows,
+          wouldDeleteReports: impact.staleReports,
+          storedRows: impact.storedRows,
+        };
+        console.warn(`[CarbonZapp] Full resync could not read the bench's complete history — SKIPPED pruning ${impact.staleRows} injector row(s).`);
+      }
+    } else if (presentExtIds.length === 0) {
       // Rule 1 — never treat "we got nothing" as "the bench has nothing".
       const impact = stalePruneImpact(presentExtIds);
       if (impact.staleRows > 0) {
@@ -735,6 +863,10 @@ async function syncNow({ apiKey, fullResync = false, allowLargePrune = false } =
     // Diagnostics for "the bench answered but nothing was imported".
     excludedJobNumbers,
     jobPrefix: routingDisabled() ? null : jobPrefix(),
+    // How much of the bench's history this sync actually saw.
+    pagesFetched,
+    fetchTruncated,
+    dateRange: fetchedRange,
     imported: result.imported,
     updated: result.updated,
     inspectionsCreated,
@@ -756,6 +888,9 @@ module.exports = {
   setSetting,
   getApiKey,
   fetchReports,
+  fetchAllReports,
+  reportDate,
+  reportDateRange,
   testConnection,
   mapReportToInjector,
   normaliseTests,
