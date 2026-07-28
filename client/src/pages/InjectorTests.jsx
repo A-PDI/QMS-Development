@@ -178,7 +178,26 @@ export default function InjectorTests() {
     setStatusMsg({ type: 'info', text: 'Testing connection to the test bench…' })
     try {
       const { data: res } = await api.post('/injector-tests/test-connection', {})
-      setStatusMsg({ type: 'success', text: `Connection OK — the bench returned ${res.count} report object(s)${res.sampleDate ? ` (latest ${String(res.sampleDate).slice(0, 10)})` : ''}.` })
+      // Report what the key can actually SEE — how many reports, over what span,
+      // and how many pass the Job # filter. That separates a key/scope problem
+      // from a routing one without needing the server log.
+      const span = res.dateRange?.from
+        ? ` covering ${String(res.dateRange.from).slice(0, 10)} → ${String(res.dateRange.to).slice(0, 10)}`
+        : ''
+      const pages = res.pages > 1 ? ` over ${res.pages} pages` : ''
+      const matching = res.jobPrefix
+        ? ` ${res.matchingCount} match the "${res.jobPrefix}" Job # filter.`
+        : ' Job # filtering is off, so all of them would be imported.'
+      const newest = res.newestJobNumbers?.length
+        ? ` Newest Job #s: ${res.newestJobNumbers.slice(0, 6).join(', ')}.`
+        : ''
+      const truncated = res.truncated
+        ? ' The bench has more history than one read can cover — raise CARBONZAPP_MAX_PAGES if reports are missing.'
+        : ''
+      setStatusMsg({
+        type: res.count > 0 && res.matchingCount === 0 ? 'warning' : 'success',
+        text: `Connection OK — the bench returned ${res.count} report object(s)${pages}${span}.${matching}${newest}${truncated}`,
+      })
       showToast('Connection successful', 'success')
     } catch (err) {
       const msg = await errorMessageFrom(err, 'Connection failed.')

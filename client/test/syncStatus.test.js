@@ -30,6 +30,41 @@ test('an empty full resync says nothing was deleted and why', () => {
   assert.match(out.text, /no reports at all/i)
 })
 
+test('the message says which span of bench history was read', () => {
+  // The tell-tale of a partial read: recent tests exist on the bench, but the
+  // sync only saw old ones.
+  const out = describeSyncResult({
+    fetched: 0, fetchedTotal: 39, imported: 0, updated: 0, storedRows: 0,
+    excludedByRouting: 39, excludedJobNumbers: ['Master', 'BTD-1'], jobPrefix: 'QMS',
+    pagesFetched: 1, dateRange: { from: '2024-03-02T10:00:00Z', to: '2025-05-14T08:00:00Z' },
+  })
+  assert.match(out.text, /covering 2024-03-02 → 2025-05-14/)
+})
+
+test('a partial read is reported as partial, with nothing deleted', () => {
+  const out = describeSyncResult({
+    fetched: 39, fetchedTotal: 39, imported: 39, updated: 0, storedRows: 300,
+    pagesFetched: 1, fetchTruncated: true,
+    dateRange: { from: '2025-01-01T00:00:00Z', to: '2025-02-08T00:00:00Z' },
+    pruneSkipped: { reason: 'incomplete_fetch', wouldDeleteRows: 261, storedRows: 300 },
+  }, { fullResync: true })
+
+  assert.strictEqual(out.type, 'warning')
+  assert.match(out.text, /only saw part of it/i)
+  assert.match(out.text, /261 records were left in place/)
+  assert.match(out.text, /CARBONZAPP_MAX_PAGES/)
+})
+
+test('multi-page coverage is shown on a successful sync', () => {
+  const out = describeSyncResult({
+    fetched: 100, fetchedTotal: 300, imported: 100, updated: 0, storedRows: 100,
+    pagesFetched: 9, dateRange: { from: '2025-01-01T00:00:00Z', to: '2025-10-27T00:00:00Z' },
+  }, { fullResync: true })
+
+  assert.strictEqual(out.type, 'success')
+  assert.match(out.text, /9 pages/)
+})
+
 test('an empty import caused by job routing names the job numbers', () => {
   const out = describeSyncResult({
     fetched: 0, fetchedTotal: 6, imported: 0, updated: 0, storedRows: 30,

@@ -20,6 +20,21 @@ function excludedJobList(res) {
 }
 
 /**
+ * The span of bench history this sync actually read. Showing it is what makes a
+ * partial view obvious — "covering 2024-03 → 2025-05" against a bench full of
+ * 2026 tests says the fetch never reached the recent reports.
+ */
+function coverage(res) {
+  const from = res.dateRange?.from
+  const to = res.dateRange?.to
+  if (!from || !to) return ''
+  const day = (v) => String(v).slice(0, 10)
+  const span = day(from) === day(to) ? day(from) : `${day(from)} → ${day(to)}`
+  const pages = res.pagesFetched > 1 ? `, ${res.pagesFetched} pages` : ''
+  return ` (covering ${span}${pages})`
+}
+
+/**
  * @returns {{ type: 'success'|'info'|'warning', text: string, toast: string }}
  */
 export function describeSyncResult(res = {}, { fullResync = false } = {}) {
@@ -33,9 +48,20 @@ export function describeSyncResult(res = {}, { fullResync = false } = {}) {
   const skipped = res.pruneSkipped
 
   // ── A destructive prune was held back ────────────────────────────────────
+  if (skipped?.reason === 'incomplete_fetch') {
+    return {
+      type: 'warning',
+      text: `The bench's history was too large to read in one go, so this resync only saw part of it${coverage(res)} `
+        + `— ${plural(skipped.wouldDeleteRows, 'record')} were left in place rather than deleted. `
+        + `Imported ${imported} new and updated ${updated} record(s). Run the resync again to continue, `
+        + 'or raise CARBONZAPP_MAX_PAGES on the server.',
+      toast: 'Partial resync — nothing was deleted',
+    }
+  }
+
   if (skipped?.reason === 'empty_fetch') {
     const why = fetchedTotal > 0
-      ? `The bench returned ${plural(fetchedTotal, 'report')}, but ${excluded === fetchedTotal ? 'every one of them was' : `${excluded} were`} excluded because the Job # doesn't start with "${prefix}"${excludedJobList(res) ? ` (${excludedJobList(res)})` : ''}.`
+      ? `The bench returned ${plural(fetchedTotal, 'report')}${coverage(res)}, but ${excluded === fetchedTotal ? 'every one of them was' : `${excluded} were`} excluded because the Job # doesn't start with "${prefix}"${excludedJobList(res) ? ` (${excludedJobList(res)})` : ''}.`
       : 'The bench returned no reports at all — check the API key, the bench connection, and that reports exist for the requested date range.'
     return {
       type: 'warning',
@@ -58,7 +84,7 @@ export function describeSyncResult(res = {}, { fullResync = false } = {}) {
   if (fetched === 0 && excluded > 0) {
     return {
       type: 'warning',
-      text: `The bench returned ${plural(fetchedTotal, 'report')}, but none were imported: their Job # doesn't start with "${prefix}"`
+      text: `The bench returned ${plural(fetchedTotal, 'report')}${coverage(res)}, but none were imported: their Job # doesn't start with "${prefix}"`
         + `${excludedJobList(res) ? ` (${excludedJobList(res)})` : ''}. `
         + 'Fix the Job # on the bench, or set CARBONZAPP_JOB_PREFIX on the server to match your numbering.',
       toast: 'Nothing imported — job numbers did not match',
@@ -76,7 +102,7 @@ export function describeSyncResult(res = {}, { fullResync = false } = {}) {
   }
 
   // ── Normal outcome ───────────────────────────────────────────────────────
-  const parts = [`Synced ${plural(fetched, 'report')}: ${imported} new, ${updated} updated.`]
+  const parts = [`Synced ${plural(fetched, 'report')}${coverage(res)}: ${imported} new, ${updated} updated.`]
   if (excluded) {
     parts.push(`${excluded} excluded — Job # doesn't start with "${prefix}"${excludedJobList(res) ? ` (${excludedJobList(res)})` : ''}.`)
   }
