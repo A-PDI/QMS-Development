@@ -2,11 +2,12 @@ import { useState, useMemo, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Gauge, RefreshCw, Settings, Trash2, Search, Printer, ChevronUp, ChevronDown, X,
-  AlertTriangle, CheckCircle2, Loader2, XCircle, Save, FileText, Files, BarChart3, Info,
+  AlertTriangle, CheckCircle2, Loader2, XCircle, Save, FileText, Files, BarChart3, Info, ShieldAlert,
 } from 'lucide-react'
 import api from '../lib/api'
 import { useToast } from '../hooks/useToast'
 import { chooseSaveTarget, writeBlobToTarget, deriveFilename } from '../lib/download'
+import { describeSyncResult } from '../lib/syncStatus'
 import {
   NO_JOB_KEY,
   jobKeyOf,
@@ -75,6 +76,7 @@ export default function InjectorTests() {
   const [testing, setTesting] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
+  const [pendingPrune, setPendingPrune] = useState(null)   // large prune awaiting confirmation
   const [statusMsg, setStatusMsg] = useState(null)     // { type:'error'|'success'|'info'|'warning', text }
 
   const { data, isLoading } = useQuery({
@@ -87,12 +89,17 @@ export default function InjectorTests() {
   })
 
   const injectors = data?.injectors || []
+  const jobOptions = useMemo(() => jobNumberOptions(injectors), [injectors])
+  // A job filter left over from before a sync would hide every record and look
+  // like data loss, so drop it once that job number no longer exists.
+  const activeJobFilter = jobFilter && jobOptions.some(o => o.key === jobFilter) ? jobFilter : ''
+  if (jobFilter && !activeJobFilter && !isLoading) setJobFilter('')
+
   const filtered = useMemo(
-    () => filterInjectors(injectors, { search, jobNumber: jobFilter }),
-    [injectors, search, jobFilter]
+    () => filterInjectors(injectors, { search, jobNumber: activeJobFilter }),
+    [injectors, search, activeJobFilter]
   )
   const groups = useMemo(() => groupByJobNumber(filtered), [filtered])
-  const jobOptions = useMemo(() => jobNumberOptions(injectors), [injectors])
   const allVisibleSelected = areAllSelected(selectedIds, filtered)
 
   // Selected records still visible in the list — the exact set that is reported.
@@ -113,34 +120,23 @@ export default function InjectorTests() {
   const move = (id, dir) => setSelectedIds(prev => moveSelected(prev, id, dir))
 
   // ── Sync / settings ────────────────────────────────────────────────────────
-  const handleSync = async (fullResync = false) => {
+  const handleSync = async (fullResync = false, { allowLargePrune = false } = {}) => {
     setSyncing(true)
+    setPendingPrune(null)
     setStatusMsg({ type: 'info', text: fullResync
       ? 'Full resync — fetching the complete report set from the test bench…'
       : 'Syncing with the test bench…' })
     try {
-      const { data: res } = await api.post('/injector-tests/sync', fullResync ? { full_resync: true } : {})
-      let summary = `Synced ${res.fetched} report object(s): ${res.imported} new, ${res.updated} updated. ` +
-        'No inspection reports were created — select injectors below and generate reports.'
-      if (res.excludedByRouting) {
-        summary += ` (${res.excludedByRouting} excluded — Job # doesn't start with QMS.)`
-      }
-      const delReports = res.reportsDeleted || 0
-      const delInsp = res.inspectionsDeleted || 0
-      const keptInsp = res.inspectionsKept || 0
-      if (fullResync && (delReports || delInsp || keptInsp)) {
-        summary += ` Removed ${delReports} report(s) no longer on the bench` +
-          (delInsp ? `, deleted ${delInsp} auto-inspection(s)` : '') +
-          (keptInsp ? `; kept ${keptInsp} completed inspection(s)` : '') + '.'
-      }
-      if (res.fetched === 0 && !delReports && !delInsp) {
-        setStatusMsg({ type: 'info', text: fullResync
-          ? 'Full resync succeeded, but the bench returned no reports.'
-          : 'Sync succeeded, but the bench returned no new reports since the last sync.' })
-      } else {
-        setStatusMsg({ type: 'success', text: summary })
-      }
-      showToast(`Synced ${res.imported} new / ${res.updated} updated test record(s)`, 'success')
+      const body = {}
+      if (fullResync) body.full_resync = true
+      if (allowLargePrune) body.allow_large_prune = true
+      const { data: res } = await api.post('/injector-tests/sync', body)
+
+      const outcome = describeSyncResult(res, { fullResync })
+      setStatusMsg({ type: outcome.type, text: outcome.text })
+      // A held-back prune offers a confirm button below the banner.
+      setPendingPrune(res.pruneSkipped?.reason === 'large_prune' ? res.pruneSkipped : null)
+      showToast(outcome.toast, outcome.type === 'success' ? 'success' : 'info')
       qc.invalidateQueries({ queryKey: ['injector-tests'] })
       qc.invalidateQueries({ queryKey: ['injector-tests-settings'] })
     } catch (err) {
@@ -377,6 +373,40 @@ export default function InjectorTests() {
           </div>
         )}
 
+        {/* A full resync wanted to delete a large share of the records — the
+            user confirms before anything is removed. */}
+        {pendingPrune && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+            <div className="flex items-start gap-2">
+              <ShieldAlert size={18} className="mt-0.5 flex-shrink-0 text-amber-600" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-amber-900">
+                  {pendingPrune.wouldDeleteRows} of {pendingPrune.storedRows} records are no longer on the test bench
+                </p>
+                <p className="mt-1 text-xs text-amber-800">
+                  That is {Math.round(pendingPrune.sharePct)}% of your injector records — more than the {pendingPrune.limitPct}% safety limit — so
+                  nothing was deleted. This usually means the bench returned only part of its data. Re-run the
+                  resync to check, or remove them if the bench really did drop those tests.
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <button onClick={() => handleSync(true, { allowLargePrune: true })} disabled={syncing}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 min-h-[36px] font-medium">
+                    <Trash2 size={14} /> Remove them
+                  </button>
+                  <button onClick={() => handleSync(true)} disabled={syncing}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-amber-300 bg-white rounded-lg hover:bg-amber-100 min-h-[36px]">
+                    <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} /> Run the resync again
+                  </button>
+                  <button onClick={() => setPendingPrune(null)} disabled={syncing}
+                    className="px-3 py-1.5 text-sm border border-gray-300 bg-white rounded-lg hover:bg-gray-50 min-h-[36px]">
+                    Keep them
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Clear-all confirmation */}
         {confirmClear && (
           <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
@@ -437,6 +467,25 @@ export default function InjectorTests() {
               </button>
               <p className="text-xs text-gray-400 mt-1">Verifies the key can reach the bench without importing anything.</p>
             </div>
+
+            {/* Import rules — the usual reason a sync brings back nothing */}
+            <div className="pt-2 border-t border-gray-100 text-xs text-gray-500 space-y-0.5">
+              <p>
+                <span className="font-medium text-gray-600">Job # filter:</span>{' '}
+                {settings?.jobPrefix
+                  ? <>only reports whose Job # starts with <code className="bg-gray-100 px-1 rounded">{settings.jobPrefix}</code> are imported</>
+                  : 'disabled — every report is imported regardless of its Job #'}
+              </p>
+              <p>
+                <span className="font-medium text-gray-600">Full resync window:</span>{' '}
+                {settings?.fullSyncFrom ? `from ${String(settings.fullSyncFrom).slice(0, 10)}` : 'no date filter sent'}
+              </p>
+              <p className="text-gray-400">
+                Set <code className="bg-gray-100 px-1 rounded">CARBONZAPP_JOB_PREFIX</code> (or{' '}
+                <code className="bg-gray-100 px-1 rounded">none</code> to import everything) and{' '}
+                <code className="bg-gray-100 px-1 rounded">CARBONZAPP_FULL_SYNC_FROM</code> on the server to change these.
+              </p>
+            </div>
           </div>
         )}
 
@@ -449,7 +498,7 @@ export default function InjectorTests() {
                 placeholder="Search part #, serial #, job #…"
                 className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
             </div>
-            <select value={jobFilter} onChange={e => setJobFilter(e.target.value)}
+            <select value={activeJobFilter} onChange={e => setJobFilter(e.target.value)}
               aria-label="Filter by job number"
               className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px] sm:w-64">
               <option value="">All job numbers</option>
