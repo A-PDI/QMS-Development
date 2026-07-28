@@ -79,6 +79,10 @@ router.get('/settings', requireAdmin, (req, res, next) => {
       apiKeyMasked: masked,
       apiKeyFromEnv: !!process.env.CARBONZAPP_API_KEY,
       lastSync: carbonzapp.getSetting('carbonzapp_last_sync'),
+      // Import rules, shown in Settings so "nothing was imported" can be
+      // diagnosed without server access.
+      jobPrefix: carbonzapp.routingDisabled() ? null : carbonzapp.jobPrefix(),
+      fullSyncFrom: carbonzapp.fullSyncDateFrom(),
     });
   } catch (err) { next(err); }
 });
@@ -108,8 +112,13 @@ router.post('/test-connection', requireAdmin, async (req, res, next) => {
 // ── Sync Now ──────────────────────────────────────────────────────────────
 router.post('/sync', requireAdmin, async (req, res, next) => {
   try {
-    const { full_resync } = req.body || {};
-    const result = await carbonzapp.syncNow({ fullResync: !!full_resync });
+    // `allow_large_prune` confirms a full resync that would remove more than
+    // half of the stored records (the safety rule in carbonzapp.syncNow).
+    const { full_resync, allow_large_prune } = req.body || {};
+    const result = await carbonzapp.syncNow({
+      fullResync: !!full_resync,
+      allowLargePrune: !!allow_large_prune,
+    });
     res.json({ ok: true, ...result });
   } catch (err) {
     return mapCarbonzappError(err, next);

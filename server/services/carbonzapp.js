@@ -385,15 +385,48 @@ async function testConnection({ apiKey } = {}) {
 //   "RMA…" → a warranty return evaluation → belongs to Warranty_SQL only
 // A report is only synced here if its Job # begins with OUR prefix — anything
 // else (the other system's prefix, no prefix, or any other text) is excluded.
+//
+// The prefix is configurable so a change of convention on the bench doesn't
+// silently exclude every report:
+//   CARBONZAPP_JOB_PREFIX=QMS    (default)
+//   CARBONZAPP_JOB_PREFIX=none   import everything, whatever the Job # says
+// It can also be stored in app_settings under `carbonzapp_job_prefix`.
 const OWN_JOB_PREFIX = 'QMS';
+const ROUTING_DISABLED = ['none', 'any', 'all', '*'];
+
+function jobPrefix() {
+  const configured = (process.env.CARBONZAPP_JOB_PREFIX || getSetting('carbonzapp_job_prefix') || '').trim();
+  return configured || OWN_JOB_PREFIX;
+}
+
+/** True when job-number routing is switched off (every report is imported). */
+function routingDisabled() {
+  return ROUTING_DISABLED.includes(jobPrefix().toLowerCase());
+}
 
 function jobNumberOf(report) {
   return String((report && (report.job || report.drs_id)) || '').trim();
 }
 
 function belongsToThisApp(report) {
+  if (routingDisabled()) return true;
   const job = jobNumberOf(report);
-  return new RegExp(`^${OWN_JOB_PREFIX}`, 'i').test(job);
+  return new RegExp(`^${jobPrefix()}`, 'i').test(job);
+}
+
+// ── Full-resync fetch window ──────────────────────────────────────────────────
+// A full resync asks the bench for EVERYTHING. Some deployments return an empty
+// array when no `date_from` filter is supplied at all, which used to make a full
+// resync look like "the bench has no reports" — and prune the local cache. We
+// therefore send a deliberately wide start date instead of no filter.
+//   CARBONZAPP_FULL_SYNC_FROM=2015-01-01  narrow the window
+//   CARBONZAPP_FULL_SYNC_FROM=none        send no date filter (legacy behaviour)
+const FULL_SYNC_FROM_DEFAULT = '2000-01-01T00:00:00.000Z';
+
+function fullSyncDateFrom() {
+  const configured = (process.env.CARBONZAPP_FULL_SYNC_FROM || '').trim();
+  if (ROUTING_DISABLED.includes(configured.toLowerCase())) return null;
+  return configured || FULL_SYNC_FROM_DEFAULT;
 }
 
 /**
@@ -528,12 +561,38 @@ function clearAllReports() {
  * (i.e. a full resync with no date_from filter).
  * Returns { reportsDeleted, inspectionsDeleted, inspectionsKept }.
  */
-function reconcileDeletions(presentExtIds) {
+/**
+ * Which stored reports the bench no longer has, and how much of the local cache
+ * they represent. Used to decide whether pruning them is safe.
+ */
+function stalePruneImpact(presentExtIds) {
   const present = new Set([...presentExtIds].map(String));
-  const dbReports = db.all('SELECT DISTINCT report_ext_id FROM injector_test_reports', []);
-  const staleReportIds = dbReports
+  const staleReportIds = db.all('SELECT DISTINCT report_ext_id FROM injector_test_reports', [])
     .map(r => String(r.report_ext_id))
     .filter(id => id && !present.has(id));
+
+  const storedRows = db.get('SELECT COUNT(*) AS c FROM injector_test_reports', []);
+  const staleRows = staleReportIds.length
+    ? db.get(
+        `SELECT COUNT(*) AS c FROM injector_test_reports
+          WHERE report_ext_id IN (${staleReportIds.map(() => '?').join(',')})`,
+        staleReportIds
+      )
+    : { c: 0 };
+
+  const total = storedRows ? storedRows.c : 0;
+  const rows = staleRows ? staleRows.c : 0;
+  return {
+    staleReportIds,
+    staleReports: staleReportIds.length,
+    staleRows: rows,
+    storedRows: total,
+    sharePct: total > 0 ? (rows / total) * 100 : 0,
+  };
+}
+
+function reconcileDeletions(presentExtIds) {
+  const { staleReportIds } = stalePruneImpact(presentExtIds);
 
   let reportsDeleted = 0;
   let inspectionsDeleted = 0;
@@ -562,19 +621,33 @@ function reconcileDeletions(presentExtIds) {
   return { reportsDeleted, inspectionsDeleted, inspectionsKept };
 }
 
+// A full resync may prune reports the bench no longer has. If that would wipe
+// out more than this share of the local cache, the prune is SKIPPED and
+// reported instead — a partial or filtered bench response must never be able to
+// empty the app's data. The caller can confirm with { allowLargePrune: true }.
+const PRUNE_SHARE_LIMIT_PCT = Number(process.env.CARBONZAPP_PRUNE_LIMIT_PCT) || 50;
+
 /**
- * Full sync: fetch new reports since last sync, persist them, auto-create/fill
- * a Fuel Injector inspection for each, and record the sync timestamp.
+ * Full sync: fetch reports from the bench and persist them (test records only —
+ * reports are generated manually, see services/injectorReports.js).
  *
- * When `fullResync` is true the entire report set is fetched (no date filter)
- * and reports that no longer exist on the bench are pruned (deletion handling).
+ * When `fullResync` is true the entire report set is fetched and reports that
+ * no longer exist on the bench are pruned — subject to two safety rules that
+ * exist because pruning is destructive and a fetch can come back short:
+ *
+ *   1. Nothing usable came back → prune NOTHING. An empty response (or one
+ *      where every report was excluded by job-number routing) means "we can't
+ *      see the bench's data", not "the bench has no data".
+ *   2. The prune would remove more than PRUNE_SHARE_LIMIT_PCT of the local
+ *      records → skip it and report `pruneSkipped` so the user can confirm.
  */
-async function syncNow({ apiKey, fullResync = false } = {}) {
+async function syncNow({ apiKey, fullResync = false, allowLargePrune = false } = {}) {
   const lastSync = fullResync ? null : getSetting('carbonzapp_last_sync');
   // The bench uses date_from as an inclusive filter. Fetch from the last sync
   // (minus a small overlap so nothing is missed); dedupe handles overlaps.
-  let dateFrom = null;
-  if (lastSync) {
+  // A full resync uses a deliberately wide window instead of no filter at all.
+  let dateFrom = fullResync ? fullSyncDateFrom() : null;
+  if (!fullResync && lastSync) {
     const d = new Date(lastSync);
     if (!isNaN(d.getTime())) {
       d.setMinutes(d.getMinutes() - 5); // 5-min overlap guard
@@ -582,14 +655,18 @@ async function syncNow({ apiKey, fullResync = false } = {}) {
     }
   }
 
-  console.log(`[CarbonZapp] Sync starting (fullResync=${fullResync}, dateFrom=${dateFrom || 'none'})`);
+  console.log(`[CarbonZapp] Sync starting (fullResync=${fullResync}, dateFrom=${dateFrom || 'none'}, jobPrefix=${routingDisabled() ? 'disabled' : jobPrefix()})`);
   const fetched = await fetchReports({ apiKey, dateFrom });
   // Route by Job # prefix — reports belonging to the Warranty app are excluded
-  // here. Filtering BEFORE upsert/reconcile means a Full Resync also prunes any
-  // wrong-system rows imported before this routing rule existed.
+  // here.
   const raw = fetched.filter(belongsToThisApp);
   const excludedByRouting = fetched.length - raw.length;
-  console.log(`[CarbonZapp] Fetched ${fetched.length} report object(s) from the bench (${excludedByRouting} excluded by job-number routing).`);
+  // A sample of the Job #s that were filtered out, so "nothing imported" can be
+  // diagnosed from the UI instead of the server log.
+  const excludedJobNumbers = [...new Set(
+    fetched.filter(r => !belongsToThisApp(r)).map(r => jobNumberOf(r) || '(blank)')
+  )].slice(0, 10);
+  console.log(`[CarbonZapp] Fetched ${fetched.length} report object(s) from the bench (${excludedByRouting} excluded by job-number routing${excludedJobNumbers.length ? ': ' + excludedJobNumbers.join(', ') : ''}).`);
   const result = upsertReports(raw);
 
   // NOTE: synchronisation IMPORTS TEST RECORDS ONLY. Inspection reports are no
@@ -601,37 +678,80 @@ async function syncNow({ apiKey, fullResync = false } = {}) {
 
   // Deletion handling: a normal incremental sync only returns RECENT reports,
   // so a missing report does NOT imply deletion. Only a full resync fetches the
-  // complete set, so only then can we safely prune reports the bench no longer
-  // has.
+  // complete set, so only then can pruning be considered at all.
   let deletion = { reportsDeleted: 0, inspectionsDeleted: 0, inspectionsKept: 0 };
+  let pruneSkipped = null;
   if (fullResync) {
     const presentExtIds = raw
       .filter(r => r && r._id != null)
       .map(r => String(r._id));
-    deletion = reconcileDeletions(presentExtIds);
+
+    if (presentExtIds.length === 0) {
+      // Rule 1 — never treat "we got nothing" as "the bench has nothing".
+      const impact = stalePruneImpact(presentExtIds);
+      if (impact.staleRows > 0) {
+        pruneSkipped = {
+          reason: 'empty_fetch',
+          wouldDeleteRows: impact.staleRows,
+          wouldDeleteReports: impact.staleReports,
+          storedRows: impact.storedRows,
+        };
+        console.warn(`[CarbonZapp] Full resync returned no usable reports — SKIPPED pruning ${impact.staleRows} existing injector row(s). Existing data left untouched.`);
+      }
+    } else {
+      const impact = stalePruneImpact(presentExtIds);
+      const tooMuch = impact.staleRows > 0
+        && impact.storedRows > 0
+        && impact.sharePct > PRUNE_SHARE_LIMIT_PCT;
+      if (tooMuch && !allowLargePrune) {
+        // Rule 2 — a suspiciously large prune needs confirmation.
+        pruneSkipped = {
+          reason: 'large_prune',
+          wouldDeleteRows: impact.staleRows,
+          wouldDeleteReports: impact.staleReports,
+          storedRows: impact.storedRows,
+          sharePct: impact.sharePct,
+          limitPct: PRUNE_SHARE_LIMIT_PCT,
+        };
+        console.warn(`[CarbonZapp] Full resync would prune ${impact.staleRows}/${impact.storedRows} injector row(s) (${impact.sharePct.toFixed(0)}%) — SKIPPED pending confirmation.`);
+      } else {
+        deletion = reconcileDeletions(presentExtIds);
+      }
+    }
   }
 
+  // Advance the incremental marker only when we actually saw the bench's data.
+  // A full resync that returned nothing leaves it alone, so the next ordinary
+  // "Sync Now" still reaches back to where it left off.
   const now = new Date().toISOString();
-  setSetting('carbonzapp_last_sync', now);
+  const markerAdvanced = !(fullResync && fetched.length === 0);
+  if (markerAdvanced) setSetting('carbonzapp_last_sync', now);
   console.log(`[CarbonZapp] Sync complete: ${result.imported} new, ${result.updated} updated, ${deletion.reportsDeleted} pruned (no inspections created — reports are generated manually).`);
 
   return {
     fetched: raw.length,
     fetchedTotal: fetched.length,
     excludedByRouting,
+    // Diagnostics for "the bench answered but nothing was imported".
+    excludedJobNumbers,
+    jobPrefix: routingDisabled() ? null : jobPrefix(),
     imported: result.imported,
     updated: result.updated,
     inspectionsCreated,
     reportsDeleted: deletion.reportsDeleted,
     inspectionsDeleted: deletion.inspectionsDeleted,
     inspectionsKept: deletion.inspectionsKept,
+    // Present when a destructive prune was held back (see syncNow).
+    pruneSkipped,
+    storedRows: db.get('SELECT COUNT(*) AS c FROM injector_test_reports', []).c,
     fullResync: !!fullResync,
-    lastSync: now,
+    lastSync: markerAdvanced ? now : lastSync,
   };
 }
 
 module.exports = {
   CARBONZAPP_URL,
+  PRUNE_SHARE_LIMIT_PCT,
   getSetting,
   setSetting,
   getApiKey,
@@ -640,12 +760,16 @@ module.exports = {
   mapReportToInjector,
   normaliseTests,
   hydrateInjectorRow,
+  jobPrefix,
+  routingDisabled,
+  fullSyncDateFrom,
   jobNumberOf,
   belongsToThisApp,
   upsertReports,
   syncNow,
   clearAllReports,
   reconcileDeletions,
+  stalePruneImpact,
   deleteAutoInspection,
   PASS,
   FAIL,
