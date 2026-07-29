@@ -67,6 +67,25 @@ export function useCompleteInspection() {
   })
 }
 
+// Reopen a completed and closed inspection (admin / qc_manager only). The
+// inspection returns to the editable 'draft' state; `reason` is required and is
+// recorded in the inspection activity log.
+export function useReopenInspection() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, reason }) => {
+      const { data } = await api.post(`/inspections/${id}/reopen`, { reason })
+      return data.inspection
+    },
+    onSuccess: (_, { id }) => {
+      qc.invalidateQueries({ queryKey: ['inspection', id] })
+      qc.invalidateQueries({ queryKey: ['inspections'] })
+      qc.invalidateQueries({ queryKey: ['inspections-assigned'] })
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
+    },
+  })
+}
+
 export function useDeleteInspection() {
   const qc = useQueryClient()
   return useMutation({

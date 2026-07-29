@@ -35,6 +35,7 @@ const ACTION_LABELS = {
   printed:   { label: 'Printed',   color: 'bg-purple-100 text-purple-700' },
   emailed:   { label: 'Emailed',   color: 'bg-indigo-100 text-indigo-700' },
   completed: { label: 'Completed', color: 'bg-green-100 text-green-700' },
+  reopened:  { label: 'Reopened',  color: 'bg-amber-100 text-amber-700' },
 }
 
 const PERIOD_OPTIONS = [

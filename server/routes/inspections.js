@@ -6,7 +6,24 @@ const db = require("../db/adapter");
 const { AppError } = require("../middleware/error");
 const { generateInspectionPdf } = require("../services/pdf");
 
-function logActivity(inspectionId, actionType, user) {
+// Roles allowed to perform admin-only inspection actions. Matches requireAdmin
+// in routes/admin.js and ADMIN_ROLES in client/src/lib/nav.js.
+const ADMIN_ROLES = ['admin', 'qc_manager'];
+
+// Statuses that count as a closed inspection report. 'complete' is the current
+// terminal status; the rest are legacy values that the sqlite.js data migration
+// folds into 'complete' and that the client still labels "Complete".
+const CLOSED_STATUSES = ['complete', 'submitted', 'approved', 'rejected'];
+
+// Upper bound on the reopen reason stored in the activity log.
+const REOPEN_REASON_MAX = 500;
+
+function requireAdmin(req, res, next) {
+  if (!ADMIN_ROLES.includes(req.user?.role)) return next(new AppError('Unauthorized', 403, 'FORBIDDEN'));
+  next();
+}
+
+function logActivity(inspectionId, actionType, user, notes = null) {
   try {
     if (actionType === "edited") {
       const cutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString();
@@ -17,8 +34,8 @@ function logActivity(inspectionId, actionType, user) {
       if (recent) return;
     }
     db.run(
-      `INSERT INTO inspection_activity_log (id, inspection_id, action_type, actor_name, actor_id, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-      [uuidv4(), inspectionId, actionType, user?.name || null, user?.id || null, new Date().toISOString()]
+      `INSERT INTO inspection_activity_log (id, inspection_id, action_type, actor_name, actor_id, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [uuidv4(), inspectionId, actionType, user?.name || null, user?.id || null, notes || null, new Date().toISOString()]
     );
   } catch (_) {}
 }
@@ -147,7 +164,7 @@ router.get('/:id', (req, res, next) => {
       [req.params.id]
     );
     const activity = db.all(
-      'SELECT id, action_type, actor_name, created_at FROM inspection_activity_log WHERE inspection_id = ? ORDER BY created_at DESC LIMIT 50',
+      'SELECT id, action_type, actor_name, notes, created_at FROM inspection_activity_log WHERE inspection_id = ? ORDER BY created_at DESC LIMIT 50',
       [req.params.id]
     );
     // Fetch part specs for the part number + template
@@ -245,15 +262,23 @@ router.post('/:id/complete', (req, res, next) => {
     );
     logActivity(req.params.id, 'completed', req.user);
 
-    // Trigger quality alert if disposition is fail/reject
+    // Trigger quality alert if disposition is fail/reject. An inspection that
+    // was reopened and completed again reuses the alert already raised for it,
+    // so long as nobody has acknowledged it yet.
     const finalDisposition = disposition || inspection.disposition;
     if (finalDisposition && (finalDisposition.includes('fail') || finalDisposition.includes('reject'))) {
       try {
-        db.run(
-          `INSERT INTO quality_alerts (id, inspection_id, part_number, supplier, alert_type, triggered_by, created_at)
-           VALUES (?, ?, ?, ?, 'inspection_failure', ?, ?)`,
-          [uuidv4(), req.params.id, inspection.part_number, inspection.supplier, req.user.id, now]
+        const openAlert = db.get(
+          `SELECT id FROM quality_alerts WHERE inspection_id = ? AND alert_type = 'inspection_failure' AND acknowledged_at IS NULL LIMIT 1`,
+          [req.params.id]
         );
+        if (!openAlert) {
+          db.run(
+            `INSERT INTO quality_alerts (id, inspection_id, part_number, supplier, alert_type, triggered_by, created_at)
+             VALUES (?, ?, ?, ?, 'inspection_failure', ?, ?)`,
+            [uuidv4(), req.params.id, inspection.part_number, inspection.supplier, req.user.id, now]
+          );
+        }
       } catch (_) {}
     }
 
@@ -271,6 +296,40 @@ router.post('/:id/review', (req, res, next) => {
     const now = new Date().toISOString();
     db.run(`UPDATE inspections SET status = 'review', updated_at = ? WHERE id = ?`, [now, req.params.id]);
     logActivity(req.params.id, 'submitted_for_review', req.user);
+    const updated = db.get('SELECT * FROM inspections WHERE id = ?', [req.params.id]);
+    updated.section_data = JSON.parse(updated.section_data || '{}');
+    res.json({ inspection: updated });
+  } catch (err) { next(err); }
+});
+
+// POST /api/inspections/:id/reopen — admin-only: return a completed and closed
+// inspection to the editable 'draft' state so it can be corrected and completed
+// again. The recorded measurements, disposition and attachments are left
+// untouched — reopening unlocks the record, it does not erase it. A reason is
+// required and is kept in the activity log as the audit trail for the reopen.
+router.post('/:id/reopen', requireAdmin, (req, res, next) => {
+  try {
+    const inspection = db.get('SELECT id, status FROM inspections WHERE id = ?', [req.params.id]);
+    if (!inspection) return next(new AppError('Inspection not found', 404, 'NOT_FOUND'));
+    if (!CLOSED_STATUSES.includes(inspection.status)) {
+      return next(new AppError('Only a completed inspection can be reopened', 400, 'VALIDATION_ERROR'));
+    }
+
+    const reason = String(req.body?.reason ?? '').trim();
+    if (!reason) return next(new AppError('A reason is required to reopen an inspection', 400, 'VALIDATION_ERROR'));
+    if (reason.length > REOPEN_REASON_MAX) {
+      return next(new AppError(`Reason must be ${REOPEN_REASON_MAX} characters or fewer`, 400, 'VALIDATION_ERROR'));
+    }
+
+    // Clearing completed_at keeps the dashboard's open/completed counts honest —
+    // a reopened inspection is no longer "completed this month".
+    const now = new Date().toISOString();
+    db.run(
+      `UPDATE inspections SET status = 'draft', completed_at = NULL, updated_at = ? WHERE id = ?`,
+      [now, req.params.id]
+    );
+    logActivity(req.params.id, 'reopened', req.user, reason);
+
     const updated = db.get('SELECT * FROM inspections WHERE id = ?', [req.params.id]);
     updated.section_data = JSON.parse(updated.section_data || '{}');
     res.json({ inspection: updated });

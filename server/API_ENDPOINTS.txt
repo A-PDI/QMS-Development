@@ -129,6 +129,15 @@ POST /api/inspections/:id/reject
   Request:  { review_notes?: string }
   Response: { inspection: { ..., status: 'rejected', reviewed_by, reviewed_at, review_notes } }
 
+POST /api/inspections/:id/reopen        (admin / qc_manager only)
+  Reopens a completed and closed inspection so it can be edited again. Sets
+  status back to 'draft', clears completed_at, and logs a 'reopened' activity
+  entry carrying the reason. Recorded section_data, disposition and attachments
+  are left untouched. 400 if the inspection is not closed or the reason is
+  missing / longer than 500 characters.
+  Request:  { reason: string }   (required)
+  Response: { inspection: { ..., status: 'draft', completed_at: null } }
+
 GET /api/inspections/:id/pdf
   Response: Binary PDF file (Content-Type: application/pdf)
 

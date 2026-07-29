@@ -135,6 +135,9 @@ function migrateSchema() {
     'ALTER TABLE inspection_templates ADD COLUMN parent_template_id TEXT',
     // Per-user page permissions
     'ALTER TABLE users ADD COLUMN permissions TEXT',
+    // Free-text detail on an activity entry (e.g. why a closed inspection was
+    // reopened). No-op on a fresh DB — the CREATE TABLE below already has it.
+    'ALTER TABLE inspection_activity_log ADD COLUMN notes TEXT',
   ];
   for (const sql of columnMigrations) {
     try { rawDb.exec(sql); } catch (_) {}
@@ -148,6 +151,7 @@ function migrateSchema() {
       action_type TEXT NOT NULL,
       actor_name TEXT,
       actor_id TEXT,
+      notes TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`,
     `CREATE INDEX IF NOT EXISTS idx_activity_log_created ON inspection_activity_log(created_at DESC)`,
