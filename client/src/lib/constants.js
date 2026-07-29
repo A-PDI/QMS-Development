@@ -50,6 +50,20 @@ export const STATUS_COLORS = {
   pending_review:      'bg-amber-100 text-amber-700 ring-1 ring-amber-300',
 }
 
+// Statuses that count as a completed and closed inspection report. 'complete'
+// is the current terminal status; the rest are legacy values still labelled
+// "Complete" above. Mirrors CLOSED_STATUSES in server/routes/inspections.js.
+export const CLOSED_STATUSES = ['complete', 'submitted', 'approved', 'rejected']
+
+/**
+ * True when an inspection is closed and an admin may reopen it (Admin → Data).
+ * Accepts an inspection object or a bare status string.
+ */
+export function isReopenable(inspection) {
+  const status = typeof inspection === 'string' ? inspection : inspection?.status
+  return CLOSED_STATUSES.includes(status)
+}
+
 // Disposition badge styling. PASS/ACCEPT = solid green + white text;
 // FAIL/REJECT = solid red + white text; ACCEPTED/CONDITIONAL = solid amber.
 // Keyed by the UPPERCASE disposition code — use normalizeDisposition() before

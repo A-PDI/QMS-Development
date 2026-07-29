@@ -1,16 +1,17 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Search, Save, X, ChevronDown, ChevronUp, Users, FileImage, Download, AlertTriangle, Loader2, ClipboardCheck, UserCheck, Mail, Upload, FileSpreadsheet, DownloadCloud } from 'lucide-react'
+import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Search, Save, X, ChevronDown, ChevronUp, Users, FileImage, Download, AlertTriangle, Loader2, ClipboardCheck, UserCheck, Mail, Upload, FileSpreadsheet, DownloadCloud, RotateCcw } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '../lib/api'
-import { useInspections, useDeleteInspection, useCreateInspection, useAssignInspection } from '../hooks/useInspections'
+import { useInspections, useDeleteInspection, useCreateInspection, useAssignInspection, useReopenInspection } from '../hooks/useInspections'
 import { usePartSpecs, useAllPartSpecs, useCreatePartSpec, useUpdatePartSpec, useDeletePartSpec, useImportPartSpecs, useImportPartsFromInspections } from '../hooks/usePartSpecs'
 import { useDrawings, useUploadDrawing, useSetCurrentDrawing, useDeleteDrawing } from '../hooks/useDrawings'
 import { useToast } from '../hooks/useToast'
 import { getUser } from '../lib/auth'
 import { useTemplates, useDeleteTemplate } from '../hooks/useTemplates'
 import { formatDate } from '../lib/utils'
-import { COMPONENT_TYPE_LABELS, STATUS_LABELS, STATUS_COLORS } from '../lib/constants'
+import { COMPONENT_TYPE_LABELS, STATUS_LABELS, STATUS_COLORS, isReopenable } from '../lib/constants'
+import { isAdminUser } from '../lib/nav'
 import StatusBadge from '../components/StatusBadge'
 
 const TABS = [
@@ -1109,6 +1110,76 @@ function AssignModal({ inspection, onClose, showToast }) {
   )
 }
 
+// ── Reopen Modal ─────────────────────────────────────────────────────────────
+// Reopening returns a completed and closed report to the editable "Open" state.
+// The reason is mandatory — it is the audit trail for unlocking a closed
+// quality record, and is stored on the inspection's activity log.
+
+const REOPEN_REASON_MAX = 500
+
+function ReopenModal({ inspection, onClose, showToast }) {
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+  const reopenInspection = useReopenInspection()
+  const trimmedReason = reason.trim()
+
+  async function handleReopen() {
+    if (!trimmedReason) return
+    setSaving(true)
+    try {
+      await reopenInspection.mutateAsync({ id: inspection.id, reason: trimmedReason })
+      showToast('Inspection reopened', 'success')
+      onClose()
+    } catch (err) {
+      showToast(err?.response?.data?.error || 'Reopen failed', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-semibold text-pdi-navy">Reopen Inspection</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X size={18} /></button>
+        </div>
+        <div className="text-xs text-gray-500">
+          <span className="font-medium text-gray-700">{inspection.form_no}</span> — {inspection.part_number || 'No part #'}
+        </div>
+        <div className="flex gap-2 bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <AlertTriangle size={15} className="text-amber-600 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-800">
+            This closed report will return to <strong>Open</strong> and become editable again.
+            Recorded measurements and attachments are kept; the completion date is cleared.
+          </p>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">
+            Reason for reopening <span className="text-red-500">*</span>
+          </label>
+          <textarea
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            rows={3}
+            maxLength={REOPEN_REASON_MAX}
+            placeholder="e.g. Dimensional data entered against the wrong lot"
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+          />
+          <div className="text-[11px] text-gray-400 mt-1">Recorded in the inspection activity log.</div>
+        </div>
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
+          <button onClick={handleReopen} disabled={saving || !trimmedReason}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px]">
+            <RotateCcw size={14} /> {saving ? 'Reopening…' : 'Reopen'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Inspection Data Tab ───────────────────────────────────────────────────────
 
 function InspectionDataTab({ showToast }) {
@@ -1117,7 +1188,10 @@ function InspectionDataTab({ showToast }) {
   const [search, setSearch] = useState('')
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [assignTarget, setAssignTarget] = useState(null)
+  const [reopenTarget, setReopenTarget] = useState(null)
   const deleteInspection = useDeleteInspection()
+  // Reopening a closed report is an admin-only action (enforced on the API too).
+  const canReopen = isAdminUser(getUser())
 
   const { data: inspectionsData } = useInspections(filters)
   const inspections = inspectionsData?.inspections || []
@@ -1158,6 +1232,14 @@ function InspectionDataTab({ showToast }) {
         <AssignModal
           inspection={assignTarget}
           onClose={() => setAssignTarget(null)}
+          showToast={showToast}
+        />
+      )}
+
+      {reopenTarget && (
+        <ReopenModal
+          inspection={reopenTarget}
+          onClose={() => setReopenTarget(null)}
           showToast={showToast}
         />
       )}
@@ -1228,6 +1310,10 @@ function InspectionDataTab({ showToast }) {
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       <button onClick={() => navigate(`/inspections/${insp.id}`)} className="text-xs text-pdi-navy hover:underline">View</button>
+                      {canReopen && isReopenable(insp) && (
+                        <button onClick={() => setReopenTarget(insp)} title="Reopen inspection"
+                          className="text-xs text-gray-500 hover:text-pdi-navy"><RotateCcw size={13} /></button>
+                      )}
                       <button onClick={() => setAssignTarget(insp)} className="text-xs text-gray-500 hover:text-pdi-navy"><UserCheck size={13} /></button>
                       <button onClick={() => handleEmail(insp)} className="text-xs text-gray-500 hover:text-pdi-navy"><Mail size={13} /></button>
                       <button onClick={() => handleDelete(insp.id)} className="text-xs text-red-400 hover:text-red-600"><Trash2 size={13} /></button>
@@ -1253,6 +1339,10 @@ function InspectionDataTab({ showToast }) {
               </div>
               <div className="flex items-center gap-4 mt-2">
                 <button onClick={() => navigate(`/inspections/${insp.id}`)} className="text-sm text-pdi-navy hover:underline min-h-[36px]">View</button>
+                {canReopen && isReopenable(insp) && (
+                  <button onClick={() => setReopenTarget(insp)} title="Reopen inspection"
+                    className="text-sm text-gray-500 min-h-[36px]"><RotateCcw size={14} /></button>
+                )}
                 <button onClick={() => setAssignTarget(insp)} className="text-sm text-gray-500 min-h-[36px]"><UserCheck size={14} /></button>
                 <button onClick={() => handleEmail(insp)} className="text-sm text-gray-500 min-h-[36px]"><Mail size={14} /></button>
                 <button onClick={() => handleDelete(insp.id)} className="text-sm text-red-400 min-h-[36px]"><Trash2 size={14} /></button>
