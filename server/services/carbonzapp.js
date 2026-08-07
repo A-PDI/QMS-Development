@@ -173,9 +173,11 @@ function normaliseTests(report) {
         max_green: toNum(t2.max_green),
         results: t2.results != null ? String(t2.results) : '',
         // The single "flow" value reported per injector = the average reading.
-        // An errored step has no trustworthy measurement, so the value cell
-        // carries the error text instead — the step NAME is left untouched.
-        average: errored ? errorValue : (avr != null ? String(avr) : ''),
+        // A step the bench flagged (e.g. an excess return) still reports what it
+        // MEASURED — the reading is kept and the failure is carried by `status`
+        // and `error_description`. The error text is only used as the value when
+        // the bench recorded no reading at all.
+        average: avr != null ? String(avr) : (errored ? errorValue : ''),
         error: errored,
         error_description: errorDescription,
         status: errored ? FAIL : tankStatus(t2),

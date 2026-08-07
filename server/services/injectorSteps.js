@@ -276,13 +276,58 @@ function stepLabel(step, role = 'primary', tankName = '') {
 }
 
 /**
- * The value shown for one tank of a step: the measured average, or
- * "Error: <description>" when the bench reported an error for that step.
+ * Mean of the bench's raw reading list ("230.3~230.4~230.3"), or null.
+ * The bench sends the individual readings alongside its own average, so this
+ * recovers a measurement even from records synced before errored steps kept
+ * their value.
+ */
+function averageOfRawResults(results) {
+  // Blank entries are NOT zeros — an empty reading list means "no measurement".
+  const parts = String(results == null ? '' : results)
+    .split(/[~,;|]/)
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+  const readings = parts.map(Number).filter((n) => Number.isFinite(n));
+  if (!readings.length) return null;
+
+  const mean = readings.reduce((a, b) => a + b, 0) / readings.length;
+  // Match the precision the bench reported its readings with.
+  const decimals = parts.reduce((max, s) => {
+    const i = s.indexOf('.');
+    return Math.max(max, i === -1 ? 0 : s.length - i - 1);
+  }, 0);
+  return Number(mean.toFixed(Math.min(decimals, 4)));
+}
+
+/**
+ * The measurement the bench recorded for one tank, as a display string.
+ * Returns '' when there is genuinely no reading.
+ */
+function measuredValue(tank) {
+  if (!tank) return '';
+  const average = tank.average == null ? '' : String(tank.average).trim();
+  // Normal path: the stored average is the measurement.
+  if (average && !isErrorValue(average)) return average;
+  // Records synced before errored steps kept their value stored the error text
+  // in `average` — the raw readings are still there, so use those.
+  const recovered = averageOfRawResults(tank.results);
+  return recovered == null ? '' : String(recovered);
+}
+
+/**
+ * The value shown for one tank of a step.
+ *
+ * The MEASUREMENT always wins: a step that the bench flagged (e.g. an excess
+ * return) still reports what it measured, and that number is what the report
+ * shows — the failure is conveyed by the red/FAIL styling and the pass/fail
+ * rollups, not by replacing the reading with text. The error description is
+ * only used when the bench recorded no measurement at all.
  */
 function stepResultValue(step, tank) {
+  const measured = measuredValue(tank);
+  if (measured) return measured;
   const err = stepErrorInfo(step);
-  if (err.errored) return formatErrorValue(err.description);
-  return tank && tank.average != null ? String(tank.average) : '';
+  return err.errored ? formatErrorValue(err.description) : '';
 }
 
 module.exports = {
@@ -304,6 +349,8 @@ module.exports = {
   isErrorValue,
   numericValue,
   stepErrorInfo,
+  averageOfRawResults,
+  measuredValue,
   stepBaseName,
   stepCode,
   stepLabel,
