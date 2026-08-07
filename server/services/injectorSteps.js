@@ -21,8 +21,9 @@
 // step (Resistance / Inductance), so it gets a distinct name per tank role.
 const STEP_DISPLAY_NAMES = {
   ERL: { primary: 'Resistance', secondary: 'Inductance' },
-  LKT01: 'Low Pressure Leak',
-  LKT02: 'High Pressure Leak',
+  LKT01: 'Leak Test 200 bar',
+  LKT02: 'Leak Test 1800 bar',
+  LKT04: 'Leak Test 2400 bar',
   WARMUP: 'Warm Up',
   IVM01: 'Peak HP',
   IVM02: 'Emissions',

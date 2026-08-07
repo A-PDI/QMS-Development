@@ -7,6 +7,7 @@
  *   PUT  /settings                      → save the CarbonZapp API key
  *   POST /sync                          → "Sync Now" — import test records ONLY
  *   POST /reports/customer              → comparison PDF for selected injectors
+ *                                          (optional vendor_name; bench brand fallback)
  *   POST /reports/inspection            → create/refresh inspection record(s)
  *   POST /reports/shipment-evaluation   → Shipment Evaluation PDF (supplier_evaluation;
  *                                          requires vendor_name)
@@ -215,9 +216,13 @@ function reportFailure(err, { type, count, user }, next) {
 async function handleCustomerReport(req, res, next) {
   let count = 0;
   try {
+    const vendorName = String((req.body && req.body.vendor_name) || '').trim();
+    if (vendorName.length > 120) {
+      throw new AppError('The vendor name is too long (120 characters maximum).', 400, 'VALIDATION_ERROR');
+    }
     const { injectors, validation } = resolveSelection(req);
     count = injectors.length;
-    const { buffer, filename } = await buildCustomerReport(injectors);
+    const { buffer, filename } = await buildCustomerReport(injectors, { vendorName });
     console.log(`[InjectorReports] customer report: ${count} injector(s) → ${filename} (user=${req.user?.id})`);
     sendPdf(res, buffer, filename, validation.warnings);
   } catch (err) {

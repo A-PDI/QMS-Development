@@ -22,6 +22,7 @@ import {
   moveSelected,
   validateSelectionForReport,
   describeSelection,
+  vendorPromptReport,
   suggestReportName,
   hasTestResults,
 } from '../lib/injectorSelection'
@@ -69,7 +70,7 @@ export default function InjectorTests() {
   const [syncing, setSyncing] = useState(false)
   const [generating, setGenerating] = useState(null)   // report kind currently running
   const generatingRef = useRef(false)                  // blocks repeated clicks
-  const [vendorName, setVendorName] = useState('')     // remembered between evaluations
+  const [vendorName, setVendorName] = useState('')     // remembered between customer/evaluation reports
   const [showSettings, setShowSettings] = useState(false)
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [savingKey, setSavingKey] = useState(false)
@@ -238,18 +239,20 @@ export default function InjectorTests() {
     }
     const ids = selection.map(i => i.id)
 
-    // The Shipment Evaluation is an assessment of a vendor's batch, so it is
-    // headed by the vendor name rather than the job number — ask for it.
+    // Customer and Shipment Evaluation reports share the same Part / Vendor /
+    // Report Date header. Ask once while the click gesture is still active;
+    // "Both" uses the value for its Customer report.
     let vendor = vendorName
-    if (kind === 'evaluation') {
-      const answer = window.prompt('Vendor name for the Shipment Evaluation Report', vendorName)
+    const vendorReport = vendorPromptReport(kind)
+    if (vendorReport) {
+      const answer = window.prompt(`Vendor name for the ${vendorReport}`, vendorName)
       if (answer === null) {
         showToast('Cancelled — no report was generated', 'info')
         return
       }
       vendor = String(answer).trim()
       if (!vendor) {
-        const msg = 'A vendor name is required for the Shipment Evaluation Report.'
+        const msg = `A vendor name is required for the ${vendorReport}.`
         setStatusMsg({ type: 'error', text: msg })
         showToast(msg, 'error')
         return
@@ -276,7 +279,11 @@ export default function InjectorTests() {
     const warnings = []
     try {
       if (kind === 'customer' || kind === 'both') {
-        const res = await api.post('/injector-tests/reports/customer', { injector_ids: ids }, { responseType: 'blob' })
+        const res = await api.post(
+          '/injector-tests/reports/customer',
+          { injector_ids: ids, vendor_name: vendor },
+          { responseType: 'blob' }
+        )
         const name = kind === 'both' ? deriveFilename(target.filename, 'Customer') : target.filename
         await writeBlobToTarget({ ...target, filename: name }, new Blob([res.data], { type: 'application/pdf' }))
         savedFiles.push(name)

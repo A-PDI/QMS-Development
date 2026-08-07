@@ -46,6 +46,13 @@ test('IVM06 displays as Peak Torque regardless of the result', () => {
   assert.strictEqual(stepDisplayName('iVM.06 : SKIPPED'), 'Peak Torque');
 });
 
+test('leak test steps display their specified test pressure', () => {
+  assert.strictEqual(stepDisplayName('LKT.01'), 'Leak Test 200 bar');
+  assert.strictEqual(stepDisplayName('LKT.02'), 'Leak Test 1800 bar');
+  assert.strictEqual(stepDisplayName('LKT.04'), 'Leak Test 2400 bar');
+  assert.strictEqual(stepDisplayName('lkt4'), 'Leak Test 2400 bar');
+});
+
 test('unmapped steps fall back to the code, never to the error text', () => {
   assert.strictEqual(stepDisplayName('XYZ.09'), 'XYZ.09');
   assert.strictEqual(stepDisplayName('XYZ.09 : HP ERROR (out of range)'), 'XYZ.09');

@@ -35,20 +35,81 @@ const THBG    = '#E5E7EB';  // table column-header background
 const SECBG   = '#EEF2F7';  // section header background
 const WHITE   = '#FFFFFF';
 
-// Extract the longest run of digits from a part number (e.g.
-// "PN-0445120067" -> "0445120067") so the report header shows just the
-// numeric part id.
+// Remove every non-numeric character from a part number (e.g.
+// "PN-0445-120067PX" -> "0445120067") so report headers show the complete
+// numeric part id, including digits that were separated by letters or dashes.
 function numericPartNumber(v) {
   const s = String(v || '').trim();
-  const matches = s.match(/\d+/g);
-  if (!matches || matches.length === 0) return s || '—';
-  return matches.reduce((a, b) => (b.length > a.length ? b : a));
+  const digits = s.replace(/\D/g, '');
+  return digits || '—';
+}
+
+/**
+ * Numeric-only part numbers in first-seen order, deduplicated AFTER
+ * normalisation so variants such as "6513589PX" and "651-3589-RX" produce one
+ * displayed part number rather than two copies of "6513589".
+ */
+function numericPartNumbers(values = []) {
+  const out = [];
+  const seen = new Set();
+  for (const value of (Array.isArray(values) ? values : [])) {
+    const numeric = numericPartNumber(value);
+    if (numeric === '—' || seen.has(numeric)) continue;
+    seen.add(numeric);
+    out.push(numeric);
+  }
+  return out;
 }
 
 // Format an ISO date string ("2026-01-01") as MM/DD/YYYY.
 function fmtDateMDY(isoDate) {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(isoDate || ''));
   return m ? `${m[2]}/${m[3]}/${m[1]}` : String(isoDate || '');
+}
+
+/**
+ * Shared right-aligned header block for every injector-grid report.
+ * Customer and Shipment Evaluation reports intentionally carry the same three
+ * identifying fields: Part, Vendor and Report Date.
+ */
+function drawReportHeaderInfo(doc, {
+  top,
+  rightX,
+  rightW,
+  partNumbers = [],
+  vendorName = '',
+  reportDate = '',
+  pageText = '',
+} = {}) {
+  const partText = numericPartNumbers(partNumbers).join(', ') || '—';
+  const vendorText = String(vendorName || '').trim() || '—';
+  const dateText = fmtDateMDY(reportDate || new Date().toISOString().slice(0, 10));
+  let y = top + (pageText ? 5 : 9);
+
+  doc.fontSize(9.5).font('Helvetica-Bold').fillColor(WHITE);
+  doc.text(`Part: ${partText}`, rightX, y, {
+    width: rightW, align: 'right', lineBreak: false, ellipsis: true,
+  });
+  y += 13;
+
+  doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
+  doc.text(`Vendor: ${vendorText}`, rightX, y, {
+    width: rightW, align: 'right', lineBreak: false, ellipsis: true,
+  });
+  y += 11;
+
+  doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
+  doc.text(`Report Date: ${dateText}`, rightX, y, {
+    width: rightW, align: 'right', lineBreak: false,
+  });
+  y += 11;
+
+  if (pageText) {
+    doc.fontSize(8).font('Helvetica-Bold').fillColor('#A5B4C8');
+    doc.text(pageText, rightX, y, {
+      width: rightW, align: 'right', lineBreak: false, ellipsis: true,
+    });
+  }
 }
 
 // Test-step unit label styling: always small (6pt) and gray. Volume-flow
@@ -1107,10 +1168,14 @@ const INJ_RESULT_ROW_H = 20;
 
 // Serial-number column header: the font shrinks between these bounds before the
 // column is widened, and no single serial widens a column past the cap.
-const SERIAL_FONT_MAX = 7.5;
-const SERIAL_FONT_MIN = 6;
+// No table value (serial, spec, measurement or error message) is rendered
+// below 7.5pt. Columns paginate earlier when necessary to preserve that floor.
+const REPORT_TABLE_FONT_MIN = 7.5;
+const SERIAL_FONT_MAX = 9;
+const SERIAL_FONT_MIN = REPORT_TABLE_FONT_MIN;
 const SERIAL_PAD = 8;        // padding either side of the serial text
 const SERIAL_COL_CAP = 120;  // one freak serial must not break the grid
+const VALUE_COL_CAP = 160;   // long machine-fault messages may still wrap
 const SERIAL_WRAP_OVER = 8;  // serials longer than this wrap onto two lines
 const SERIAL_TAIL = 4;       // …with this many characters on the second line
 
@@ -1137,9 +1202,9 @@ function splitSerialLines(serial) {
  *       bench could not measure that step.
  *
  * Large batches are split across as many pages as needed — injector columns are
- * never squeezed below MIN_INJECTOR_COL_W to force everything onto one page.
- * Every continuation page repeats the header banner, the column headers and the
- * same test-point rows, in the same order.
+ * never squeezed below the width needed to keep their values at 7.5pt. Every
+ * continuation page repeats the header banner, the column headers and the same
+ * test-point rows, in the same order.
  *
  * injectors: array of {
  *   part_number, serial_number, job_number, brand, injector_type,
@@ -1333,7 +1398,10 @@ function computeComparisonLayout(doc, model, opts = {}) {
   rowH = Math.max(20, Math.min(rowH, 32));
   // If min row height overflows the page, fall back to the largest that fits.
   if (rowH * dataRowCount > availH) rowH = Math.max(16, Math.floor(availH / dataRowCount));
-  const nameFont = rowH >= 26 ? 8 : (rowH >= 20 ? 7 : 6.2);
+  const nameFont = Math.max(
+    REPORT_TABLE_FONT_MIN,
+    rowH >= 26 ? 8 : (rowH >= 20 ? 7 : 6.2)
+  );
   // Step-name font: fixed size, vertically centered in its row.
   const stepNameFont = 9;
   const specValFont = nameFont;
@@ -1376,9 +1444,29 @@ function computeComparisonLayout(doc, model, opts = {}) {
       return Math.max(w, ...lines.map((line) => doc.widthOfString(line)));
     }, 0);
   };
+  const widestValueAt = (size) => {
+    doc.fontSize(size);
+    let widest = 0;
+    injValues.forEach((m) => {
+      m.forEach((cell) => {
+        const lines = cell && Array.isArray(cell.lines) && cell.lines.length
+          ? cell.lines
+          : [String((cell && cell.value) || '')];
+        lines.filter(Boolean).forEach((line) => {
+          widest = Math.max(widest, doc.widthOfString(String(line)));
+        });
+      });
+    });
+    return widest;
+  };
+  const minValueColW = Math.min(
+    VALUE_COL_CAP,
+    Math.ceil(widestValueAt(REPORT_TABLE_FONT_MIN) + 8)
+  );
   const minInjColW = Math.max(
     MIN_INJECTOR_COL_W,
-    Math.min(SERIAL_COL_CAP, Math.ceil(widestSerialAt(SERIAL_FONT_MIN) + SERIAL_PAD))
+    Math.min(SERIAL_COL_CAP, Math.ceil(widestSerialAt(SERIAL_FONT_MIN) + SERIAL_PAD)),
+    minValueColW
   );
 
   // ── Pagination ────────────────────────────────────────────────────────
@@ -1414,19 +1502,21 @@ function computeComparisonLayout(doc, model, opts = {}) {
   let widestVal = 4; // at least a few chars ("—")
   injValues.forEach((m) => {
     m.forEach((cell) => {
-      const s = String((cell && cell.value) || '');
-      // Error MESSAGES are sized by drawErrorValue; only measurements set the
-      // shared numeric font size.
-      if (!s || isErrorValue(s)) return;
+      const lines = cell && Array.isArray(cell.lines) ? cell.lines : [];
+      // Error messages and "No Test" are sized by drawErrorValue; only numeric
+      // measurements set the shared numeric font size.
+      if (lines.some((line) => isErrorValue(line) || line === NO_TEST_LABEL)) return;
+      const s = String(lines[0] || (cell && cell.value) || '');
+      if (!s) return;
       if (s.length > widestVal) widestVal = s.length;
     });
   });
-  const rowValCap = rowH >= 28 ? 10 : (rowH >= 22 ? 8.5 : 7);
+  const rowValCap = rowH >= 28 ? 10 : (rowH >= 22 ? 8.5 : REPORT_TABLE_FONT_MIN);
   // Width the value cell can use (minus padding); Helvetica-Bold averages
   // ~0.6em per char, so max font ≈ availWidth / (chars * 0.6).
   const valAvail = injColW - 6;
   const widthCappedFont = valAvail / (Math.max(widestVal, 1) * 0.6);
-  const valFont = Math.max(6, Math.min(rowValCap, widthCappedFont));
+  const valFont = Math.max(REPORT_TABLE_FONT_MIN, Math.min(rowValCap, widthCappedFont));
 
   return {
     tableTop, bottomLimit, rowH, nameFont, stepNameFont, specValFont,
@@ -1511,8 +1601,8 @@ function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
     // Caller already drew a combined header above this table.
     tableTop = opts.startY;
   } else {
-    // ── Header banner — logo + title left-aligned, RMA/Injector/Tested
-    // stacked and right-aligned on the opposite edge. Repeated in full on
+    // ── Header banner — logo + title left-aligned, shared Part/Vendor/Date
+    // information right-aligned on the opposite edge. Repeated in full on
     // every continuation page. ───────────────────────────────────────────
     const top = LM;
     const bannerH = INJ_BANNER_H;
@@ -1526,42 +1616,23 @@ function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
       } catch (_) {}
     }
 
-    const firstInj = headerList[0] || {};
-    const partNo = numericPartNumber(firstInj.part_number);
-    // Fall back to the injectors' own Job # when no explicit RMA number was
-    // supplied.
-    const rmaNumber = opts.rmaNumber || [...new Set(headerList.map(i => i.job_number).filter(Boolean))].join(', ');
-    const testDates = [...new Set(headerList.map(i => (i.test_datetime || '').slice(0, 10)).filter(Boolean))].sort();
-    const testedText = testDates.length
-      ? `Tested: ${fmtDateMDY(testDates[0])}${testDates.length > 1 ? ' – ' + fmtDateMDY(testDates[testDates.length - 1]) : ''}`
-      : '';
-
-    // Right-aligned stacked block: Job/RMA #, Injector part #, Tested date range.
-    const rightW = 220;
+    // Right-aligned block shared with Shipment Evaluation: Part, Vendor and
+    // Report Date. A supplied vendor wins; legacy callers that omit it fall
+    // back to the distinct synced bench brand(s).
+    const rightW = 260;
     const rightX = LM + usableW - rightW - 14;
-    let ry = top + (multiPage ? 5 : 9);
-    if (rmaNumber) {
-      doc.fontSize(9.5).font('Helvetica-Bold').fillColor(WHITE);
-      doc.text(rmaNumber, rightX, ry, { width: rightW, align: 'right', lineBreak: false });
-      ry += 13;
-    }
-    if (partNo && partNo !== '—') {
-      doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
-      doc.text(`Injector: ${partNo}`, rightX, ry, { width: rightW, align: 'right', lineBreak: false });
-      ry += 11;
-    }
-    if (testedText) {
-      doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
-      doc.text(testedText, rightX, ry, { width: rightW, align: 'right', lineBreak: false });
-      ry += 11;
-    }
-    if (multiPage) {
-      doc.fontSize(8).font('Helvetica-Bold').fillColor('#A5B4C8');
-      doc.text(
-        `Page ${displayPage} of ${displayPageCount} · Injectors ${opts.firstItemNumber}–${opts.lastItemNumber} of ${headerList.length}`,
-        rightX, ry, { width: rightW, align: 'right', lineBreak: false }
-      );
-    }
+    const brands = [...new Set(headerList.map((i) => String(i.brand || '').trim()).filter(Boolean))];
+    drawReportHeaderInfo(doc, {
+      top,
+      rightX,
+      rightW,
+      partNumbers: headerList.map((i) => i.part_number),
+      vendorName: opts.vendorName || brands.join(', '),
+      reportDate: opts.reportDate,
+      pageText: multiPage
+        ? `Page ${displayPage} of ${displayPageCount} · Injectors ${opts.firstItemNumber}–${opts.lastItemNumber} of ${headerList.length}`
+        : '',
+    });
 
     // Title — left-aligned, vertically centered, immediately right of the logo.
     const titleX = LM + logoW + 24;
@@ -1744,7 +1815,7 @@ function drawErrorValue(doc, value, x, y, w, h, maxFont) {
   let lines = given.length ? given : ['Error: Test Error'];
   if (lines.length === 1) {
     const text = lines[0].trim();
-    const oneLineFont = Math.max(5.2, Math.min(maxFont, h - 6));
+    const oneLineFont = Math.max(REPORT_TABLE_FONT_MIN, Math.min(maxFont, h - 6));
     if (fits(oneLineFont, text)) {
       doc.fontSize(oneLineFont).font('Helvetica-Bold').fillColor(RED);
       doc.text(text, x + 2, y + (h - oneLineFont) / 2 - 1, {
@@ -1760,9 +1831,16 @@ function drawErrorValue(doc, value, x, y, w, h, maxFont) {
       : [text];
   }
 
-  // Shrink until every line fits, then stack them centred in the row.
-  let font = Math.min(maxFont, (h - 4) / lines.length - 0.3, 8);
-  while (font > 4.8 && !lines.every((line) => fits(font, line))) font -= 0.25;
+  // Shrink only as far as the report-wide 7.5pt floor, then stack the lines
+  // centred in the row. Column planning reserves enough width for the known
+  // value lines at that floor.
+  let font = Math.max(
+    REPORT_TABLE_FONT_MIN,
+    Math.min(maxFont, (h - 4) / lines.length - 0.3, 8)
+  );
+  while (font > REPORT_TABLE_FONT_MIN && !lines.every((line) => fits(font, line))) {
+    font = Math.max(REPORT_TABLE_FONT_MIN, font - 0.25);
+  }
   const lineH = font + 1.2;
   const top = y + (h - lineH * lines.length) / 2;
   doc.fontSize(font).font('Helvetica-Bold').fillColor(RED);
@@ -1802,9 +1880,6 @@ function generateShipmentEvaluationPdf(injectors = [], opts = {}) {
       drawInjectorComparisonPages(doc, list, {
         ...opts,
         title: opts.detailTitle || 'Shipment Evaluation — Test Detail',
-        // The detail header identifies the shipment by vendor, matching the
-        // summary page (a shipment evaluation is not job-scoped).
-        rmaNumber: opts.vendorName ? `Vendor: ${opts.vendorName}` : '',
         // The summary is page 1, so the detail grid continues from page 2.
         pageOffset: 1,
       });
@@ -1839,24 +1914,13 @@ function drawEvaluationBanner(doc, title, summary, opts = {}) {
 
   const rightW = 260;
   const rightX = LM + usableW - rightW - 14;
-  let ry = top + 9;
-
-  const partText = summary.partNumbers.length
-    ? summary.partNumbers.map(numericPartNumber).join(', ')
-    : '';
-  if (partText) {
-    doc.fontSize(9.5).font('Helvetica-Bold').fillColor(WHITE);
-    doc.text(`Part: ${partText}`, rightX, ry, { width: rightW, align: 'right', lineBreak: false, ellipsis: true });
-    ry += 13;
-  }
-  doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
-  doc.text(`Vendor: ${opts.vendorName || '—'}`, rightX, ry, {
-    width: rightW, align: 'right', lineBreak: false, ellipsis: true,
-  });
-  ry += 11;
-  doc.fontSize(8).font('Helvetica').fillColor('#A5B4C8');
-  doc.text(`Report Date: ${fmtDateMDY(new Date().toISOString().slice(0, 10))}`, rightX, ry, {
-    width: rightW, align: 'right', lineBreak: false,
+  drawReportHeaderInfo(doc, {
+    top,
+    rightX,
+    rightW,
+    partNumbers: summary.partNumbers,
+    vendorName: opts.vendorName || (summary.brands || []).join(', '),
+    reportDate: opts.reportDate,
   });
 
   const titleX = LM + logoW + 24;
@@ -1978,7 +2042,10 @@ module.exports = {
   drawInjectorComparisonTable,
   buildInjectorComparisonModel,
   computeComparisonLayout,
+  numericPartNumber,
+  numericPartNumbers,
   splitSerialLines,
+  REPORT_TABLE_FONT_MIN,
   INJ_LM,
   INJ_PAGE_W,
   INJ_PAGE_H,

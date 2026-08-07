@@ -11,11 +11,19 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const PDFDocument = require('pdfkit');
 
 const { db, extractPdfPages, extractPdfText, resetInjectorData, injectorInspectionCount } = require('./helpers/testEnv');
 const { benchReport, benchBatch } = require('./helpers/benchData');
 const carbonzapp = require('../services/carbonzapp');
-const { splitSerialLines } = require('../services/pdf');
+const {
+  splitSerialLines,
+  numericPartNumber,
+  numericPartNumbers,
+  buildInjectorComparisonModel,
+  computeComparisonLayout,
+  REPORT_TABLE_FONT_MIN,
+} = require('../services/pdf');
 const {
   loadSelectedInjectors,
   validateSelection,
@@ -86,6 +94,75 @@ test('selecting one injector reports on only that injector', async () => {
     assert.ok(!text.includes(other.serial_number), `unselected ${other.serial_number} must not appear`);
   }
   assert.match(filename, /^InjectorReport_.+\.pdf$/);
+});
+
+test('report part numbers remove all non-numeric characters and deduplicate afterwards', () => {
+  assert.strictEqual(numericPartNumber('PN-0445-120067PX'), '0445120067');
+  assert.strictEqual(numericPartNumber('AB12-CD34-EF'), '1234');
+  assert.strictEqual(numericPartNumber('NO-DIGITS'), '—');
+  assert.deepStrictEqual(
+    numericPartNumbers(['PN-0445-120067PX', '0445120067-RX', 'P-999', 'PN-0445-120067PX']),
+    ['0445120067', '999']
+  );
+});
+
+test('customer and shipment reports share Part, Vendor and Report Date header information', async () => {
+  resetInjectorData();
+  await syncWith([
+    benchReport({ id: 'header-1', slot: 0, serial: 'HDR001', part: 'PN-0445-120067PX' }),
+    benchReport({ id: 'header-1', slot: 1, serial: 'HDR002', part: '0445120067-RX' }),
+    benchReport({ id: 'header-1', slot: 2, serial: 'HDR003', part: 'P-999' }),
+  ]);
+  const selected = loadSelectedInjectors(storedInjectors().map((r) => r.id));
+  const opts = { vendorName: 'Acme Diesel Supply', reportDate: '2026-08-07' };
+
+  const customer = await buildCustomerReport(selected, opts);
+  const shipment = await buildShipmentEvaluationReport(selected, opts);
+  const customerHeader = extractPdfPages(customer.buffer)[0].join('\n');
+  const shipmentHeader = extractPdfPages(shipment.buffer)[0].join('\n');
+
+  for (const header of [customerHeader, shipmentHeader]) {
+    assert.ok(header.includes('Part: 0445120067, 999'), 'numeric part variants are deduplicated');
+    assert.ok(!header.includes('0445120067, 0445120067'), 'duplicate normalized parts are omitted');
+    assert.ok(header.includes('Vendor: Acme Diesel Supply'));
+    assert.ok(header.includes('Report Date: 08/07/2026'));
+  }
+  assert.ok(!customerHeader.includes('Injector:'), 'the former customer-only header field is gone');
+  assert.ok(!customerHeader.includes('QMS-724-3'), 'job number is not used in the shared header');
+});
+
+test('injector report table values never render below 7.5pt', () => {
+  const tests = Array.from({ length: 22 }, (_, index) => ({
+    name: `T.${String(index + 1).padStart(2, '0')}`,
+    raw_name: `T.${String(index + 1).padStart(2, '0')}`,
+    status: 'pass',
+    errored: false,
+    primary: {
+      tank_name: '',
+      unit: 'mm3/STRK',
+      spec: '10.0 +/- 1.0 mm3/STRK',
+      min_green: 9,
+      max_green: 11,
+      average: '10.0',
+      status: 'pass',
+    },
+    secondary: null,
+  }));
+  const model = buildInjectorComparisonModel([{
+    serial_number: 'LONG00001',
+    part_number: 'PN-123',
+    brand: 'Acme',
+    tests,
+  }]);
+  const doc = new PDFDocument({ margin: 28, size: 'Letter', layout: 'landscape' });
+  doc.on('data', () => {});
+  const layout = computeComparisonLayout(doc, model);
+
+  assert.ok(layout.rowH < 20, 'fixture forces the compact-row layout');
+  assert.ok(layout.valFont >= REPORT_TABLE_FONT_MIN);
+  assert.ok(layout.specValFont >= REPORT_TABLE_FONT_MIN);
+  assert.ok(layout.serialFont >= REPORT_TABLE_FONT_MIN);
+  doc.end();
 });
 
 // ── Scenario 8: selection by job number ──────────────────────────────────────

@@ -161,6 +161,16 @@ export function describeSelection(selected = []) {
 }
 
 /**
+ * Report name used by the vendor prompt, or an empty string when that report
+ * does not need vendor header information.
+ */
+export function vendorPromptReport(kind) {
+  if (kind === 'evaluation') return 'Shipment Evaluation Report'
+  if (kind === 'customer' || kind === 'both') return 'Customer Report'
+  return ''
+}
+
+/**
  * Suggested filename stem for a report over the given selection.
  * Pass `{ vendor }` for the Shipment Evaluation, which is identified by vendor
  * rather than by job number.

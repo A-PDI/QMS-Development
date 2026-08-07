@@ -22,6 +22,7 @@ import {
   hasTestResults,
   validateSelectionForReport,
   describeSelection,
+  vendorPromptReport,
   suggestReportName,
 } from '../src/lib/injectorSelection.js'
 
@@ -147,6 +148,13 @@ test('the selection is described for the user', () => {
   assert.strictEqual(describeSelection([list[0]]), '1 injector · job QMS-100')
   assert.strictEqual(describeSelection([list[0], list[1]]), '2 injectors · job QMS-100')
   assert.strictEqual(describeSelection([list[0], list[2]]), '2 injectors · 2 job numbers')
+})
+
+test('vendor information is requested for every report that uses the shared header', () => {
+  assert.strictEqual(vendorPromptReport('customer'), 'Customer Report')
+  assert.strictEqual(vendorPromptReport('both'), 'Customer Report')
+  assert.strictEqual(vendorPromptReport('evaluation'), 'Shipment Evaluation Report')
+  assert.strictEqual(vendorPromptReport('inspection'), '')
 })
 
 test('a suggested filename includes the part and job number', () => {

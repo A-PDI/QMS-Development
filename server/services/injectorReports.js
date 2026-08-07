@@ -126,10 +126,17 @@ function toReportInjectors(injectors = []) {
   }));
 }
 
-/** Landscape side-by-side comparison PDF for the selection. */
+/**
+ * Landscape side-by-side comparison PDF for the selection.
+ * The customer header mirrors Shipment Evaluation (Part / Vendor / Report
+ * Date). New callers supply vendorName; legacy callers fall back to the synced
+ * bench brand so the existing endpoint remains compatible.
+ */
 async function buildCustomerReport(injectors = [], opts = {}) {
   const list = toReportInjectors(injectors);
-  const buffer = await generateInjectorComparisonPdf(list, opts);
+  const brands = [...new Set(list.map((i) => String(i.brand || '').trim()).filter(Boolean))];
+  const vendorName = String(opts.vendorName || '').trim() || brands.join(', ');
+  const buffer = await generateInjectorComparisonPdf(list, { ...opts, vendorName });
   const part = sanitiseFilePart(list[0] && list[0].part_number, 'Injectors');
   return { buffer, filename: `InjectorReport_${part}_${list.length}.pdf` };
 }

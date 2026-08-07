@@ -11,7 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const express = require('express');
 
-const { db, resetInjectorData } = require('./helpers/testEnv');
+const { db, extractPdfText, resetInjectorData } = require('./helpers/testEnv');
 const { benchBatch } = require('./helpers/benchData');
 const { errorHandler } = require('../middleware/error');
 const injectorRoutes = require('../routes/injector-tests');
@@ -164,5 +164,22 @@ test('a customer report is streamed as a PDF with a filename header', async () =
     assert.match(res.headers.get('content-disposition'), /attachment; filename="InjectorReport_.*\.pdf"/);
     const buffer = Buffer.from(await res.arrayBuffer());
     assert.strictEqual(buffer.subarray(0, 4).toString(), '%PDF');
+  });
+});
+
+test('a customer report carries the requested vendor in the shared header', async () => {
+  const ids = await seedInjectors(3);
+  await withUser(ADMIN, async (url) => {
+    const res = await fetch(`${url}/api/injector-tests/reports/customer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ injector_ids: ids, vendor_name: 'Acme Diesel Supply' }),
+    });
+    assert.strictEqual(res.status, 200);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const text = extractPdfText(buffer).join('\n');
+    assert.ok(text.includes('Vendor: Acme Diesel Supply'));
+    assert.ok(text.includes('Part: 6513589'));
+    assert.ok(/Report Date: \d{2}\/\d{2}\/\d{4}/.test(text));
   });
 });
