@@ -15,6 +15,7 @@ const assert = require('node:assert');
 const { db, extractPdfPages, extractPdfText, resetInjectorData, injectorInspectionCount } = require('./helpers/testEnv');
 const { benchReport, benchBatch } = require('./helpers/benchData');
 const carbonzapp = require('../services/carbonzapp');
+const { splitSerialLines } = require('../services/pdf');
 const {
   loadSelectedInjectors,
   validateSelection,
@@ -241,6 +242,17 @@ test('a large batch paginates with repeated headers and no dropped injectors', a
 });
 
 // ── Serial numbers are never clipped ─────────────────────────────────────────
+test('a serial longer than 8 characters wraps with its last 4 below', () => {
+  assert.deepStrictEqual(splitSerialLines('26098M455'), ['26098', 'M455']);
+  assert.deepStrictEqual(splitSerialLines('ABC12345'), ['ABC12345'], '8 characters stays on one line');
+  assert.deepStrictEqual(splitSerialLines('123456789'), ['12345', '6789']);
+  assert.deepStrictEqual(splitSerialLines(''), ['—']);
+  // The two lines always reconstruct the serial exactly.
+  for (const sn of ['26098M455', 'INJECTOR-SERIAL-2026-001', 'SN1']) {
+    assert.strictEqual(splitSerialLines(sn).join(''), sn);
+  }
+});
+
 test('every serial number prints in full in the column header', async () => {
   resetInjectorData();
   // Long serials of the shape the bench actually produces.
@@ -252,16 +264,15 @@ test('every serial number prints in full in the column header', async () => {
   const text = extractPdfText(buffer);
 
   for (const inj of rows) {
-    assert.ok(
-      text.includes(inj.serial_number),
-      `serial ${inj.serial_number} is missing or truncated: ${JSON.stringify(text.filter((s) => s.startsWith('26098')))}`
-    );
+    for (const line of splitSerialLines(inj.serial_number)) {
+      assert.ok(text.includes(line), `serial ${inj.serial_number}: line "${line}" is missing`);
+    }
   }
   // No ellipsis anywhere in the header row.
   assert.ok(!text.some((s) => s.includes('…')), 'nothing was clipped');
 });
 
-test('long serials widen the columns and move injectors onto more pages', async () => {
+test('very long serials widen the columns and move injectors onto more pages', async () => {
   resetInjectorData();
   await syncWith(benchBatch(12, { perReport: 4, prefix: 'INJECTOR-SERIAL-2026-' }));
   const rows = storedInjectors();
@@ -271,7 +282,9 @@ test('long serials widen the columns and move injectors onto more pages', async 
   assert.ok(pages.length > 1, 'wide columns push the batch onto more pages');
   const text = pages.flat();
   for (const inj of rows) {
-    assert.ok(text.includes(inj.serial_number), `serial ${inj.serial_number} is clipped`);
+    for (const line of splitSerialLines(inj.serial_number)) {
+      assert.ok(text.includes(line), `serial ${inj.serial_number}: line "${line}" is clipped`);
+    }
   }
 });
 
@@ -366,4 +379,65 @@ test('the shipment evaluation report has a summary page plus detail pages', asyn
   assert.ok(detail.includes('FAIL'), 'flagged injectors still read FAIL');
   assert.ok(!/Excess Return|Error:/.test(detail),
     'the detail grid shows measured values, not error messages');
+});
+
+// ── Result cell rules ────────────────────────────────────────────────────────
+test('a flagged step reading zero shows "No Test" over the condition', async () => {
+  resetInjectorData();
+  await syncWith([benchReport({ serial: 'ZERO0001', errorOn: 'IVM06', flow: { IVM06: 0 } })]);
+  const selected = loadSelectedInjectors(storedInjectors().map((r) => r.id));
+
+  const { buffer } = await buildCustomerReport(selected);
+  const text = extractPdfText(buffer);
+
+  assert.ok(text.includes('No Test'), 'the zero reading is replaced by "No Test"');
+  assert.ok(text.includes('Excess Return'), 'the condition is named underneath');
+  assert.ok(!text.includes('0.00'), 'the bare zero is not shown');
+  assert.ok(text.includes('FAIL'), 'the injector still fails');
+});
+
+test('a zero on a step the bench did NOT flag stays a zero', async () => {
+  resetInjectorData();
+  // Leak tests legitimately read 0 — that is a passing measurement.
+  await syncWith([benchReport({ serial: 'ZERO0002', flow: { IVM01: 0 } })]);
+  const selected = loadSelectedInjectors(storedInjectors().map((r) => r.id));
+
+  const { buffer } = await buildCustomerReport(selected);
+  const text = extractPdfText(buffer);
+
+  assert.ok(!text.includes('No Test'), '"No Test" is only for flagged steps');
+  assert.ok(text.includes('0'), 'the measured zero is shown');
+});
+
+test('the printed range is the band that decides pass/fail', async () => {
+  resetInjectorData();
+  await syncWith([benchReport({ serial: 'RANGE001' })]);
+  const selected = loadSelectedInjectors(storedInjectors().map((r) => r.id));
+  const tests = selected[0].tests.filter((t) => t.primary && !/^FL/i.test(t.name));
+
+  const { buffer } = await buildCustomerReport(selected);
+  const text = extractPdfText(buffer).join('\n');
+
+  for (const t of tests) {
+    const expected = `${t.primary.min_green.toFixed(1)} - ${t.primary.max_green.toFixed(1)}`;
+    assert.ok(text.includes(expected), `expected the range ${expected} for ${t.name}`);
+  }
+});
+
+test('a flagged injector with no band does not blank the range for the batch', async () => {
+  resetInjectorData();
+  const flagged = benchReport({ id: 'r1', slot: 0, serial: 'NOBAND01', errorOn: 'IVM06' });
+  // The bench sent no acceptance band for the step it flagged.
+  const step = flagged.AllTests.find((t) => /IVM|iVM/.test(t.TestInfo.test_name) && /ERROR/.test(t.TestInfo.test_name));
+  step.PrimaryTank.min_green = '';
+  step.PrimaryTank.max_green = '';
+  step.PrimaryTank.text_green = '';
+  const healthy = benchReport({ id: 'r1', slot: 1, serial: 'NOBAND02' });
+
+  await syncWith([flagged, healthy]);
+  const selected = loadSelectedInjectors(storedInjectors().map((r) => r.id));
+  const { buffer } = await buildCustomerReport(selected);
+  const text = extractPdfText(buffer).join('\n');
+
+  assert.ok(text.includes('234.0 - 276.0'), 'the band comes from the injector that has one');
 });

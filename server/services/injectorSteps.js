@@ -314,20 +314,40 @@ function measuredValue(tank) {
   return recovered == null ? '' : String(recovered);
 }
 
+// Shown on the first line when a flagged step recorded no delivery at all —
+// a zero reading means the test never actually ran.
+const NO_TEST_LABEL = 'No Test';
+
 /**
- * The value shown for one tank of a step.
+ * The value shown for one tank of a step, as the line(s) to print.
  *
- * The MEASUREMENT always wins: a step that the bench flagged (e.g. an excess
+ * The MEASUREMENT normally wins: a step the bench flagged (e.g. an excess
  * return) still reports what it measured, and that number is what the report
  * shows — the failure is conveyed by the red/FAIL styling and the pass/fail
- * rollups, not by replacing the reading with text. The error description is
- * only used when the bench recorded no measurement at all.
+ * rollups, not by replacing the reading with text.
+ *
+ * Two exceptions, both about a flagged step with nothing to report:
+ *   • a reading of ZERO on a flagged step means no delivery was measured, so
+ *     the cell reads "No Test" over the condition ("Excess Return")
+ *   • no reading at all falls back to the condition on its own
  */
-function stepResultValue(step, tank) {
-  const measured = measuredValue(tank);
-  if (measured) return measured;
+function stepResultLines(step, tank) {
   const err = stepErrorInfo(step);
-  return err.errored ? formatErrorValue(err.description) : '';
+  const measured = measuredValue(tank);
+
+  if (err.errored) {
+    const condition = formatErrorValue(err.description);
+    if (!measured) return [condition];
+    // A zero on a flagged step is "nothing came through", not a measurement.
+    if (numericValue(measured) === 0) return [NO_TEST_LABEL, condition];
+    return [measured];
+  }
+  return measured ? [measured] : [];
+}
+
+/** Single-line form of the same value, for plain-text fields. */
+function stepResultValue(step, tank) {
+  return stepResultLines(step, tank).join(' / ');
 }
 
 module.exports = {
@@ -354,5 +374,7 @@ module.exports = {
   stepBaseName,
   stepCode,
   stepLabel,
+  stepResultLines,
   stepResultValue,
+  NO_TEST_LABEL,
 };

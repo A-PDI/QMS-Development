@@ -8,8 +8,10 @@ const {
   stepLabel,
   stepErrorInfo,
   stepResultValue,
+  stepResultLines,
   formatErrorValue,
   isErrorValue,
+  NO_TEST_LABEL,
 } = require('./injectorSteps');
 const { MIN_INJECTOR_COL_W, planInjectorPages } = require('./reportPagination');
 const { evaluateShipment } = require('./injectorEvaluation');
@@ -105,6 +107,15 @@ function decimalPlaces(str) {
 // back to the raw text when the spec isn't a simple "target +/- tolerance"
 // (e.g. a single limit with no range).
 function parseSpecRow(row) {
+  // Prefer the numeric acceptance band: these are the EXACT bounds pass/fail is
+  // judged against, so the printed range can never disagree with the colouring.
+  // The bench's `text_green` string is only a fallback for records that have no
+  // numeric band (or an unparseable one).
+  if (Number.isFinite(row.min) && Number.isFinite(row.max)) {
+    const decimals = Math.max(1, decimalPlaces(String(row.min)), decimalPlaces(String(row.max)));
+    return { hasMatch: true, rangeText: `${row.min.toFixed(decimals)} - ${row.max.toFixed(decimals)}` };
+  }
+
   const rawSpec = (row.spec || '').trim();
   const unitStr = (row.unit || '').trim();
   let specCore = rawSpec;
@@ -1100,6 +1111,21 @@ const SERIAL_FONT_MAX = 7.5;
 const SERIAL_FONT_MIN = 6;
 const SERIAL_PAD = 8;        // padding either side of the serial text
 const SERIAL_COL_CAP = 120;  // one freak serial must not break the grid
+const SERIAL_WRAP_OVER = 8;  // serials longer than this wrap onto two lines
+const SERIAL_TAIL = 4;       // …with this many characters on the second line
+
+/**
+ * A serial number as the line(s) of its column header. Anything longer than
+ * SERIAL_WRAP_OVER characters wraps, with the last SERIAL_TAIL characters on
+ * the second line, so a long serial narrows the column instead of widening it:
+ *   "26098M455"  → ["26098", "M455"]
+ *   "ABC12345"   → ["ABC12345"]
+ */
+function splitSerialLines(serial) {
+  const text = String(serial == null ? '' : serial).trim() || '—';
+  if (text.length <= SERIAL_WRAP_OVER) return [text];
+  return [text.slice(0, text.length - SERIAL_TAIL), text.slice(-SERIAL_TAIL)];
+}
 
 /**
  * Generate a landscape PDF comparing one or more selected injectors side by
@@ -1178,14 +1204,22 @@ function buildInjectorComparisonModel(injectors = [], sharedRows = null) {
             // The DISPLAY label always comes from the step mapping — an API
             // error changes the VALUE only, never the test-step name.
             label: stepLabel(t, 'primary', t.primary.tank_name),
-            // Specification shown = green-band spec (e.g. "8.5 +/- 4.5 mm3/STRK").
+            // Specification shown = the acceptance band pass/fail uses.
             spec: t.primary.spec || '',
+            min: t.primary.min_green,
+            max: t.primary.max_green,
             unit: t.primary.unit || '',
           });
           rowOrder.push(pKey);
-        } else if (!rowMap.get(pKey).spec && t.primary.spec) {
-          // An errored injector may carry no spec; take it from a good one.
-          rowMap.set(pKey, { ...rowMap.get(pKey), spec: t.primary.spec, unit: t.primary.unit || rowMap.get(pKey).unit });
+        } else {
+          // A flagged injector may carry no band; take it from one that has it.
+          const row = rowMap.get(pKey);
+          const patch = {};
+          if (!row.spec && t.primary.spec) patch.spec = t.primary.spec;
+          if (!Number.isFinite(row.min) && Number.isFinite(t.primary.min_green)) patch.min = t.primary.min_green;
+          if (!Number.isFinite(row.max) && Number.isFinite(t.primary.max_green)) patch.max = t.primary.max_green;
+          if (!row.unit && t.primary.unit) patch.unit = t.primary.unit;
+          if (Object.keys(patch).length) rowMap.set(pKey, { ...row, ...patch });
         }
         if (t.secondary) {
           const sKey = rowKey(t, 2);
@@ -1193,11 +1227,19 @@ function buildInjectorComparisonModel(injectors = [], sharedRows = null) {
             rowMap.set(sKey, {
               label: stepLabel(t, 'secondary', t.secondary.tank_name),
               spec: t.secondary.spec || '',
+              min: t.secondary.min_green,
+              max: t.secondary.max_green,
               unit: t.secondary.unit || '',
             });
             rowOrder.push(sKey);
-          } else if (!rowMap.get(sKey).spec && t.secondary.spec) {
-            rowMap.set(sKey, { ...rowMap.get(sKey), spec: t.secondary.spec, unit: t.secondary.unit || rowMap.get(sKey).unit });
+          } else {
+            const row = rowMap.get(sKey);
+            const patch = {};
+            if (!row.spec && t.secondary.spec) patch.spec = t.secondary.spec;
+            if (!Number.isFinite(row.min) && Number.isFinite(t.secondary.min_green)) patch.min = t.secondary.min_green;
+            if (!Number.isFinite(row.max) && Number.isFinite(t.secondary.max_green)) patch.max = t.secondary.max_green;
+            if (!row.unit && t.secondary.unit) patch.unit = t.secondary.unit;
+            if (Object.keys(patch).length) rowMap.set(sKey, { ...row, ...patch });
           }
         }
       }
@@ -1210,15 +1252,19 @@ function buildInjectorComparisonModel(injectors = [], sharedRows = null) {
     for (const t of (inj.tests || [])) {
       if (!t.primary || isFlushStep(t)) continue; // flush step has no cell
       const err = stepErrorInfo(t);
+      const primaryLines = stepResultLines(t, t.primary);
       m.set(rowKey(t, 1), {
-        value: stepResultValue(t, t.primary),
+        value: primaryLines.join(' / '),
+        lines: primaryLines,
         status: err.errored ? 'fail' : t.primary.status,
         error: err.errored,
         error_description: err.description,
       });
       if (t.secondary) {
+        const secondaryLines = stepResultLines(t, t.secondary);
         m.set(rowKey(t, 2), {
-          value: stepResultValue(t, t.secondary),
+          value: secondaryLines.join(' / '),
+          lines: secondaryLines,
           status: err.errored ? 'fail' : t.secondary.status,
           error: err.errored,
           error_description: err.description,
@@ -1241,6 +1287,7 @@ function buildInjectorComparisonModel(injectors = [], sharedRows = null) {
       if (!c || c.value == null || c.value === '') {
         m.set(key, {
           value: formatErrorValue(err.description),
+          lines: [formatErrorValue(err.description)],
           status: 'fail',
           error: true,
           error_description: err.description,
@@ -1324,10 +1371,10 @@ function computeComparisonLayout(doc, model, opts = {}) {
   doc.font('Helvetica-Bold');
   const widestSerialAt = (size) => {
     doc.fontSize(size);
-    return model.list.reduce(
-      (w, inj) => Math.max(w, doc.widthOfString(String(inj.serial_number || '—'))),
-      0
-    );
+    return model.list.reduce((w, inj) => {
+      const lines = splitSerialLines(inj.serial_number);
+      return Math.max(w, ...lines.map((line) => doc.widthOfString(line)));
+    }, 0);
   };
   const minInjColW = Math.max(
     MIN_INJECTOR_COL_W,
@@ -1550,10 +1597,16 @@ function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
   let x = injStartX;
   list.forEach((inj) => {
     doc.strokeColor('#3A4A6B').lineWidth(0.4).moveTo(x, y).lineTo(x, y + headerRowH).stroke();
-    // The column was sized for this text, so it prints in full.
+    // The column was sized for these lines, so the serial prints in full.
     doc.fontSize(layout.serialFont).font('Helvetica-Bold').fillColor(WHITE);
-    const sn = inj.serial_number || '—';
-    doc.text(sn, x + 3, y + 7, { width: injColW - 6, height: headerRowH - 8, align: 'center', lineBreak: false, ellipsis: true });
+    const snLines = splitSerialLines(inj.serial_number);
+    const snLineH = layout.serialFont + 1.4;
+    const snTop = y + (headerRowH - snLineH * snLines.length) / 2 + 0.5;
+    snLines.forEach((line, li) => {
+      doc.text(line, x + 3, snTop + li * snLineH, {
+        width: injColW - 6, align: 'center', lineBreak: false, ellipsis: true,
+      });
+    });
     x += injColW;
   });
 
@@ -1607,11 +1660,13 @@ function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
     injValues.forEach((m) => {
       doc.strokeColor(BORDER).lineWidth(0.3).moveTo(cx, y).lineTo(cx, y + rowH).stroke();
       const cell = m.get(key);
-      const cellValue = cell ? String(cell.value || '') : '';
-      if (cell && isErrorValue(cellValue)) {
-        drawErrorValue(doc, cellValue || formatErrorValue(cell.error_description), cx, y, injColW, rowH, valFont);
+      const lines = (cell && cell.lines && cell.lines.length) ? cell.lines : [];
+      const isMessage = lines.some((line) => isErrorValue(line) || line === NO_TEST_LABEL);
+      if (isMessage) {
+        // "No Test" over the condition, or the condition on its own.
+        drawErrorValue(doc, lines, cx, y, injColW, rowH, valFont);
       } else {
-        const val = cell ? (cell.value || '') : '';
+        const val = lines[0] || '';
         let color = DGRAY;
         if (cell) {
           if (cell.status === 'pass') color = GREEN;
@@ -1677,39 +1732,45 @@ function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
  * overflowing into its neighbours.
  */
 function drawErrorValue(doc, value, x, y, w, h, maxFont) {
-  const text = String(value || '').trim() || 'Error: Test Error';
+  const given = Array.isArray(value) ? value.filter(Boolean) : [String(value || '')];
   const availW = Math.max(8, w - 4);
   const fits = (size, s) => {
     doc.font('Helvetica-Bold').fontSize(size);
     return doc.widthOfString(s) <= availW;
   };
 
-  // Preferred: the whole message on one line (wide columns / few injectors).
-  const oneLineFont = Math.max(5.2, Math.min(maxFont, h - 6));
-  if (fits(oneLineFont, text)) {
-    doc.fontSize(oneLineFont).font('Helvetica-Bold').fillColor(RED);
-    doc.text(text, x + 2, y + (h - oneLineFont) / 2 - 1, {
-      width: availW, align: 'center', lineBreak: false,
-    });
-    return;
+  // One line of text ("Excess Return") may still be split so it fits a narrow
+  // column; two lines ("No Test" / "Excess Return") are already the layout.
+  let lines = given.length ? given : ['Error: Test Error'];
+  if (lines.length === 1) {
+    const text = lines[0].trim();
+    const oneLineFont = Math.max(5.2, Math.min(maxFont, h - 6));
+    if (fits(oneLineFont, text)) {
+      doc.fontSize(oneLineFont).font('Helvetica-Bold').fillColor(RED);
+      doc.text(text, x + 2, y + (h - oneLineFont) / 2 - 1, {
+        width: availW, align: 'center', lineBreak: false,
+      });
+      return;
+    }
+    // Break after the "Error:" prefix when there is one, else at the last space.
+    const colon = text.indexOf(':');
+    const splitAt = colon > -1 ? colon + 1 : text.lastIndexOf(' ');
+    lines = splitAt > 0
+      ? [text.slice(0, splitAt).trim(), text.slice(splitAt).trim()]
+      : [text];
   }
 
-  // Otherwise split into two lines — after the "Error:" prefix when there is
-  // one, else at the last space — and shrink until both lines fit.
-  const colon = text.indexOf(':');
-  const splitAt = colon > -1 ? colon + 1 : text.lastIndexOf(' ');
-  const first = (splitAt > 0 ? text.slice(0, splitAt) : text).trim();
-  const second = (splitAt > 0 ? text.slice(splitAt) : '').trim();
-
-  let font = Math.min(maxFont, (h - 4) / 2 - 0.3, 8);
-  while (font > 4.8 && !(fits(font, first) && fits(font, second))) font -= 0.25;
+  // Shrink until every line fits, then stack them centred in the row.
+  let font = Math.min(maxFont, (h - 4) / lines.length - 0.3, 8);
+  while (font > 4.8 && !lines.every((line) => fits(font, line))) font -= 0.25;
   const lineH = font + 1.2;
-  const top = y + (h - lineH * (second ? 2 : 1)) / 2;
+  const top = y + (h - lineH * lines.length) / 2;
   doc.fontSize(font).font('Helvetica-Bold').fillColor(RED);
-  doc.text(first, x + 2, top, { width: availW, align: 'center', lineBreak: false, ellipsis: true });
-  if (second) {
-    doc.text(second, x + 2, top + lineH, { width: availW, align: 'center', lineBreak: false, ellipsis: true });
-  }
+  lines.forEach((line, i) => {
+    doc.text(line, x + 2, top + i * lineH, {
+      width: availW, align: 'center', lineBreak: false, ellipsis: true,
+    });
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1917,6 +1978,7 @@ module.exports = {
   drawInjectorComparisonTable,
   buildInjectorComparisonModel,
   computeComparisonLayout,
+  splitSerialLines,
   INJ_LM,
   INJ_PAGE_W,
   INJ_PAGE_H,
