@@ -441,3 +441,24 @@ test('a flagged injector with no band does not blank the range for the batch', a
 
   assert.ok(text.includes('234.0 - 276.0'), 'the band comes from the injector that has one');
 });
+
+test('the SPEC column shows the GREEN acceptance band, not the blue target band', async () => {
+  resetInjectorData();
+  const report = benchReport({ serial: 'BAND0001' });
+  const step = report.AllTests.find((t) => t.TestInfo.test_name === 'iVM.01');
+  // The bench sends both: a green acceptance band (what pass/fail uses, and what
+  // the report must print) and a much tighter blue target band.
+  step.PrimaryTank.min_green = '220.0';
+  step.PrimaryTank.max_green = '240.0';
+  step.PrimaryTank.text_green = '230.0 +/- 10.0';
+  step.PrimaryTank.target_blue = '230.0';
+  step.PrimaryTank.tol_blue = '2.0';
+
+  await syncWith([report]);
+  const selected = loadSelectedInjectors(storedInjectors().map((r) => r.id));
+  const { buffer } = await buildCustomerReport(selected);
+  const text = extractPdfText(buffer).join('\n');
+
+  assert.ok(text.includes('220.0 - 240.0'), 'the green acceptance band is printed');
+  assert.ok(!text.includes('228.0 - 232.0'), 'the blue target band is not printed');
+});
