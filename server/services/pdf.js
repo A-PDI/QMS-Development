@@ -9,6 +9,7 @@ const {
   stepErrorInfo,
   stepResultValue,
   formatErrorValue,
+  isErrorValue,
 } = require('./injectorSteps');
 const { MIN_INJECTOR_COL_W, planInjectorPages } = require('./reportPagination');
 const { evaluateShipment } = require('./injectorEvaluation');
@@ -1093,6 +1094,13 @@ const INJ_BANNER_H = 60;
 const INJ_HEADER_ROW_H = 22;
 const INJ_RESULT_ROW_H = 20;
 
+// Serial-number column header: the font shrinks between these bounds before the
+// column is widened, and no single serial widens a column past the cap.
+const SERIAL_FONT_MAX = 7.5;
+const SERIAL_FONT_MIN = 6;
+const SERIAL_PAD = 8;        // padding either side of the serial text
+const SERIAL_COL_CAP = 120;  // one freak serial must not break the grid
+
 /**
  * Generate a landscape PDF comparing one or more selected injectors side by
  * side. Columns:
@@ -1308,23 +1316,47 @@ function computeComparisonLayout(doc, model, opts = {}) {
   });
   let specW = Math.min(INJ_USABLE_W * 0.22, specContentW + 16);
 
+  // ── Column width driven by the serial number ──────────────────────────
+  // The serial number IS the column's identity, so it must never be clipped.
+  // Order of preference: shrink the header font to its readable floor first,
+  // and only widen the column (which costs page space) when even that doesn't
+  // fit. Normal serials therefore keep today's column count.
+  doc.font('Helvetica-Bold');
+  const widestSerialAt = (size) => {
+    doc.fontSize(size);
+    return model.list.reduce(
+      (w, inj) => Math.max(w, doc.widthOfString(String(inj.serial_number || '—'))),
+      0
+    );
+  };
+  const minInjColW = Math.max(
+    MIN_INJECTOR_COL_W,
+    Math.min(SERIAL_COL_CAP, Math.ceil(widestSerialAt(SERIAL_FONT_MIN) + SERIAL_PAD))
+  );
+
   // ── Pagination ────────────────────────────────────────────────────────
-  // How many injector columns stay readable on one page. Anything beyond that
+  // How many injector columns fit at that width. Anything beyond that
   // continues on the next page rather than shrinking the columns.
   const plan = planInjectorPages(model.list, {
     usableWidth: INJ_USABLE_W,
     fixedWidth: stepW + specW,
-    minColumnWidth: MIN_INJECTOR_COL_W,
+    minColumnWidth: minInjColW,
   });
   const colsPerPage = Math.min(plan.perPage, injectorCount);
   let injColW = (INJ_USABLE_W - stepW - specW) / colsPerPage;
-  if (injColW < MIN_INJECTOR_COL_W) {
+  if (injColW < minInjColW) {
     // Only reachable when the fixed columns themselves are too wide — give the
     // injector columns their minimum and trim the fixed columns to suit.
-    const leftover = INJ_USABLE_W - MIN_INJECTOR_COL_W * colsPerPage;
+    const leftover = INJ_USABLE_W - minInjColW * colsPerPage;
     stepW = Math.max(104, leftover * 0.58);
     specW = Math.max(66, leftover * 0.42);
     injColW = (INJ_USABLE_W - stepW - specW) / colsPerPage;
+  }
+
+  // Largest header font whose widest serial still fits the final column.
+  let serialFont = SERIAL_FONT_MIN;
+  for (let size = SERIAL_FONT_MAX; size >= SERIAL_FONT_MIN; size -= 0.5) {
+    if (widestSerialAt(size) <= injColW - SERIAL_PAD + 2) { serialFont = size; break; }
   }
 
   // ── Dynamic measured-value font scaling ───────────────────────────────
@@ -1335,8 +1367,10 @@ function computeComparisonLayout(doc, model, opts = {}) {
   let widestVal = 4; // at least a few chars ("—")
   injValues.forEach((m) => {
     m.forEach((cell) => {
-      if (cell && cell.error) return;
       const s = String((cell && cell.value) || '');
+      // Error MESSAGES are sized by drawErrorValue; only measurements set the
+      // shared numeric font size.
+      if (!s || isErrorValue(s)) return;
       if (s.length > widestVal) widestVal = s.length;
     });
   });
@@ -1350,6 +1384,8 @@ function computeComparisonLayout(doc, model, opts = {}) {
   return {
     tableTop, bottomLimit, rowH, nameFont, stepNameFont, specValFont,
     stepW, specW, injColW, valFont,
+    // Serial-number header sizing, shared by every page of the report.
+    serialFont, minInjColW,
     perPage: plan.perPage,
     headerRowH: INJ_HEADER_ROW_H,
     resultRowH: INJ_RESULT_ROW_H,
@@ -1368,7 +1404,8 @@ function drawInjectorComparisonPages(doc, injectors = [], opts = {}) {
   const plan = planInjectorPages(list, {
     usableWidth: INJ_USABLE_W,
     fixedWidth: layout.stepW + layout.specW,
-    minColumnWidth: MIN_INJECTOR_COL_W,
+    // Same minimum the layout used, so pages and columns agree.
+    minColumnWidth: layout.minInjColW,
   });
 
   let bottom = layout.tableTop;
@@ -1513,7 +1550,8 @@ function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
   let x = injStartX;
   list.forEach((inj) => {
     doc.strokeColor('#3A4A6B').lineWidth(0.4).moveTo(x, y).lineTo(x, y + headerRowH).stroke();
-    doc.fontSize(injColW < 58 ? 6.5 : 7.5).font('Helvetica-Bold').fillColor(WHITE);
+    // The column was sized for this text, so it prints in full.
+    doc.fontSize(layout.serialFont).font('Helvetica-Bold').fillColor(WHITE);
     const sn = inj.serial_number || '—';
     doc.text(sn, x + 3, y + 7, { width: injColW - 6, height: headerRowH - 8, align: 'center', lineBreak: false, ellipsis: true });
     x += injColW;
@@ -1561,15 +1599,17 @@ function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
     doc.strokeColor(BORDER).lineWidth(0.3).moveTo(col2X, y).lineTo(col2X, y + rowH).stroke();
     doc.strokeColor(BORDER).lineWidth(0.3).moveTo(injStartX, y).lineTo(injStartX, y + rowH).stroke();
 
-    // ── Injector columns: AVERAGE flow value (green/red) or error text ───
+    // ── Injector columns: the MEASURED flow value (green/red) ────────────
+    // A step the bench flagged still shows what it measured — it is simply
+    // coloured red like any other failure. Only a step with NO reading at all
+    // falls back to the error text.
     let cx = injStartX;
     injValues.forEach((m) => {
       doc.strokeColor(BORDER).lineWidth(0.3).moveTo(cx, y).lineTo(cx, y + rowH).stroke();
       const cell = m.get(key);
-      if (cell && cell.error) {
-        // cell.value already carries the display form ("Excess Return" /
-        // "Error: Communication Failure").
-        drawErrorValue(doc, cell.value || formatErrorValue(cell.error_description), cx, y, injColW, rowH, valFont);
+      const cellValue = cell ? String(cell.value || '') : '';
+      if (cell && isErrorValue(cellValue)) {
+        drawErrorValue(doc, cellValue || formatErrorValue(cell.error_description), cx, y, injColW, rowH, valFont);
       } else {
         const val = cell ? (cell.value || '') : '';
         let color = DGRAY;

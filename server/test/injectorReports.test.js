@@ -178,20 +178,41 @@ test('an inspection report covers only the selected injectors', async () => {
   );
 });
 
-test('inspection reports use the mapped test-step names, not error text', async () => {
+test('a flagged step reports its measured value, not the error message', async () => {
   resetInjectorData();
-  await syncWith([benchReport({ serial: 'ERR001', errorOn: 'IVM06' })]);
+  // The bench flags IVM06 as out of range but still reports what it measured.
+  await syncWith([benchReport({ serial: 'ERR001', errorOn: 'IVM06', flow: { IVM06: 291 } })]);
   const selected = loadSelectedInjectors(storedInjectors().map((r) => r.id));
 
   const result = generateInspectionReports(selected);
   const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [result.inspections[0].inspection_id]);
   const sectionData = JSON.parse(inspection.section_data);
   const dimensional = sectionData.__admin_sections.dimensional.items.map((i) => i.measurement);
-  const values = sectionData.__items[0].dimensional.map((a) => a.actual1);
+  const rows = sectionData.__items[0].dimensional;
+  const values = rows.map((a) => a.actual1);
 
   assert.ok(dimensional.includes('Peak Torque'), `expected Peak Torque in ${JSON.stringify(dimensional)}`);
   assert.ok(!dimensional.some((m) => /error/i.test(m)), 'no step name carries error text');
-  assert.ok(values.includes('Excess Return'), `expected the error as a value, got ${JSON.stringify(values)}`);
+  assert.ok(values.includes('291'), `expected the measured value, got ${JSON.stringify(values)}`);
+  assert.ok(!values.some((v) => /excess return|error/i.test(String(v))), 'no message in a value cell');
+
+  // The step still FAILS and still records why.
+  const flagged = rows.find((r) => String(r.actual1) === '291');
+  assert.strictEqual(flagged.status, 'F');
+  assert.strictEqual(flagged.__error, 'Excess Return', 'the condition is still recorded on the row');
+  assert.strictEqual(inspection.disposition, 'FAIL');
+});
+
+test('a flagged step with no reading at all still shows the condition', async () => {
+  resetInjectorData();
+  await syncWith([benchReport({ serial: 'ERR002', errorOn: 'IVM06', flow: { IVM06: null } })]);
+  const selected = loadSelectedInjectors(storedInjectors().map((r) => r.id));
+
+  const result = generateInspectionReports(selected);
+  const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [result.inspections[0].inspection_id]);
+  const values = JSON.parse(inspection.section_data).__items[0].dimensional.map((a) => a.actual1);
+
+  assert.ok(values.includes('Excess Return'), `expected the fallback text, got ${JSON.stringify(values)}`);
 });
 
 // ── Scenario 10: large batches paginate ──────────────────────────────────────
@@ -217,6 +238,41 @@ test('a large batch paginates with repeated headers and no dropped injectors', a
 
   // Every injector appears exactly once, in the selected order.
   assert.deepStrictEqual(serialsSeen, selected.map((r) => r.serial_number));
+});
+
+// ── Serial numbers are never clipped ─────────────────────────────────────────
+test('every serial number prints in full in the column header', async () => {
+  resetInjectorData();
+  // Long serials of the shape the bench actually produces.
+  await syncWith(benchBatch(8, { perReport: 4, prefix: '26098M4' }));
+  const rows = storedInjectors();
+  const selected = loadSelectedInjectors(rows.map((r) => r.id));
+
+  const { buffer } = await buildCustomerReport(selected);
+  const text = extractPdfText(buffer);
+
+  for (const inj of rows) {
+    assert.ok(
+      text.includes(inj.serial_number),
+      `serial ${inj.serial_number} is missing or truncated: ${JSON.stringify(text.filter((s) => s.startsWith('26098')))}`
+    );
+  }
+  // No ellipsis anywhere in the header row.
+  assert.ok(!text.some((s) => s.includes('…')), 'nothing was clipped');
+});
+
+test('long serials widen the columns and move injectors onto more pages', async () => {
+  resetInjectorData();
+  await syncWith(benchBatch(12, { perReport: 4, prefix: 'INJECTOR-SERIAL-2026-' }));
+  const rows = storedInjectors();
+  const { buffer } = await buildCustomerReport(loadSelectedInjectors(rows.map((r) => r.id)));
+  const pages = extractPdfPages(buffer);
+
+  assert.ok(pages.length > 1, 'wide columns push the batch onto more pages');
+  const text = pages.flat();
+  for (const inj of rows) {
+    assert.ok(text.includes(inj.serial_number), `serial ${inj.serial_number} is clipped`);
+  }
 });
 
 test('small batches still render on a single page', async () => {
@@ -307,6 +363,7 @@ test('the shipment evaluation report has a summary page plus detail pages', asyn
 
   const detail = pages.slice(1).map((p) => p.join('\n')).join('\n');
   assert.ok(detail.includes('TEST STEP'), 'detail pages use the comparison grid');
-  assert.ok(detail.includes('Excess') && detail.includes('Return'),
-    'an out-of-range result reads as "Excess Return" in the detail grid');
+  assert.ok(detail.includes('FAIL'), 'flagged injectors still read FAIL');
+  assert.ok(!/Excess Return|Error:/.test(detail),
+    'the detail grid shows measured values, not error messages');
 });

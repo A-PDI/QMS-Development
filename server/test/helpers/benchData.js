@@ -15,7 +15,7 @@
  *   serial    injector serial number
  *   job       job number (must start with "QMS" to be imported)
  *   part      part number
- *   flow      { IVM01, IVM06 } measured averages ('' = missing)
+ *   flow      { IVM01, IVM06 } measured averages (null = no reading at all)
  *   errorOn   step code to attach a bench error to, e.g. 'IVM06'
  *   errorText raw API error description
  */
@@ -39,8 +39,9 @@ function benchReport({
     max_green: String(max),
     target_blue: String(target),
     tol_blue: String(((max - min) / 2).toFixed(1)),
-    AvrResult: value === undefined ? '' : String(value),
-    results: value === undefined ? '' : String(value),
+    // null / undefined = the bench recorded no reading for this tank.
+    AvrResult: value == null ? '' : String(value),
+    results: value == null ? '' : String(value),
   });
 
   return {
