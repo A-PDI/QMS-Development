@@ -6,7 +6,7 @@
  * are produced HERE, on demand, for the injectors the user picked on the
  * Injector Tests page:
  *
- *   customer            → landscape side-by-side comparison PDF
+ *   customer            → "Custom Report" landscape comparison PDF
  *   inspection          → Fuel Injector (PDI-IQI-012) inspection record(s),
  *                         whose PDF is served by /api/inspections/:id/pdf
  *   supplier_evaluation → "Shipment Evaluation Report" (summary + detail PDF)
@@ -17,7 +17,12 @@
 const db = require('../db/adapter');
 const { hydrateInjectorRow } = require('./carbonzapp');
 const { autoFillReportInspection } = require('./injectorInspection');
-const { generateInjectorComparisonPdf, generateShipmentEvaluationPdf } = require('./pdf');
+const {
+  generateInjectorComparisonPdf,
+  generateShipmentEvaluationPdf,
+  buildInjectorComparisonModel,
+  numericPartNumbers,
+} = require('./pdf');
 const { isFlushStep } = require('./injectorSteps');
 
 const REPORT_TYPES = {
@@ -29,7 +34,7 @@ const REPORT_TYPES = {
 // User-facing names for the report types (kept next to the internal ids so the
 // two never drift apart).
 const REPORT_TYPE_LABELS = {
-  [REPORT_TYPES.CUSTOMER]: 'Customer Report',
+  [REPORT_TYPES.CUSTOMER]: 'Custom Report',
   [REPORT_TYPES.INSPECTION]: 'Inspection Report',
   [REPORT_TYPES.SUPPLIER_EVALUATION]: 'Shipment Evaluation Report',
 };
@@ -52,7 +57,13 @@ function loadSelectedInjectors(injectorIds = []) {
   const ids = (Array.isArray(injectorIds) ? injectorIds : []).map(String).filter(Boolean);
   if (ids.length === 0) return [];
   const placeholders = ids.map(() => '?').join(',');
-  const rows = db.all(`SELECT * FROM injector_test_reports WHERE id IN (${placeholders})`, ids);
+  const rows = db.all(
+    `SELECT * FROM injector_test_reports
+      WHERE id IN (${placeholders})
+        AND (serial_number IS NULL OR UPPER(TRIM(serial_number)) NOT LIKE 'R%')
+        AND (job_number IS NULL OR UPPER(job_number) NOT LIKE '%RMA%')`,
+    ids
+  );
   const byId = new Map(rows.map((r) => [String(r.id), r]));
   // Preserve the caller's order; drop ids that no longer exist.
   return ids.map((id) => byId.get(id)).filter(Boolean).map(hydrateInjectorRow);
@@ -69,7 +80,7 @@ function scorableSteps(injector) {
  *   blocking — records that cannot be rendered at all (no test results)
  *   warnings — records missing helpful-but-optional identifying data
  */
-function validateSelection(injectors = [], { requireJobNumber = false } = {}) {
+function validateSelection(injectors = []) {
   const list = Array.isArray(injectors) ? injectors : [];
   if (list.length === 0) {
     return { ok: false, message: 'Select at least one injector.', blocking: [], warnings: [] };
@@ -79,12 +90,10 @@ function validateSelection(injectors = [], { requireJobNumber = false } = {}) {
   const noResults = list.filter((inj) => scorableSteps(inj).length === 0).map(label);
   const noSerial = list.filter((inj) => !inj.serial_number).map(label);
   const noPart = list.filter((inj) => !inj.part_number).map(label);
-  const noJob = list.filter((inj) => !inj.job_number).map(label);
 
   const warnings = [];
   if (noSerial.length) warnings.push(`${noSerial.length} selected injector(s) have no serial number; their report column is labelled "—".`);
   if (noPart.length) warnings.push(`${noPart.length} selected injector(s) have no part number.`);
-  if (noJob.length && !requireJobNumber) warnings.push(`${noJob.length} selected injector(s) have no job number.`);
 
   if (noResults.length) {
     const shown = noResults.slice(0, 5).join(', ');
@@ -96,16 +105,6 @@ function validateSelection(injectors = [], { requireJobNumber = false } = {}) {
       warnings,
     };
   }
-  if (requireJobNumber && noJob.length) {
-    const shown = noJob.slice(0, 5).join(', ');
-    return {
-      ok: false,
-      message: `A job number is required for this report. Missing on: ${shown}${noJob.length > 5 ? ` and ${noJob.length - 5} more` : ''}.`,
-      blocking: noJob,
-      warnings,
-    };
-  }
-
   return { ok: true, message: '', blocking: [], warnings };
 }
 
@@ -115,7 +114,6 @@ function toReportInjectors(injectors = []) {
     id: r.id,
     part_number: r.part_number,
     serial_number: r.serial_number,
-    job_number: r.job_number,
     brand: r.brand,
     injector_type: r.injector_type,
     machine_name: r.machine_name,
@@ -128,7 +126,7 @@ function toReportInjectors(injectors = []) {
 
 /**
  * Landscape side-by-side comparison PDF for the selection.
- * The customer header mirrors Shipment Evaluation (Part / Vendor / Report
+ * The Custom Report header mirrors Shipment Evaluation (Part / Vendor / Report
  * Date). New callers supply vendorName; legacy callers fall back to the synced
  * bench brand so the existing endpoint remains compatible.
  */
@@ -136,9 +134,57 @@ async function buildCustomerReport(injectors = [], opts = {}) {
   const list = toReportInjectors(injectors);
   const brands = [...new Set(list.map((i) => String(i.brand || '').trim()).filter(Boolean))];
   const vendorName = String(opts.vendorName || '').trim() || brands.join(', ');
-  const buffer = await generateInjectorComparisonPdf(list, { ...opts, vendorName });
+  const buffer = await generateInjectorComparisonPdf(list, {
+    ...opts,
+    vendorName,
+    title: opts.title || 'Custom Report',
+  });
   const part = sanitiseFilePart(list[0] && list[0].part_number, 'Injectors');
-  return { buffer, filename: `InjectorReport_${part}_${list.length}.pdf` };
+  return { buffer, filename: `CustomReport_${part}_${list.length}.pdf` };
+}
+
+/**
+ * JSON view of the same comparison model used by the PDF. It is intentionally
+ * side-effect free: no PDF buffer, file download or inspection row is created.
+ */
+function buildReportPreview(injectors = []) {
+  const list = toReportInjectors(injectors);
+  const model = buildInjectorComparisonModel(list);
+  const bound = (value) => (Number.isInteger(value) ? value.toFixed(1) : String(value));
+  const dates = [...new Set(list.map((i) => String(i.test_datetime || '').slice(0, 10)).filter(Boolean))].sort();
+
+  return {
+    title: 'Custom Report Preview',
+    parts: numericPartNumbers(list.map((i) => i.part_number)),
+    brands: [...new Set(list.map((i) => String(i.brand || '').trim()).filter(Boolean))],
+    dateFrom: dates[0] || '',
+    dateTo: dates.length ? dates[dates.length - 1] : '',
+    injectors: list.map((injector, index) => ({
+      id: injector.id,
+      partNumber: injector.part_number || '',
+      serialNumber: injector.serial_number || '—',
+      result: (model.results[index] && model.results[index].overall) || '—',
+    })),
+    rows: model.rowOrder.map((key) => {
+      const row = model.rowMap.get(key);
+      const hasRange = Number.isFinite(row.min) && Number.isFinite(row.max);
+      return {
+        key,
+        label: row.label,
+        specification: hasRange ? `${bound(row.min)} - ${bound(row.max)}` : (row.spec || '—'),
+        unit: row.unit || '',
+        values: model.injValues.map((values) => {
+          const cell = values.get(key);
+          const lines = cell && Array.isArray(cell.lines) ? cell.lines.filter(Boolean) : [];
+          return {
+            lines: lines.length ? lines : ['—'],
+            status: cell && cell.status ? cell.status : 'unknown',
+            error: Boolean(cell && cell.error),
+          };
+        }),
+      };
+    }),
+  };
 }
 
 /**
@@ -189,7 +235,6 @@ function generateInspectionReports(injectors = [], opts = {}) {
       created: !!wasCreated,
       injector_count: group.length,
       part_number: group[0].part_number || null,
-      job_number: group[0].job_number || null,
       serial_numbers: group.map((g) => g.serial_number).filter(Boolean),
       filename: `QC_${sanitiseFilePart(group[0].part_number, 'NoPart')}_${sanitiseFilePart(group.map((g) => g.serial_number).filter(Boolean).join('-'), 'NoSerial')}.pdf`,
     });
@@ -206,6 +251,7 @@ module.exports = {
   validateSelection,
   toReportInjectors,
   buildCustomerReport,
+  buildReportPreview,
   buildShipmentEvaluationReport,
   generateInspectionReports,
 };

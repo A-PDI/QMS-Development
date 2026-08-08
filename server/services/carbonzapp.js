@@ -246,7 +246,9 @@ function mapReportToInjector(report) {
     slot_position: slot.position != null ? Number(slot.position) : 0,
     part_number: report.actuator_code || null,
     serial_number: slot.sn || null,
-    job_number: report.job || report.drs_id || null,
+    // Job # is evaluated transiently by the import-exclusion rules below but
+    // is not retained as application data.
+    job_number: null,
     brand: report.actuator_Brand || null,
     injector_type: report.actuator_type || null,
     machine_name: report.machine_name || null,
@@ -264,7 +266,6 @@ function mapReportToInjector(report) {
       slot_position: slot.position != null ? Number(slot.position) : 0,
       part_number: report.actuator_code || null,
       serial_number: slot.sn || null,
-      job_number: report.job || report.drs_id || null,
       brand: report.actuator_Brand || null,
       injector_type: report.actuator_type || null,
       machine_name: report.machine_name || null,
@@ -462,22 +463,11 @@ async function fetchAllReports({ apiKey, dateFrom = null, maxPages = null } = {}
   return { reports: [...byId.values()], pages, truncated };
 }
 
-/**
- * Lightweight connectivity/auth test that doesn't persist anything. Reports what
- * the API key can actually see, which is the fastest way to tell a key/scope
- * problem from a job-number-routing one.
- */
+/** Lightweight connectivity/auth test that does not persist anything. */
 async function testConnection({ apiKey } = {}) {
   const { reports, pages, truncated } = await fetchAllReports({ apiKey });
   const range = reportDateRange(reports);
-  const matching = reports.filter(belongsToThisApp);
-  const jobNumbers = [...new Set(reports.map(r => jobNumberOf(r) || '(blank)'))];
-  // Newest first — the ones the user is most likely to recognise.
-  const newestJobNumbers = [...reports]
-    .sort((a, b) => (reportDate(b) || 0) - (reportDate(a) || 0))
-    .map(r => jobNumberOf(r) || '(blank)')
-    .filter((job, i, all) => all.indexOf(job) === i)
-    .slice(0, 8);
+  const exclusions = summariseExclusions(reports);
 
   return {
     ok: true,
@@ -486,47 +476,48 @@ async function testConnection({ apiKey } = {}) {
     truncated,
     sampleDate: range.to,
     dateRange: range,
-    jobNumberCount: jobNumbers.length,
-    newestJobNumbers,
-    matchingCount: matching.length,
-    jobPrefix: routingDisabled() ? null : jobPrefix(),
+    eligibleCount: reports.length - exclusions.excludedCount,
+    exclusions,
   };
 }
 
-// ── Job-number routing ────────────────────────────────────────────────────────
-// The test bench is shared with the Warranty_SQL app. Technicians prefix the
-// bench "Job #" to say which system a result belongs to:
-//   "QMS…" → an internal quality inspection → belongs here (QMS-Development)
-//   "RMA…" → a warranty return evaluation → belongs to Warranty_SQL only
-// A report is only synced here if its Job # begins with OUR prefix — anything
-// else (the other system's prefix, no prefix, or any other text) is excluded.
-//
-// The prefix is configurable so a change of convention on the bench doesn't
-// silently exclude every report:
-//   CARBONZAPP_JOB_PREFIX=QMS    (default)
-//   CARBONZAPP_JOB_PREFIX=none   import everything, whatever the Job # says
-// It can also be stored in app_settings under `carbonzapp_job_prefix`.
-const OWN_JOB_PREFIX = 'QMS';
-const ROUTING_DISABLED = ['none', 'any', 'all', '*'];
-
-function jobPrefix() {
-  const configured = (process.env.CARBONZAPP_JOB_PREFIX || getSetting('carbonzapp_job_prefix') || '').trim();
-  return configured || OWN_JOB_PREFIX;
-}
-
-/** True when job-number routing is switched off (every report is imported). */
-function routingDisabled() {
-  return ROUTING_DISABLED.includes(jobPrefix().toLowerCase());
-}
-
+// ── Import exclusions ─────────────────────────────────────────────────────────
+// Import every bench result except an injector whose serial starts with R or
+// whose raw bench Job # contains RMA. Job # is used only for this decision and
+// is deliberately not stored or exposed by the application.
 function jobNumberOf(report) {
   return String((report && (report.job || report.drs_id)) || '').trim();
 }
 
-function belongsToThisApp(report) {
-  if (routingDisabled()) return true;
-  const job = jobNumberOf(report);
-  return new RegExp(`^${jobPrefix()}`, 'i').test(job);
+function serialNumberOf(report) {
+  return String((report && report.SlotsData && report.SlotsData.sn) || '').trim();
+}
+
+function exclusionReasons(report) {
+  const reasons = [];
+  if (/^R/i.test(serialNumberOf(report))) reasons.push('serial_starts_with_r');
+  if (/RMA/i.test(jobNumberOf(report))) reasons.push('job_contains_rma');
+  return reasons;
+}
+
+function shouldImportReport(report) {
+  return exclusionReasons(report).length === 0;
+}
+
+function summariseExclusions(reports = []) {
+  let serialStartsWithR = 0;
+  let jobContainsRma = 0;
+  let both = 0;
+  let excludedCount = 0;
+  for (const report of reports) {
+    const reasons = exclusionReasons(report);
+    if (!reasons.length) continue;
+    excludedCount += 1;
+    if (reasons.includes('serial_starts_with_r')) serialStartsWithR += 1;
+    if (reasons.includes('job_contains_rma')) jobContainsRma += 1;
+    if (reasons.length === 2) both += 1;
+  }
+  return { excludedCount, serialStartsWithR, jobContainsRma, both };
 }
 
 // ── Full-resync fetch window ──────────────────────────────────────────────────
@@ -540,7 +531,7 @@ const FULL_SYNC_FROM_DEFAULT = '2000-01-01T00:00:00.000Z';
 
 function fullSyncDateFrom() {
   const configured = (process.env.CARBONZAPP_FULL_SYNC_FROM || '').trim();
-  if (ROUTING_DISABLED.includes(configured.toLowerCase())) return null;
+  if (['none', 'any', 'all', '*'].includes(configured.toLowerCase())) return null;
   return configured || FULL_SYNC_FROM_DEFAULT;
 }
 
@@ -551,11 +542,15 @@ function fullSyncDateFrom() {
 function hydrateInjectorRow(row) {
   let rj = {};
   try { rj = row.report_json ? JSON.parse(row.report_json) : {}; } catch (_) { rj = {}; }
-  return {
+  const hydrated = {
     ...row,
     tests: Array.isArray(rj.tests) ? rj.tests : [],
     report_json: rj,
   };
+  // The compatibility column can still exist in older databases, but Job # is
+  // no longer part of the application model after the import decision.
+  delete hydrated.job_number;
+  return hydrated;
 }
 
 /**
@@ -636,6 +631,48 @@ function deleteAutoInspection(inspectionId) {
   try { db.run('DELETE FROM inspection_notes WHERE inspection_id = ?', [inspectionId]); } catch (_) {}
   db.run('DELETE FROM inspections WHERE id = ?', [inspectionId]);
   return 'deleted';
+}
+
+/**
+ * Remove previously imported rows that the latest bench payload now places
+ * outside the import rules. This is keyed by report + slot because one bench
+ * test can contain both eligible and excluded injectors under the same report
+ * id.
+ */
+function removeExcludedRows(rawReports = []) {
+  let rowsRemoved = 0;
+  let inspectionsDeleted = 0;
+  let inspectionsKept = 0;
+
+  for (const raw of rawReports) {
+    if (shouldImportReport(raw) || !raw || raw._id == null) continue;
+    const slot = raw.SlotsData && raw.SlotsData.position != null
+      ? Number(raw.SlotsData.position)
+      : 0;
+    const existing = db.get(
+      `SELECT id, inspection_id FROM injector_test_reports
+        WHERE report_ext_id = ? AND slot_position = ?`,
+      [String(raw._id), slot]
+    );
+    if (!existing) continue;
+
+    db.run('DELETE FROM injector_test_reports WHERE id = ?', [existing.id]);
+    rowsRemoved += 1;
+
+    if (existing.inspection_id) {
+      const remaining = db.get(
+        'SELECT COUNT(*) AS c FROM injector_test_reports WHERE inspection_id = ?',
+        [existing.inspection_id]
+      );
+      if (!remaining || remaining.c === 0) {
+        const outcome = deleteAutoInspection(existing.inspection_id);
+        if (outcome === 'deleted') inspectionsDeleted += 1;
+        else if (outcome === 'kept') inspectionsKept += 1;
+      }
+    }
+  }
+
+  return { rowsRemoved, inspectionsDeleted, inspectionsKept };
 }
 
 /**
@@ -750,9 +787,8 @@ const PRUNE_SHARE_LIMIT_PCT = Number(process.env.CARBONZAPP_PRUNE_LIMIT_PCT) || 
  * no longer exist on the bench are pruned — subject to two safety rules that
  * exist because pruning is destructive and a fetch can come back short:
  *
- *   1. Nothing usable came back → prune NOTHING. An empty response (or one
- *      where every report was excluded by job-number routing) means "we can't
- *      see the bench's data", not "the bench has no data".
+ *   1. The bench returned nothing at all → prune NOTHING. An empty response
+ *      means "we can't see the bench's data", not "the bench has no data".
  *   2. The prune would remove more than PRUNE_SHARE_LIMIT_PCT of the local
  *      records → skip it and report `pruneSkipped` so the user can confirm.
  */
@@ -770,21 +806,22 @@ async function syncNow({ apiKey, fullResync = false, allowLargePrune = false } =
     }
   }
 
-  console.log(`[CarbonZapp] Sync starting (fullResync=${fullResync}, dateFrom=${dateFrom || 'none'}, jobPrefix=${routingDisabled() ? 'disabled' : jobPrefix()})`);
+  console.log(`[CarbonZapp] Sync starting (fullResync=${fullResync}, dateFrom=${dateFrom || 'none'}, exclusions=serial starts R or Job # contains RMA)`);
   // Paged: one request only returns a slice of the bench's history.
   const { reports: fetched, pages: pagesFetched, truncated: fetchTruncated } =
     await fetchAllReports({ apiKey, dateFrom });
   const fetchedRange = reportDateRange(fetched);
-  // Route by Job # prefix — reports belonging to the Warranty app are excluded
-  // here.
-  const raw = fetched.filter(belongsToThisApp);
-  const excludedByRouting = fetched.length - raw.length;
-  // A sample of the Job #s that were filtered out, so "nothing imported" can be
-  // diagnosed from the UI instead of the server log.
-  const excludedJobNumbers = [...new Set(
-    fetched.filter(r => !belongsToThisApp(r)).map(r => jobNumberOf(r) || '(blank)')
-  )].slice(0, 10);
-  console.log(`[CarbonZapp] Fetched ${fetched.length} report object(s) from the bench (${excludedByRouting} excluded by job-number routing${excludedJobNumbers.length ? ': ' + excludedJobNumbers.join(', ') : ''}).`);
+  const raw = fetched.filter(shouldImportReport);
+  const exclusions = summariseExclusions(fetched);
+  // If an existing injector now matches an exclusion, remove that exact slot
+  // even during an incremental sync. Shared report ids can contain a mixture
+  // of eligible and excluded injectors, so report-id-only pruning is not enough.
+  const excludedRemoval = removeExcludedRows(fetched);
+  console.log(
+    `[CarbonZapp] Fetched ${fetched.length} report object(s) from the bench `
+      + `(${exclusions.excludedCount} excluded: ${exclusions.serialStartsWithR} serial-prefix, `
+      + `${exclusions.jobContainsRma} RMA-job).`
+  );
   const result = upsertReports(raw);
 
   // NOTE: synchronisation IMPORTS TEST RECORDS ONLY. Inspection reports are no
@@ -816,7 +853,7 @@ async function syncNow({ apiKey, fullResync = false, allowLargePrune = false } =
         };
         console.warn(`[CarbonZapp] Full resync could not read the bench's complete history — SKIPPED pruning ${impact.staleRows} injector row(s).`);
       }
-    } else if (presentExtIds.length === 0) {
+    } else if (fetched.length === 0) {
       // Rule 1 — never treat "we got nothing" as "the bench has nothing".
       const impact = stalePruneImpact(presentExtIds);
       if (impact.staleRows > 0) {
@@ -826,7 +863,7 @@ async function syncNow({ apiKey, fullResync = false, allowLargePrune = false } =
           wouldDeleteReports: impact.staleReports,
           storedRows: impact.storedRows,
         };
-        console.warn(`[CarbonZapp] Full resync returned no usable reports — SKIPPED pruning ${impact.staleRows} existing injector row(s). Existing data left untouched.`);
+        console.warn(`[CarbonZapp] Full resync returned no reports — SKIPPED pruning ${impact.staleRows} existing injector row(s). Existing data left untouched.`);
       }
     } else {
       const impact = stalePruneImpact(presentExtIds);
@@ -861,10 +898,8 @@ async function syncNow({ apiKey, fullResync = false, allowLargePrune = false } =
   return {
     fetched: raw.length,
     fetchedTotal: fetched.length,
-    excludedByRouting,
-    // Diagnostics for "the bench answered but nothing was imported".
-    excludedJobNumbers,
-    jobPrefix: routingDisabled() ? null : jobPrefix(),
+    exclusions,
+    excludedRowsRemoved: excludedRemoval.rowsRemoved,
     // How much of the bench's history this sync actually saw.
     pagesFetched,
     fetchTruncated,
@@ -873,8 +908,8 @@ async function syncNow({ apiKey, fullResync = false, allowLargePrune = false } =
     updated: result.updated,
     inspectionsCreated,
     reportsDeleted: deletion.reportsDeleted,
-    inspectionsDeleted: deletion.inspectionsDeleted,
-    inspectionsKept: deletion.inspectionsKept,
+    inspectionsDeleted: deletion.inspectionsDeleted + excludedRemoval.inspectionsDeleted,
+    inspectionsKept: deletion.inspectionsKept + excludedRemoval.inspectionsKept,
     // Present when a destructive prune was held back (see syncNow).
     pruneSkipped,
     storedRows: db.get('SELECT COUNT(*) AS c FROM injector_test_reports', []).c,
@@ -897,13 +932,15 @@ module.exports = {
   mapReportToInjector,
   normaliseTests,
   hydrateInjectorRow,
-  jobPrefix,
-  routingDisabled,
   fullSyncDateFrom,
   jobNumberOf,
-  belongsToThisApp,
+  serialNumberOf,
+  exclusionReasons,
+  shouldImportReport,
+  summariseExclusions,
   upsertReports,
   syncNow,
+  removeExcludedRows,
   clearAllReports,
   reconcileDeletions,
   stalePruneImpact,

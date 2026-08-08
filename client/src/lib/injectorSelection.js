@@ -1,5 +1,5 @@
 /**
- * Selection, grouping and validation helpers for the Injector Tests page.
+ * Selection, filtering and validation helpers for the Injector Tests page.
  *
  * Pure functions with no React/DOM dependencies so the selection rules can be
  * unit-tested and reused (the page only wires them to state).
@@ -8,54 +8,38 @@
  * injector column order (1, 2, 3 …) in every generated report.
  */
 
-export const NO_JOB_KEY = '__no_job__'
-export const NO_JOB_LABEL = 'No job number'
-
-/** Grouping key for an injector's job number ('' → the "no job" bucket). */
-export function jobKeyOf(injector) {
-  const job = String(injector?.job_number ?? '').trim()
-  return job || NO_JOB_KEY
-}
-
-/** Human label for a job key. */
-export function jobLabel(key) {
-  return key === NO_JOB_KEY ? NO_JOB_LABEL : key
-}
-
-/**
- * Group injectors by job number, keeping record order inside each group and
- * ordering the groups by their most recent test date (newest first). Similar
- * job numbers therefore sit together in the list.
- */
-export function groupByJobNumber(injectors = []) {
-  const groups = new Map()
-  for (const inj of injectors) {
-    const key = jobKeyOf(inj)
-    if (!groups.has(key)) groups.set(key, { key, label: jobLabel(key), injectors: [], latest: '' })
-    const g = groups.get(key)
-    g.injectors.push(inj)
-    const dt = String(inj?.test_datetime ?? '')
-    if (dt > g.latest) g.latest = dt
-  }
-  return [...groups.values()].sort((a, b) => {
-    if (a.latest !== b.latest) return a.latest < b.latest ? 1 : -1
-    return a.label.localeCompare(b.label)
+/** Newest test first, with stable identifiers breaking timestamp ties. */
+export function sortByTestDate(injectors = []) {
+  return [...injectors].sort((a, b) => {
+    const timestamp = (value) => {
+      const parsed = Date.parse(String(value ?? ''))
+      return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed
+    }
+    const dateOrder = timestamp(b?.test_datetime) - timestamp(a?.test_datetime)
+    if (dateOrder) return dateOrder
+    const partOrder = String(a?.part_number ?? '').localeCompare(String(b?.part_number ?? ''))
+    if (partOrder) return partOrder
+    return String(a?.serial_number ?? '').localeCompare(String(b?.serial_number ?? ''))
   })
 }
 
-/** Distinct job numbers present in the list, newest batch first. */
-export function jobNumberOptions(injectors = []) {
-  return groupByJobNumber(injectors).map((g) => ({ key: g.key, label: g.label, count: g.injectors.length }))
-}
+/** Independent Part Number, Serial Number and result-status filters. */
+export function filterInjectors(injectors = [], {
+  partNumber = '',
+  serialNumber = '',
+  status = '',
+} = {}) {
+  const part = String(partNumber ?? '').trim().toLowerCase()
+  const serial = String(serialNumber ?? '').trim().toLowerCase()
+  const wantedStatus = String(status ?? '').trim().toLowerCase()
 
-/** Free-text + job-number filtering, mirroring what the user sees. */
-export function filterInjectors(injectors = [], { search = '', jobNumber = '' } = {}) {
-  const term = String(search ?? '').trim().toLowerCase()
-  return injectors.filter((i) => {
-    if (jobNumber && jobKeyOf(i) !== jobNumber) return false
-    if (!term) return true
-    return [i.part_number, i.serial_number, i.job_number]
-      .some((v) => String(v ?? '').toLowerCase().includes(term))
+  return sortByTestDate(injectors).filter((injector) => {
+    if (part && !String(injector?.part_number ?? '').toLowerCase().includes(part)) return false
+    if (serial && !String(injector?.serial_number ?? '').toLowerCase().includes(serial)) return false
+    if (wantedStatus === 'pass' && injector?.overall_pass !== 1) return false
+    if (wantedStatus === 'fail' && injector?.overall_pass !== 0) return false
+    if (wantedStatus === 'unscored' && injector?.overall_pass != null) return false
+    return true
   })
 }
 
@@ -88,12 +72,6 @@ export function toggleAll(selectedIds = [], injectors = []) {
   return areAllSelected(selectedIds, injectors)
     ? removeFromSelection(selectedIds, injectors)
     : addToSelection(selectedIds, injectors)
-}
-
-/** Select (or clear) every injector belonging to one job number. */
-export function toggleJobSelection(selectedIds = [], injectors = [], key) {
-  const inJob = injectors.filter((i) => jobKeyOf(i) === key)
-  return toggleAll(selectedIds, inJob)
 }
 
 /** The selected injector records, in selection order, limited to `available`. */
@@ -143,21 +121,15 @@ export function validateSelectionForReport(selected = []) {
   const warnings = []
   const noSerial = selected.filter((i) => !i.serial_number).length
   const noPart = selected.filter((i) => !i.part_number).length
-  const noJob = selected.filter((i) => !String(i.job_number ?? '').trim()).length
   if (noSerial) warnings.push(`${noSerial} selected injector(s) have no serial number.`)
   if (noPart) warnings.push(`${noPart} selected injector(s) have no part number.`)
-  if (noJob) warnings.push(`${noJob} selected injector(s) have no job number.`)
 
   return { ok: true, message: '', warnings }
 }
 
-/** Short description of what is selected, e.g. "12 injectors · job QMS-724-3". */
+/** Short description of what is selected. */
 export function describeSelection(selected = []) {
-  const jobs = [...new Set(selected.map((i) => String(i.job_number ?? '').trim()).filter(Boolean))]
-  const parts = [`${selected.length} injector${selected.length === 1 ? '' : 's'}`]
-  if (jobs.length === 1) parts.push(`job ${jobs[0]}`)
-  else if (jobs.length > 1) parts.push(`${jobs.length} job numbers`)
-  return parts.join(' · ')
+  return `${selected.length} injector${selected.length === 1 ? '' : 's'}`
 }
 
 /**
@@ -166,19 +138,17 @@ export function describeSelection(selected = []) {
  */
 export function vendorPromptReport(kind) {
   if (kind === 'evaluation') return 'Shipment Evaluation Report'
-  if (kind === 'customer' || kind === 'both') return 'Customer Report'
+  if (kind === 'customer' || kind === 'both') return 'Custom Report'
   return ''
 }
 
 /**
  * Suggested filename stem for a report over the given selection.
- * Pass `{ vendor }` for the Shipment Evaluation, which is identified by vendor
- * rather than by job number.
+ * Pass `{ vendor }` for reports whose filename should carry the vendor.
  */
 export function suggestReportName(prefix, selected = [], { vendor = '' } = {}) {
   const part = selected.find((i) => i.part_number)?.part_number
-  const job = selected.find((i) => String(i.job_number ?? '').trim())?.job_number
-  const scope = String(vendor ?? '').trim() || job
+  const scope = String(vendor ?? '').trim()
   return [prefix, part, scope, `${selected.length}`]
     .filter(Boolean)
     .map((v) => String(v).trim().replace(/\s+/g, '-'))

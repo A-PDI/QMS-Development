@@ -13,7 +13,7 @@
  *   id        report _id (injectors sharing an _id belong to one test report)
  *   slot      slot position
  *   serial    injector serial number
- *   job       job number (must start with "QMS" to be imported)
+ *   job       raw bench job number (excluded only when it contains "RMA")
  *   part      part number
  *   flow      { IVM01, IVM06 } measured averages (null = no reading at all)
  *   errorOn   step code to attach a bench error to, e.g. 'IVM06'

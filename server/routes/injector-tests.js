@@ -6,12 +6,13 @@
  *   GET  /settings                      → CarbonZapp settings (masked key, last sync)
  *   PUT  /settings                      → save the CarbonZapp API key
  *   POST /sync                          → "Sync Now" — import test records ONLY
- *   POST /reports/customer              → comparison PDF for selected injectors
+ *   POST /reports/preview               → selected comparison data (JSON only)
+ *   POST /reports/custom                → Custom Report PDF for selected injectors
  *                                          (optional vendor_name; bench brand fallback)
  *   POST /reports/inspection            → create/refresh inspection record(s)
  *   POST /reports/shipment-evaluation   → Shipment Evaluation PDF (supplier_evaluation;
  *                                          requires vendor_name)
- *   POST /report                        → legacy alias of /reports/customer
+ *   POST /reports/customer, /report     → legacy aliases of /reports/custom
  *
  * EVERY route in this file is restricted to the ADMIN role (see requireAdmin) —
  * the client hides the page and blocks the route for everyone else, and this is
@@ -28,6 +29,7 @@ const {
   loadSelectedInjectors,
   validateSelection,
   buildCustomerReport,
+  buildReportPreview,
   buildShipmentEvaluationReport,
   generateInspectionReports,
 } = require('../services/injectorReports');
@@ -49,21 +51,34 @@ function requireAdmin(req, res, next) {
 // ── List injectors ─────────────────────────────────────────────────────────
 router.get('/', requireAdmin, (req, res, next) => {
   try {
-    const { search } = req.query;
-    let sql = `SELECT id, report_ext_id, slot_position, part_number, serial_number, job_number,
+    const { search, part_number, serial_number, status } = req.query;
+    let sql = `SELECT id, report_ext_id, slot_position, part_number, serial_number,
                       brand, injector_type, machine_name, machine_sn, test_datetime, ext_status,
                       overall_pass, steps_total, steps_passed, steps_failed, inspection_id, synced_at
-               FROM injector_test_reports WHERE 1=1`;
+               FROM injector_test_reports
+              WHERE (serial_number IS NULL OR UPPER(TRIM(serial_number)) NOT LIKE 'R%')
+                AND (job_number IS NULL OR UPPER(job_number) NOT LIKE '%RMA%')`;
     const params = [];
     if (search) {
-      sql += ' AND (part_number LIKE ? OR serial_number LIKE ? OR job_number LIKE ?)';
+      sql += ' AND (part_number LIKE ? OR serial_number LIKE ?)';
       const s = `%${search}%`;
-      params.push(s, s, s);
+      params.push(s, s);
     }
-    // Stable, predictable ordering: newest test first, then grouped by job and
-    // by bench report so the injectors of one physical test stay together (the
-    // page groups by job number and reports follow selection order).
-    sql += ' ORDER BY test_datetime DESC, job_number ASC, part_number ASC, report_ext_id ASC, slot_position ASC';
+    if (part_number) {
+      sql += ' AND part_number LIKE ?';
+      params.push(`%${part_number}%`);
+    }
+    if (serial_number) {
+      sql += ' AND serial_number LIKE ?';
+      params.push(`%${serial_number}%`);
+    }
+    if (status === 'pass') sql += ' AND overall_pass = 1';
+    else if (status === 'fail') sql += ' AND overall_pass = 0';
+    else if (status === 'unscored') sql += ' AND overall_pass IS NULL';
+
+    // One continuous list, newest test first. Remaining keys only make equal
+    // timestamps deterministic.
+    sql += ' ORDER BY datetime(test_datetime) DESC, part_number ASC, serial_number ASC, report_ext_id ASC, slot_position ASC';
     const injectors = db.all(sql, params);
     const lastSync = carbonzapp.getSetting('carbonzapp_last_sync');
     res.json({ injectors, lastSync, hasApiKey: !!carbonzapp.getApiKey() });
@@ -80,9 +95,10 @@ router.get('/settings', requireAdmin, (req, res, next) => {
       apiKeyMasked: masked,
       apiKeyFromEnv: !!process.env.CARBONZAPP_API_KEY,
       lastSync: carbonzapp.getSetting('carbonzapp_last_sync'),
-      // Import rules, shown in Settings so "nothing was imported" can be
-      // diagnosed without server access.
-      jobPrefix: carbonzapp.routingDisabled() ? null : carbonzapp.jobPrefix(),
+      exclusions: {
+        serialStartsWith: 'R',
+        jobContains: 'RMA',
+      },
       fullSyncFrom: carbonzapp.fullSyncDateFrom(),
     });
   } catch (err) { next(err); }
@@ -212,8 +228,23 @@ function reportFailure(err, { type, count, user }, next) {
   ));
 }
 
-// Customer comparison report (landscape PDF).
-async function handleCustomerReport(req, res, next) {
+// Preview the Custom Report comparison data. This endpoint never generates a
+// PDF and never creates or updates an inspection.
+router.post('/reports/preview', requireAdmin, (req, res, next) => {
+  try {
+    const { injectors, validation } = resolveSelection(req);
+    res.json({
+      ok: true,
+      preview: buildReportPreview(injectors),
+      warnings: validation.warnings,
+    });
+  } catch (err) {
+    return reportFailure(err, { type: 'preview', count: 0, user: req.user }, next);
+  }
+});
+
+// Custom Report comparison PDF (internal/legacy route id remains customer).
+async function handleCustomReport(req, res, next) {
   let count = 0;
   try {
     const vendorName = String((req.body && req.body.vendor_name) || '').trim();
@@ -223,16 +254,17 @@ async function handleCustomerReport(req, res, next) {
     const { injectors, validation } = resolveSelection(req);
     count = injectors.length;
     const { buffer, filename } = await buildCustomerReport(injectors, { vendorName });
-    console.log(`[InjectorReports] customer report: ${count} injector(s) → ${filename} (user=${req.user?.id})`);
+    console.log(`[InjectorReports] custom report: ${count} injector(s) → ${filename} (user=${req.user?.id})`);
     sendPdf(res, buffer, filename, validation.warnings);
   } catch (err) {
     return reportFailure(err, { type: REPORT_TYPES.CUSTOMER, count, user: req.user }, next);
   }
 }
 
-router.post('/reports/customer', requireAdmin, handleCustomerReport);
-// Legacy path kept so existing clients keep working.
-router.post('/report', requireAdmin, handleCustomerReport);
+router.post('/reports/custom', requireAdmin, handleCustomReport);
+// Legacy paths kept so existing clients keep working.
+router.post('/reports/customer', requireAdmin, handleCustomReport);
+router.post('/report', requireAdmin, handleCustomReport);
 
 // Inspection report — creates/refreshes the Fuel Injector inspection record(s)
 // for the selection and returns their ids so the client can download each PDF

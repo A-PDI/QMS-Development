@@ -4,8 +4,8 @@
  *
  * Covers requirement scenarios 6–10: synchronisation creates no inspection
  * reports; one selected injector produces a report containing only that
- * injector; a job-number selection produces the right set; "Generate Both"
- * produces one customer report and one inspection report; and a large batch
+ * injector; an explicit multi-row selection produces the right set; "Generate
+ * Both" produces one custom report and one inspection report; and a large batch
  * paginates without clipped or overlapping columns.
  */
 
@@ -28,6 +28,7 @@ const {
   loadSelectedInjectors,
   validateSelection,
   buildCustomerReport,
+  buildReportPreview,
   buildShipmentEvaluationReport,
   generateInspectionReports,
 } = require('../services/injectorReports');
@@ -93,7 +94,25 @@ test('selecting one injector reports on only that injector', async () => {
   for (const other of rows.filter((r) => r.id !== chosen.id)) {
     assert.ok(!text.includes(other.serial_number), `unselected ${other.serial_number} must not appear`);
   }
-  assert.match(filename, /^InjectorReport_.+\.pdf$/);
+  assert.match(filename, /^CustomReport_.+\.pdf$/);
+});
+
+test('report preview uses the comparison model without creating a PDF or inspection', async () => {
+  resetInjectorData();
+  await syncWith([
+    benchReport({ id: 'preview-1', slot: 0, serial: 'PV001' }),
+    benchReport({ id: 'preview-1', slot: 1, serial: 'PV002', errorOn: 'IVM06' }),
+  ]);
+  const selected = loadSelectedInjectors(storedInjectors().map((row) => row.id));
+  const before = injectorInspectionCount();
+  const preview = buildReportPreview(selected);
+
+  assert.strictEqual(preview.title, 'Custom Report Preview');
+  assert.deepStrictEqual(preview.injectors.map((injector) => injector.serialNumber), ['PV001', 'PV002']);
+  assert.ok(preview.rows.some((row) => row.label === 'Peak Torque'));
+  assert.ok(preview.rows.some((row) => row.values.some((cell) => cell.error)));
+  assert.ok(preview.injectors.every((injector) => !Object.hasOwn(injector, 'jobNumber')));
+  assert.strictEqual(injectorInspectionCount(), before);
 });
 
 test('report part numbers remove all non-numeric characters and deduplicate afterwards', () => {
@@ -106,7 +125,7 @@ test('report part numbers remove all non-numeric characters and deduplicate afte
   );
 });
 
-test('customer and shipment reports share Part, Vendor and Report Date header information', async () => {
+test('custom and shipment reports share Part, Vendor and Report Date header information', async () => {
   resetInjectorData();
   await syncWith([
     benchReport({ id: 'header-1', slot: 0, serial: 'HDR001', part: 'PN-0445-120067PX' }),
@@ -165,24 +184,24 @@ test('injector report table values never render below 7.5pt', () => {
   doc.end();
 });
 
-// ── Scenario 8: selection by job number ──────────────────────────────────────
-test('selecting the injectors of one job number reports exactly that set', async () => {
+// ── Scenario 8: an explicit selection reports only that set ─────────────────
+test('selecting a set of injector rows reports exactly that set', async () => {
   resetInjectorData();
   await syncWith([
     ...benchBatch(4, { job: 'QMS-100', prefix: 'AAA' }),
     ...benchBatch(3, { job: 'QMS-200', prefix: 'BBB' }),
   ]);
 
-  const job100 = db.all('SELECT * FROM injector_test_reports WHERE job_number = ? ORDER BY slot_position', ['QMS-100']);
-  const job200 = db.all('SELECT * FROM injector_test_reports WHERE job_number = ?', ['QMS-200']);
-  assert.strictEqual(job100.length, 4);
+  const selectedRows = db.all("SELECT * FROM injector_test_reports WHERE serial_number LIKE 'AAA%' ORDER BY slot_position", []);
+  const otherRows = db.all("SELECT * FROM injector_test_reports WHERE serial_number LIKE 'BBB%'", []);
+  assert.strictEqual(selectedRows.length, 4);
 
-  const selected = loadSelectedInjectors(job100.map((r) => r.id));
+  const selected = loadSelectedInjectors(selectedRows.map((r) => r.id));
   const { buffer } = await buildCustomerReport(selected);
   const text = extractPdfText(buffer).join('\n');
 
-  for (const inj of job100) assert.ok(text.includes(inj.serial_number), `${inj.serial_number} missing`);
-  for (const inj of job200) assert.ok(!text.includes(inj.serial_number), `${inj.serial_number} should not appear`);
+  for (const inj of selectedRows) assert.ok(text.includes(inj.serial_number), `${inj.serial_number} missing`);
+  for (const inj of otherRows) assert.ok(!text.includes(inj.serial_number), `${inj.serial_number} should not appear`);
 });
 
 test('report column order follows the selection order', async () => {
@@ -200,7 +219,7 @@ test('report column order follows the selection order', async () => {
 });
 
 // ── Scenario 9: Generate Both ────────────────────────────────────────────────
-test('"Generate Both" produces one customer report and one inspection report', async () => {
+test('"Generate Both" produces one custom report and one inspection report', async () => {
   resetInjectorData();
   await syncWith(benchBatch(4, { perReport: 4 }));
   const selected = loadSelectedInjectors(storedInjectors().map((r) => r.id));
@@ -208,7 +227,7 @@ test('"Generate Both" produces one customer report and one inspection report', a
   const customer = await buildCustomerReport(selected);
   const inspectionResult = generateInspectionReports(selected, { actor: { id: 'u1', name: 'Test User' } });
 
-  assert.ok(customer.buffer.length > 0, 'customer PDF generated');
+  assert.ok(customer.buffer.length > 0, 'custom PDF generated');
   assert.strictEqual(customer.buffer.subarray(0, 4).toString(), '%PDF');
   assert.strictEqual(inspectionResult.inspections.length, 1, 'one inspection for one bench report');
   assert.strictEqual(inspectionResult.created, 1);
@@ -398,15 +417,17 @@ test('validation rejects an empty selection', () => {
   assert.match(validation.message, /at least one injector/i);
 });
 
-test('validation warns (but does not block) on missing identifiers', async () => {
+test('validation warns (but does not block) on missing part and serial identifiers', async () => {
   resetInjectorData();
   await syncWith(benchBatch(2));
   const rows = storedInjectors();
-  db.run('UPDATE injector_test_reports SET job_number = NULL WHERE id = ?', [rows[0].id]);
+  db.run('UPDATE injector_test_reports SET serial_number = NULL, part_number = NULL WHERE id = ?', [rows[0].id]);
 
   const validation = validateSelection(loadSelectedInjectors(rows.map((r) => r.id)));
   assert.strictEqual(validation.ok, true);
-  assert.ok(validation.warnings.some((w) => /job number/i.test(w)));
+  assert.ok(validation.warnings.some((w) => /serial number/i.test(w)));
+  assert.ok(validation.warnings.some((w) => /part number/i.test(w)));
+  assert.ok(validation.warnings.every((w) => !/job number/i.test(w)));
 });
 
 // ── Shipment evaluation report ───────────────────────────────────────────────
@@ -488,7 +509,7 @@ test('a zero on a step the bench did NOT flag stays a zero', async () => {
 
 test('the printed range is the band that decides pass/fail', async () => {
   resetInjectorData();
-  await syncWith([benchReport({ serial: 'RANGE001' })]);
+  await syncWith([benchReport({ serial: 'BANDRANGE001' })]);
   const selected = loadSelectedInjectors(storedInjectors().map((r) => r.id));
   const tests = selected[0].tests.filter((t) => t.primary && !/^FL/i.test(t.name));
 
