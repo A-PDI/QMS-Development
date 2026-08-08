@@ -1,22 +1,18 @@
 /**
- * Injector selection, job-number grouping and pre-flight validation.
+ * Injector date ordering, independent filters, selection and report validation.
  */
 
 import test from 'node:test'
 import assert from 'node:assert'
 
 import {
-  NO_JOB_KEY,
-  jobKeyOf,
-  groupByJobNumber,
-  jobNumberOptions,
+  sortByTestDate,
   filterInjectors,
   toggleSelected,
   addToSelection,
   removeFromSelection,
   areAllSelected,
   toggleAll,
-  toggleJobSelection,
   orderedSelection,
   moveSelected,
   hasTestResults,
@@ -26,48 +22,40 @@ import {
   suggestReportName,
 } from '../src/lib/injectorSelection.js'
 
-const inj = (id, job, extra = {}) => ({
+const inj = (id, extra = {}) => ({
   id,
-  job_number: job,
   serial_number: `SN${id}`,
   part_number: '6513589PX',
   steps_total: 10,
   steps_passed: 10,
   overall_pass: 1,
-  test_datetime: extra.test_datetime || '2026-06-30T10:00:00Z',
+  test_datetime: '2026-06-30T10:00:00Z',
   ...extra,
 })
 
 const list = [
-  inj('1', 'QMS-100', { test_datetime: '2026-06-30T10:00:00Z' }),
-  inj('2', 'QMS-100'),
-  inj('3', 'QMS-200', { test_datetime: '2026-07-01T10:00:00Z' }),
-  inj('4', '', { test_datetime: '2026-06-01T10:00:00Z' }),
+  inj('1', { test_datetime: '2026-06-30T10:00:00Z' }),
+  inj('2', { serial_number: 'ABC-222', part_number: '0445120231', overall_pass: 0, steps_passed: 8, test_datetime: '2026-07-02T10:00:00Z' }),
+  inj('3', { serial_number: 'ABC-333', test_datetime: '2026-07-01T10:00:00Z' }),
+  inj('4', { serial_number: 'ZX-400', overall_pass: null, steps_total: 0, steps_passed: 0, test_datetime: '2026-06-01T10:00:00Z' }),
 ]
 
-// ── Grouping and filtering ───────────────────────────────────────────────────
-test('injectors group by job number, newest job first', () => {
-  const groups = groupByJobNumber(list)
-  assert.deepStrictEqual(groups.map((g) => g.label), ['QMS-200', 'QMS-100', 'No job number'])
-  assert.deepStrictEqual(groups[1].injectors.map((i) => i.id), ['1', '2'])
-  assert.strictEqual(jobKeyOf(list[3]), NO_JOB_KEY)
+// ── Ordering and filtering ──────────────────────────────────────────────────
+test('injectors are one continuous list ordered by newest test date first', () => {
+  assert.deepStrictEqual(sortByTestDate(list).map((i) => i.id), ['2', '3', '1', '4'])
+  assert.deepStrictEqual(list.map((i) => i.id), ['1', '2', '3', '4'], 'source array is not mutated')
 })
 
-test('the job filter lists every job with its count', () => {
-  assert.deepStrictEqual(
-    jobNumberOptions(list).map((o) => [o.label, o.count]),
-    [['QMS-200', 1], ['QMS-100', 2], ['No job number', 1]]
-  )
+test('part, serial and pass/fail filters work independently and together', () => {
+  assert.deepStrictEqual(filterInjectors(list, { partNumber: '0445' }).map((i) => i.id), ['2'])
+  assert.deepStrictEqual(filterInjectors(list, { serialNumber: 'abc' }).map((i) => i.id), ['2', '3'])
+  assert.deepStrictEqual(filterInjectors(list, { status: 'pass' }).map((i) => i.id), ['3', '1'])
+  assert.deepStrictEqual(filterInjectors(list, { status: 'fail' }).map((i) => i.id), ['2'])
+  assert.deepStrictEqual(filterInjectors(list, { status: 'unscored' }).map((i) => i.id), ['4'])
+  assert.deepStrictEqual(filterInjectors(list, { serialNumber: 'abc', status: 'pass' }).map((i) => i.id), ['3'])
 })
 
-test('search and job filter narrow the list', () => {
-  assert.deepStrictEqual(filterInjectors(list, { jobNumber: 'QMS-100' }).map((i) => i.id), ['1', '2'])
-  assert.deepStrictEqual(filterInjectors(list, { search: 'sn3' }).map((i) => i.id), ['3'])
-  assert.deepStrictEqual(filterInjectors(list, { search: 'QMS-2' }).map((i) => i.id), ['3'])
-  assert.deepStrictEqual(filterInjectors(list, {}).length, 4)
-})
-
-// ── Selection ────────────────────────────────────────────────────────────────
+// ── Selection ───────────────────────────────────────────────────────────────
 test('selection preserves pick order (which drives report column order)', () => {
   let selected = []
   selected = toggleSelected(selected, '3')
@@ -75,49 +63,33 @@ test('selection preserves pick order (which drives report column order)', () => 
   selected = toggleSelected(selected, '2')
   assert.deepStrictEqual(selected, ['3', '1', '2'])
 
-  selected = toggleSelected(selected, '1') // deselect
+  selected = toggleSelected(selected, '1')
   assert.deepStrictEqual(selected, ['3', '2'])
-
   assert.deepStrictEqual(orderedSelection(selected, list).map((i) => i.id), ['3', '2'])
 })
 
-test('select-all-visible adds only what is missing and keeps order', () => {
+test('select-all-visible adds only missing rows and keeps hidden selections', () => {
+  const visible = filterInjectors(list, { serialNumber: 'abc' })
+  let selected = toggleAll(['1'], visible)
+  assert.deepStrictEqual(selected, ['1', '2', '3'])
+  assert.ok(areAllSelected(selected, visible))
+
+  selected = toggleAll(selected, visible)
+  assert.deepStrictEqual(selected, ['1'], 'hidden selections remain selected')
+})
+
+test('selection helper functions retain stable order', () => {
   const selected = addToSelection(['3'], list)
   assert.deepStrictEqual(selected, ['3', '1', '2', '4'])
-  assert.ok(areAllSelected(selected, list))
-
-  const cleared = removeFromSelection(selected, list)
-  assert.deepStrictEqual(cleared, [])
-})
-
-test('toggling all deselects when everything visible is already selected', () => {
-  const visible = filterInjectors(list, { jobNumber: 'QMS-100' })
-  let selected = toggleAll(['3'], visible)
-  assert.deepStrictEqual(selected, ['3', '1', '2'])
-  selected = toggleAll(selected, visible)
-  assert.deepStrictEqual(selected, ['3'], 'other selections are left alone')
-})
-
-test('a whole job number can be selected and cleared in one click', () => {
-  let selected = toggleJobSelection([], list, 'QMS-100')
-  assert.deepStrictEqual(selected, ['1', '2'])
-  selected = toggleJobSelection(selected, list, 'QMS-200')
-  assert.deepStrictEqual(selected, ['1', '2', '3'])
-  selected = toggleJobSelection(selected, list, 'QMS-100')
-  assert.deepStrictEqual(selected, ['3'])
+  assert.deepStrictEqual(removeFromSelection(selected, [list[1], list[3]]), ['3', '1'])
 })
 
 test('column order can be rearranged', () => {
   const selected = ['1', '2', '3']
   assert.deepStrictEqual(moveSelected(selected, '3', -1), ['1', '3', '2'])
-  assert.deepStrictEqual(moveSelected(selected, '1', -1), ['1', '2', '3'], 'first item cannot move up')
-  assert.deepStrictEqual(moveSelected(selected, '3', 1), ['1', '2', '3'], 'last item cannot move down')
-  assert.deepStrictEqual(moveSelected(selected, 'unknown', 1), ['1', '2', '3'])
-})
-
-test('selections only include injectors still visible in the list', () => {
-  const visible = filterInjectors(list, { jobNumber: 'QMS-100' })
-  assert.deepStrictEqual(orderedSelection(['3', '1'], visible).map((i) => i.id), ['1'])
+  assert.deepStrictEqual(moveSelected(selected, '1', -1), selected)
+  assert.deepStrictEqual(moveSelected(selected, '3', 1), selected)
+  assert.deepStrictEqual(moveSelected(selected, 'unknown', 1), selected)
 })
 
 // ── Validation ───────────────────────────────────────────────────────────────
@@ -128,51 +100,40 @@ test('report actions are blocked without a selection', () => {
 })
 
 test('injectors without test results are reported clearly', () => {
-  const noResults = inj('9', 'QMS-100', { steps_total: 0, overall_pass: null })
-  assert.strictEqual(hasTestResults(noResults), false)
-
-  const result = validateSelectionForReport([list[0], noResults])
+  assert.strictEqual(hasTestResults(list[3]), false)
+  const result = validateSelectionForReport([list[0], list[3]])
   assert.strictEqual(result.ok, false)
   assert.match(result.message, /no test-bench results/i)
-  assert.ok(result.message.includes('SN9'), 'names the offending injector')
+  assert.ok(result.message.includes('ZX-400'))
 })
 
-test('missing identifiers warn without blocking', () => {
-  const result = validateSelectionForReport([list[0], list[3]])
+test('missing part and serial identifiers warn without a job-number warning', () => {
+  const result = validateSelectionForReport([inj('9', { serial_number: '', part_number: '' })])
   assert.strictEqual(result.ok, true)
-  assert.ok(result.warnings.some((w) => /job number/i.test(w)))
+  assert.ok(result.warnings.some((warning) => /serial number/i.test(warning)))
+  assert.ok(result.warnings.some((warning) => /part number/i.test(warning)))
+  assert.ok(result.warnings.every((warning) => !/job/i.test(warning)))
 })
 
-// ── Labels ───────────────────────────────────────────────────────────────────
-test('the selection is described for the user', () => {
-  assert.strictEqual(describeSelection([list[0]]), '1 injector · job QMS-100')
-  assert.strictEqual(describeSelection([list[0], list[1]]), '2 injectors · job QMS-100')
-  assert.strictEqual(describeSelection([list[0], list[2]]), '2 injectors · 2 job numbers')
+// ── Labels and filenames ────────────────────────────────────────────────────
+test('the selection is described without job-number grouping', () => {
+  assert.strictEqual(describeSelection([list[0]]), '1 injector')
+  assert.strictEqual(describeSelection([list[0], list[1]]), '2 injectors')
 })
 
 test('vendor information is requested for every report that uses the shared header', () => {
-  assert.strictEqual(vendorPromptReport('customer'), 'Customer Report')
-  assert.strictEqual(vendorPromptReport('both'), 'Customer Report')
+  assert.strictEqual(vendorPromptReport('customer'), 'Custom Report')
+  assert.strictEqual(vendorPromptReport('both'), 'Custom Report')
   assert.strictEqual(vendorPromptReport('evaluation'), 'Shipment Evaluation Report')
   assert.strictEqual(vendorPromptReport('inspection'), '')
 })
 
-test('a suggested filename includes the part and job number', () => {
+test('suggested filenames contain part, optional vendor and count but no job number', () => {
+  assert.strictEqual(suggestReportName('CustomReport', [list[0], list[2]]), 'CustomReport_6513589PX_2')
   assert.strictEqual(
-    suggestReportName('InjectorReport', [list[0], list[1]]),
-    'InjectorReport_6513589PX_QMS-100_2'
-  )
-  assert.strictEqual(suggestReportName('ShipmentEvaluation', []), 'ShipmentEvaluation_0')
-})
-
-test('the shipment evaluation filename is scoped by vendor, not job number', () => {
-  assert.strictEqual(
-    suggestReportName('ShipmentEvaluation', [list[0], list[1]], { vendor: 'Acme Diesel Supply' }),
+    suggestReportName('ShipmentEvaluation', [list[0], list[2]], { vendor: 'Acme Diesel Supply' }),
     'ShipmentEvaluation_6513589PX_Acme-Diesel-Supply_2'
   )
-  // No vendor given → falls back to the job number.
-  assert.strictEqual(
-    suggestReportName('ShipmentEvaluation', [list[0]], { vendor: '' }),
-    'ShipmentEvaluation_6513589PX_QMS-100_1'
-  )
+  assert.strictEqual(suggestReportName('ShipmentEvaluation', [list[0]], { vendor: '' }), 'ShipmentEvaluation_6513589PX_1')
+  assert.strictEqual(suggestReportName('ShipmentEvaluation', []), 'ShipmentEvaluation_0')
 })

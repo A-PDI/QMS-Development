@@ -270,7 +270,7 @@ function autoFillReportInspection(reportExtId, injectorRows, opts = {}) {
           [
             head.part_number || null,
             serials || null,
-            head.job_number || null,
+            null,
             [head.brand, head.injector_type].filter(Boolean).join(' ') || null,
             (head.test_datetime || now).slice(0, 10),
             injectors.length,
@@ -304,7 +304,7 @@ function autoFillReportInspection(reportExtId, injectorRows, opts = {}) {
       template.form_no,
       head.part_number || null,
       head.brand || null,
-      head.job_number || null,
+      null,
       [head.brand, head.injector_type].filter(Boolean).join(' ') || null,
       (head.test_datetime || now).slice(0, 10),
       actorName,

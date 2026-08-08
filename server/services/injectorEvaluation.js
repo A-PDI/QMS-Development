@@ -84,7 +84,6 @@ function summarise(injectors = []) {
   const total = list.length;
 
   const partNumbers = distinct(list.map((i) => i.part_number));
-  const jobNumbers = distinct(list.map((i) => i.job_number));
   const testDates = distinct(list.map((i) => String(i.test_datetime || '').slice(0, 10))).sort();
 
   return {
@@ -97,9 +96,6 @@ function summarise(injectors = []) {
     partNumbers,
     partNumber: partNumbers.length === 1 ? partNumbers[0] : (partNumbers[0] || ''),
     multiplePartNumbers: partNumbers.length > 1,
-    jobNumbers,
-    jobNumber: jobNumbers.length === 1 ? jobNumbers[0] : (jobNumbers[0] || ''),
-    multipleJobNumbers: jobNumbers.length > 1,
     dateFrom: testDates[0] || '',
     dateTo: testDates.length ? testDates[testDates.length - 1] : '',
     brands: distinct(list.map((i) => i.brand)),

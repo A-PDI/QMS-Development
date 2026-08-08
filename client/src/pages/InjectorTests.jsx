@@ -1,22 +1,17 @@
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Gauge, RefreshCw, Settings, Trash2, Search, Printer, ChevronUp, ChevronDown, X,
-  AlertTriangle, CheckCircle2, Loader2, XCircle, Save, FileText, Files, BarChart3, Info, ShieldAlert,
+  AlertTriangle, CheckCircle2, Loader2, XCircle, Save, FileText, Files, BarChart3, Info, ShieldAlert, Eye,
 } from 'lucide-react'
 import api from '../lib/api'
 import { useToast } from '../hooks/useToast'
 import { chooseSaveTarget, writeBlobToTarget, deriveFilename } from '../lib/download'
-import { describeSyncResult } from '../lib/syncStatus'
+import { describeConnectionResult, describeSyncResult } from '../lib/syncStatus'
 import {
-  NO_JOB_KEY,
-  jobKeyOf,
-  groupByJobNumber,
-  jobNumberOptions,
   filterInjectors,
   toggleSelected,
   toggleAll,
-  toggleJobSelection,
   areAllSelected,
   orderedSelection,
   moveSelected,
@@ -30,9 +25,9 @@ import {
 // ── Report kinds ──────────────────────────────────────────────────────────────
 // `internal` matches the server's report type ids; `label` is what the user sees.
 const REPORT_KINDS = {
-  customer:   { label: 'Customer Report',      short: 'Customer',   prefix: 'InjectorReport',     internal: 'customer' },
+  customer:   { label: 'Custom Report',        short: 'Custom',     prefix: 'CustomReport',       internal: 'customer' },
   inspection: { label: 'Inspection Report',    short: 'Inspection', prefix: 'InspectionReport',   internal: 'inspection' },
-  both:       { label: 'Both Reports',         short: 'Both',       prefix: 'InjectorReports',    internal: 'customer+inspection' },
+  both:       { label: 'Both Reports',         short: 'Both',       prefix: 'CustomReports',      internal: 'customer+inspection' },
   evaluation: { label: 'Shipment Evaluation',  short: 'Evaluation', prefix: 'ShipmentEvaluation', internal: 'supplier_evaluation' },
 }
 
@@ -60,12 +55,15 @@ export default function InjectorTests() {
   const qc = useQueryClient()
   const { showToast } = useToast()
 
-  const [search, setSearch] = useState('')
-  const [jobFilter, setJobFilter] = useState('')
+  const [partFilter, setPartFilter] = useState('')
+  const [serialFilter, setSerialFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
   // Selection is ORDER-AWARE: the array order defines report column order.
   const [selectedIds, setSelectedIds] = useState(() => [])
   const selected = useMemo(() => new Set(selectedIds), [selectedIds])
   const [showOrder, setShowOrder] = useState(false)
+  const [preview, setPreview] = useState(null)
+  const [previewing, setPreviewing] = useState(false)
 
   const [syncing, setSyncing] = useState(false)
   const [generating, setGenerating] = useState(null)   // report kind currently running
@@ -90,32 +88,43 @@ export default function InjectorTests() {
   })
 
   const injectors = data?.injectors || []
-  const jobOptions = useMemo(() => jobNumberOptions(injectors), [injectors])
-  // A job filter left over from before a sync would hide every record and look
-  // like data loss, so drop it once that job number no longer exists.
-  const activeJobFilter = jobFilter && jobOptions.some(o => o.key === jobFilter) ? jobFilter : ''
-  if (jobFilter && !activeJobFilter && !isLoading) setJobFilter('')
-
   const filtered = useMemo(
-    () => filterInjectors(injectors, { search, jobNumber: activeJobFilter }),
-    [injectors, search, activeJobFilter]
+    () => filterInjectors(injectors, {
+      partNumber: partFilter,
+      serialNumber: serialFilter,
+      status: statusFilter,
+    }),
+    [injectors, partFilter, serialFilter, statusFilter]
   )
-  const groups = useMemo(() => groupByJobNumber(filtered), [filtered])
   const allVisibleSelected = areAllSelected(selectedIds, filtered)
 
-  // Selected records still visible in the list — the exact set that is reported.
-  const orderedSelected = useMemo(() => orderedSelection(selectedIds, filtered), [selectedIds, filtered])
+  // Filters only change the visible list; selections persist until explicitly
+  // cleared, and selection order continues to drive report columns.
+  const orderedSelected = useMemo(() => orderedSelection(selectedIds, injectors), [selectedIds, injectors])
   const selectedCount = orderedSelected.length
   const selectionIssue = useMemo(
     () => (selectedCount ? validateSelectionForReport(orderedSelected) : null),
     [orderedSelected, selectedCount]
   )
-  const canGenerate = selectedCount > 0 && !generating
+  const canGenerate = selectedCount > 0 && !generating && !previewing
+
+  useEffect(() => {
+    if (!preview) return undefined
+    const previousOverflow = document.body.style.overflow
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setPreview(null)
+    }
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [preview])
 
   // ── Selection handlers ─────────────────────────────────────────────────────
   const toggle = (id) => setSelectedIds(prev => toggleSelected(prev, id))
   const toggleAllVisible = () => setSelectedIds(prev => toggleAll(prev, filtered))
-  const toggleGroup = (key) => setSelectedIds(prev => toggleJobSelection(prev, filtered, key))
   const clearSelection = () => setSelectedIds([])
   const removeSelected = (id) => setSelectedIds(prev => prev.filter(x => x !== id))
   const move = (id, dir) => setSelectedIds(prev => moveSelected(prev, id, dir))
@@ -179,26 +188,8 @@ export default function InjectorTests() {
     setStatusMsg({ type: 'info', text: 'Testing connection to the test bench…' })
     try {
       const { data: res } = await api.post('/injector-tests/test-connection', {})
-      // Report what the key can actually SEE — how many reports, over what span,
-      // and how many pass the Job # filter. That separates a key/scope problem
-      // from a routing one without needing the server log.
-      const span = res.dateRange?.from
-        ? ` covering ${String(res.dateRange.from).slice(0, 10)} → ${String(res.dateRange.to).slice(0, 10)}`
-        : ''
-      const pages = res.pages > 1 ? ` over ${res.pages} pages` : ''
-      const matching = res.jobPrefix
-        ? ` ${res.matchingCount} match the "${res.jobPrefix}" Job # filter.`
-        : ' Job # filtering is off, so all of them would be imported.'
-      const newest = res.newestJobNumbers?.length
-        ? ` Newest Job #s: ${res.newestJobNumbers.slice(0, 6).join(', ')}.`
-        : ''
-      const truncated = res.truncated
-        ? ' The bench has more history than one read can cover — raise CARBONZAPP_MAX_PAGES if reports are missing.'
-        : ''
-      setStatusMsg({
-        type: res.count > 0 && res.matchingCount === 0 ? 'warning' : 'success',
-        text: `Connection OK — the bench returned ${res.count} report object(s)${pages}${span}.${matching}${newest}${truncated}`,
-      })
+      const outcome = describeConnectionResult(res)
+      setStatusMsg(outcome)
       showToast('Connection successful', 'success')
     } catch (err) {
       const msg = await errorMessageFrom(err, 'Connection failed.')
@@ -221,6 +212,29 @@ export default function InjectorTests() {
     } finally { setSavingKey(false) }
   }
 
+  const handlePreview = async () => {
+    const validation = validateSelectionForReport(orderedSelected)
+    if (!validation.ok) {
+      setStatusMsg({ type: 'error', text: validation.message })
+      showToast(validation.message, 'error')
+      return
+    }
+
+    setPreviewing(true)
+    try {
+      const { data: res } = await api.post('/injector-tests/reports/preview', {
+        injector_ids: orderedSelected.map((injector) => injector.id),
+      })
+      setPreview(res.preview)
+    } catch (err) {
+      const msg = await errorMessageFrom(err, 'The report preview could not be loaded. Please try again.')
+      setStatusMsg({ type: 'error', text: msg })
+      showToast(`Preview failed: ${msg}`, 'error')
+    } finally {
+      setPreviewing(false)
+    }
+  }
+
   // ── Report generation ──────────────────────────────────────────────────────
   /**
    * Ask for everything the report needs FIRST (while the click gesture is still
@@ -239,9 +253,9 @@ export default function InjectorTests() {
     }
     const ids = selection.map(i => i.id)
 
-    // Customer and Shipment Evaluation reports share the same Part / Vendor /
+    // Custom and Shipment Evaluation reports share the same Part / Vendor /
     // Report Date header. Ask once while the click gesture is still active;
-    // "Both" uses the value for its Customer report.
+    // "Both" uses the value for its Custom Report.
     let vendor = vendorName
     const vendorReport = vendorPromptReport(kind)
     if (vendorReport) {
@@ -280,11 +294,11 @@ export default function InjectorTests() {
     try {
       if (kind === 'customer' || kind === 'both') {
         const res = await api.post(
-          '/injector-tests/reports/customer',
+          '/injector-tests/reports/custom',
           { injector_ids: ids, vendor_name: vendor },
           { responseType: 'blob' }
         )
-        const name = kind === 'both' ? deriveFilename(target.filename, 'Customer') : target.filename
+        const name = kind === 'both' ? deriveFilename(target.filename, 'Custom') : target.filename
         await writeBlobToTarget({ ...target, filename: name }, new Blob([res.data], { type: 'application/pdf' }))
         savedFiles.push(name)
         const w = warningsFrom(res); if (w) warnings.push(w)
@@ -337,7 +351,11 @@ export default function InjectorTests() {
     }
   }
 
-  const fmtDate = (v) => v ? String(v).slice(0, 10) : '—'
+  const fmtDate = (value) => {
+    if (!value) return '—'
+    const parsed = new Date(value)
+    return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString()
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -494,45 +512,50 @@ export default function InjectorTests() {
               <p className="text-xs text-gray-400 mt-1">Verifies the key can reach the bench without importing anything.</p>
             </div>
 
-            {/* Import rules — the usual reason a sync brings back nothing */}
+            {/* Fixed import exclusions */}
             <div className="pt-2 border-t border-gray-100 text-xs text-gray-500 space-y-0.5">
               <p>
-                <span className="font-medium text-gray-600">Job # filter:</span>{' '}
-                {settings?.jobPrefix
-                  ? <>only reports whose Job # starts with <code className="bg-gray-100 px-1 rounded">{settings.jobPrefix}</code> are imported</>
-                  : 'disabled — every report is imported regardless of its Job #'}
+                <span className="font-medium text-gray-600">Import rules:</span>{' '}
+                all test results are imported except serial numbers beginning with{' '}
+                <code className="bg-gray-100 px-1 rounded">{settings?.exclusions?.serialStartsWith || 'R'}</code>{' '}
+                or bench Job # values containing{' '}
+                <code className="bg-gray-100 px-1 rounded">{settings?.exclusions?.jobContains || 'RMA'}</code>.
               </p>
               <p>
                 <span className="font-medium text-gray-600">Full resync window:</span>{' '}
                 {settings?.fullSyncFrom ? `from ${String(settings.fullSyncFrom).slice(0, 10)}` : 'no date filter sent'}
               </p>
-              <p className="text-gray-400">
-                Set <code className="bg-gray-100 px-1 rounded">CARBONZAPP_JOB_PREFIX</code> (or{' '}
-                <code className="bg-gray-100 px-1 rounded">none</code> to import everything) and{' '}
-                <code className="bg-gray-100 px-1 rounded">CARBONZAPP_FULL_SYNC_FROM</code> on the server to change these.
-              </p>
+              <p className="text-gray-400">Set <code className="bg-gray-100 px-1 rounded">CARBONZAPP_FULL_SYNC_FROM</code> on the server to change the full-history window.</p>
             </div>
           </div>
         )}
 
-        {/* Search + job filter + selection controls */}
+        {/* Report filters + selection controls */}
         <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-            <div className="relative flex-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_180px_auto] gap-2">
+            <div className="relative">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="Search part #, serial #, job #…"
+              <input value={partFilter} onChange={e => setPartFilter(e.target.value)}
+                aria-label="Filter by part number"
+                placeholder="Filter by part number…"
                 className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
             </div>
-            <select value={activeJobFilter} onChange={e => setJobFilter(e.target.value)}
-              aria-label="Filter by job number"
-              className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px] sm:w-64">
-              <option value="">All job numbers</option>
-              {jobOptions.map(o => (
-                <option key={o.key} value={o.key}>{o.label} ({o.count})</option>
-              ))}
+            <div className="relative">
+              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input value={serialFilter} onChange={e => setSerialFilter(e.target.value)}
+                aria-label="Filter by serial number"
+                placeholder="Filter by serial number…"
+                className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+            </div>
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+              aria-label="Filter by pass or fail status"
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]">
+              <option value="">All statuses</option>
+              <option value="pass">Pass</option>
+              <option value="fail">Fail</option>
+              <option value="unscored">No result</option>
             </select>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 sm:col-span-2 lg:col-span-1">
               <button onClick={toggleAllVisible} disabled={filtered.length === 0}
                 className="px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 min-h-[40px] whitespace-nowrap">
                 {allVisibleSelected ? 'Deselect visible' : 'Select all visible'}
@@ -558,8 +581,13 @@ export default function InjectorTests() {
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={handlePreview} disabled={!canGenerate}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 text-sm rounded-lg min-h-[40px] font-medium whitespace-nowrap border border-pdi-navy text-pdi-navy hover:bg-pdi-navy/5 disabled:opacity-40">
+                {previewing ? <Loader2 size={15} className="animate-spin" /> : <Eye size={15} />}
+                {previewing ? 'Loading Preview…' : 'Preview Report'}
+              </button>
               <ReportButton kind="customer" icon={Printer} generating={generating} disabled={!canGenerate} onClick={runGeneration}>
-                Generate Customer Report
+                Generate Custom Report
               </ReportButton>
               <ReportButton kind="inspection" icon={FileText} generating={generating} disabled={!canGenerate} onClick={runGeneration}>
                 Generate Inspection Report
@@ -608,7 +636,7 @@ export default function InjectorTests() {
                       {inj.part_number || '—'}
                       <span className="text-gray-400 font-normal"> · SN {inj.serial_number || '—'}</span>
                     </div>
-                    <div className="text-xs text-gray-400 truncate">Job {inj.job_number || '—'}</div>
+                    <div className="text-xs text-gray-400 truncate">Tested {fmtDate(inj.test_datetime)}</div>
                   </div>
                   <div className="flex items-center gap-0.5 shrink-0">
                     <button onClick={() => move(inj.id, -1)} disabled={idx === 0} title="Move up" aria-label="Move up"
@@ -630,30 +658,24 @@ export default function InjectorTests() {
           </div>
         )}
 
-        {/* Injector list, grouped by job number */}
-        <div className="space-y-3">
+        {/* Continuous injector list, newest test first */}
+        <div>
           {isLoading ? (
             <div className="bg-white rounded-xl border border-gray-200 text-center text-gray-400 py-10">Loading…</div>
           ) : filtered.length === 0 ? (
             <div className="bg-white rounded-xl border border-gray-200 text-center text-gray-400 py-10 text-sm">
               {injectors.length === 0
                 ? 'No injector tests synced yet. Click "Sync Now" to pull results from the test bench.'
-                : 'No injectors match the current search or job filter.'}
+                : 'No injectors match the current filters.'}
             </div>
           ) : (
-            groups.map(group => (
-              <JobGroup
-                key={group.key}
-                group={group}
-                selected={selected}
-                allSelected={areAllSelected(selectedIds, group.injectors)}
-                onToggleGroup={() => toggleGroup(group.key)}
-                onToggle={toggle}
-                fmtDate={fmtDate}
-              />
-            ))
+            <InjectorList injectors={filtered} selected={selected} onToggle={toggle} fmtDate={fmtDate} />
           )}
         </div>
+
+        {preview && (
+          <ReportPreviewModal preview={preview} onClose={() => setPreview(null)} />
+        )}
       </div>
     </div>
   )
@@ -678,32 +700,16 @@ function ReportButton({ kind, icon: Icon, generating, disabled, onClick, accent,
   )
 }
 
-// ── One job-number group of injectors ─────────────────────────────────────────
-function JobGroup({ group, selected, allSelected, onToggleGroup, onToggle, fmtDate }) {
-  const passed = group.injectors.filter(i => i.overall_pass === 1).length
-  const failed = group.injectors.filter(i => i.overall_pass === 0).length
-
+// ── One continuous, test-date-ordered list of injectors ──────────────────────
+function InjectorList({ injectors, selected, onToggle, fmtDate }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      {/* Group header — selects every injector on this job number */}
-      <div className="flex items-center gap-3 px-3 py-2.5 bg-gray-50 border-b border-gray-200">
-        <input
-          type="checkbox"
-          checked={allSelected}
-          onChange={onToggleGroup}
-          className="rounded"
-          aria-label={`Select all injectors for ${group.label}`}
-        />
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-pdi-navy truncate">
-            {group.key === NO_JOB_KEY ? group.label : `Job ${group.label}`}
-          </div>
-          <div className="text-xs text-gray-500">
-            {group.injectors.length} injector{group.injectors.length === 1 ? '' : 's'}
-            {' · '}{passed} passed{failed ? ` · ${failed} failed` : ''}
-          </div>
+      <div className="flex items-center justify-between gap-3 px-3 py-2.5 bg-gray-50 border-b border-gray-200">
+        <div>
+          <div className="text-sm font-semibold text-pdi-navy">Test Results</div>
+          <div className="text-xs text-gray-500">{injectors.length} result{injectors.length === 1 ? '' : 's'} · newest first</div>
         </div>
-        <span className="text-xs text-gray-400 hidden sm:block">{fmtDate(group.latest)}</span>
+        <span className="text-xs text-gray-400">Select rows to build a report</span>
       </div>
 
       {/* Desktop table */}
@@ -714,13 +720,12 @@ function JobGroup({ group, selected, allSelected, onToggleGroup, onToggle, fmtDa
               <th className="px-3 py-2 w-10"><span className="sr-only">Select</span></th>
               <th className="px-3 py-2">Part Number</th>
               <th className="px-3 py-2">Serial Number</th>
-              <th className="px-3 py-2">Job Number</th>
               <th className="px-3 py-2">Flow Results</th>
               <th className="px-3 py-2">Tested</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {group.injectors.map(i => (
+            {injectors.map(i => (
               <tr key={i.id} className={`hover:bg-gray-50 ${selected.has(i.id) ? 'bg-pdi-navy/5' : ''}`}>
                 <td className="px-3 py-2.5">
                   <input type="checkbox" checked={selected.has(i.id)} onChange={() => onToggle(i.id)} className="rounded"
@@ -728,7 +733,6 @@ function JobGroup({ group, selected, allSelected, onToggleGroup, onToggle, fmtDa
                 </td>
                 <td className="px-3 py-2.5 font-medium text-gray-900">{i.part_number || '—'}</td>
                 <td className="px-3 py-2.5 text-gray-700">{i.serial_number || '—'}</td>
-                <td className="px-3 py-2.5 text-gray-700">{i.job_number || '—'}</td>
                 <td className="px-3 py-2.5"><InjectorFlowBadge injector={i} /></td>
                 <td className="px-3 py-2.5 text-gray-500 text-xs">{fmtDate(i.test_datetime)}</td>
               </tr>
@@ -739,7 +743,7 @@ function JobGroup({ group, selected, allSelected, onToggleGroup, onToggle, fmtDa
 
       {/* Mobile cards */}
       <div className="md:hidden divide-y divide-gray-100">
-        {group.injectors.map(i => (
+        {injectors.map(i => (
           <div key={i.id} className={`p-3 flex gap-3 ${selected.has(i.id) ? 'bg-pdi-navy/5' : ''}`}>
             <input type="checkbox" checked={selected.has(i.id)} onChange={() => onToggle(i.id)} className="rounded mt-1"
               aria-label={`Select injector ${i.serial_number || i.part_number || i.id}`} />
@@ -748,7 +752,7 @@ function JobGroup({ group, selected, allSelected, onToggleGroup, onToggle, fmtDa
                 <span className="font-medium text-sm text-gray-900 truncate">{i.part_number || '—'}</span>
                 <InjectorFlowBadge injector={i} />
               </div>
-              <div className="text-xs text-gray-500 mt-0.5">SN: {i.serial_number || '—'} · Job: {i.job_number || '—'}</div>
+              <div className="text-xs text-gray-500 mt-0.5">SN: {i.serial_number || '—'}</div>
               <div className="text-xs text-gray-400 mt-0.5">{fmtDate(i.test_datetime)}</div>
             </div>
           </div>
@@ -756,6 +760,109 @@ function JobGroup({ group, selected, allSelected, onToggleGroup, onToggle, fmtDa
       </div>
     </div>
   )
+}
+
+function ReportPreviewModal({ preview, onClose }) {
+  const formatRange = () => {
+    if (!preview.dateFrom) return '—'
+    return preview.dateFrom === preview.dateTo ? preview.dateFrom : `${preview.dateFrom} – ${preview.dateTo}`
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-2 sm:p-5"
+      role="presentation"
+      onMouseDown={onClose}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="report-preview-title"
+        className="flex max-h-[95vh] w-full max-w-7xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="flex items-start justify-between gap-4 border-b border-gray-200 px-4 py-3 sm:px-6">
+          <div>
+            <h2 id="report-preview-title" className="text-lg font-bold text-pdi-navy">{preview.title || 'Custom Report Preview'}</h2>
+            <p className="mt-0.5 text-xs text-gray-500">Preview only — no PDF or inspection has been created.</p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close report preview"
+            className="rounded-lg p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-800">
+            <X size={20} />
+          </button>
+        </header>
+
+        <div className="grid grid-cols-1 gap-2 border-b border-gray-200 bg-gray-50 px-4 py-3 text-sm sm:grid-cols-3 sm:px-6">
+          <div><span className="font-semibold text-gray-700">Part:</span> {preview.parts?.join(', ') || '—'}</div>
+          <div><span className="font-semibold text-gray-700">Brand:</span> {preview.brands?.join(', ') || '—'}</div>
+          <div><span className="font-semibold text-gray-700">Test date:</span> {formatRange()}</div>
+        </div>
+
+        <div className="flex-1 overflow-auto">
+          <table className="min-w-full border-collapse text-[12px]">
+            <thead className="sticky top-0 z-10 bg-pdi-navy text-white">
+              <tr>
+                <th className="sticky left-0 z-20 min-w-48 border-r border-white/20 bg-pdi-navy px-3 py-2 text-left">Test Step</th>
+                <th className="min-w-32 border-r border-white/20 px-3 py-2 text-left">Specification</th>
+                {(preview.injectors || []).map((injector, index) => (
+                  <th key={injector.id || index} className="min-w-36 border-r border-white/20 px-3 py-2 text-left last:border-r-0">
+                    <div>{injector.partNumber || '—'}</div>
+                    <div className="font-normal text-white/75">SN {injector.serialNumber || '—'}</div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(preview.rows || []).map((row) => (
+                <tr key={row.key} className="border-b border-gray-200 align-top odd:bg-white even:bg-gray-50">
+                  <th className="sticky left-0 border-r border-gray-200 bg-inherit px-3 py-2 text-left font-semibold text-gray-800">
+                    {row.label || row.key}
+                  </th>
+                  <td className="border-r border-gray-200 px-3 py-2 text-gray-600">
+                    {row.specification || '—'}{row.unit ? ` ${row.unit}` : ''}
+                  </td>
+                  {(row.values || []).map((cell, index) => (
+                    <td key={`${row.key}-${index}`} className={`border-r border-gray-200 px-3 py-2 last:border-r-0 ${previewCellClass(cell)}`}>
+                      {(cell.lines || ['—']).map((line, lineIndex) => <div key={lineIndex}>{line}</div>)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+              <tr className="border-t-2 border-pdi-navy bg-gray-100 font-semibold">
+                <th className="sticky left-0 border-r border-gray-200 bg-gray-100 px-3 py-2 text-left text-gray-800">Overall Result</th>
+                <td className="border-r border-gray-200 px-3 py-2">—</td>
+                {(preview.injectors || []).map((injector, index) => (
+                  <td key={injector.id || index} className={`border-r border-gray-200 px-3 py-2 last:border-r-0 ${resultClass(injector.result)}`}>
+                    {injector.result || '—'}
+                  </td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <footer className="flex justify-end border-t border-gray-200 px-4 py-3 sm:px-6">
+          <button type="button" onClick={onClose}
+            className="min-h-[40px] rounded-lg bg-pdi-navy px-4 py-2 text-sm font-medium text-white hover:bg-pdi-navy-light">
+            Close Preview
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
+function previewCellClass(cell) {
+  if (cell?.error || cell?.status === 'fail') return 'bg-red-50 font-semibold text-red-700'
+  if (cell?.status === 'pass') return 'text-green-700'
+  return 'text-gray-700'
+}
+
+function resultClass(result) {
+  const normalized = String(result || '').toLowerCase()
+  if (normalized === 'pass') return 'text-green-700'
+  if (normalized === 'fail') return 'text-red-700'
+  return 'text-gray-600'
 }
 
 function InjectorFlowBadge({ injector }) {

@@ -2,7 +2,7 @@
  * Human-readable outcome of a test-bench synchronisation.
  *
  * The sync API returns counters plus diagnostics (what the bench sent, what the
- * job-number routing excluded, whether a destructive prune was held back). This
+ * import rules excluded, whether a destructive prune was held back). This
  * turns them into one banner message so the page never has to leave the user
  * guessing why a sync imported nothing.
  *
@@ -11,12 +11,19 @@
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 
-/** Format the excluded job numbers for the message, capped for readability. */
-function excludedJobList(res) {
-  const jobs = Array.isArray(res.excludedJobNumbers) ? res.excludedJobNumbers : []
-  if (!jobs.length) return ''
-  const shown = jobs.slice(0, 5).join(', ')
-  return jobs.length > 5 ? `${shown}, …` : shown
+/** Human-readable counts for the two fixed import exclusions. */
+export function describeExclusions(exclusions = {}) {
+  const count = Number(exclusions.excludedCount) || 0
+  if (!count) return ''
+  const reasons = []
+  if (exclusions.serialStartsWithR) {
+    reasons.push(`${plural(exclusions.serialStartsWithR, 'serial number')} beginning with R`)
+  }
+  if (exclusions.jobContainsRma) {
+    reasons.push(`${plural(exclusions.jobContainsRma, 'Job #')} containing RMA`)
+  }
+  const overlap = exclusions.both ? `; ${exclusions.both} matched both rules` : ''
+  return `${plural(count, 'report')} excluded by the import rules${reasons.length ? ` (${reasons.join('; ')}${overlap})` : ''}`
 }
 
 /**
@@ -30,8 +37,23 @@ function coverage(res) {
   if (!from || !to) return ''
   const day = (v) => String(v).slice(0, 10)
   const span = day(from) === day(to) ? day(from) : `${day(from)} → ${day(to)}`
-  const pages = res.pagesFetched > 1 ? `, ${res.pagesFetched} pages` : ''
+  const pageCount = res.pagesFetched ?? res.pages
+  const pages = pageCount > 1 ? `, ${pageCount} pages` : ''
   return ` (covering ${span}${pages})`
+}
+
+/** Connection-test message using the same exclusion vocabulary as sync. */
+export function describeConnectionResult(res = {}) {
+  const excludedText = describeExclusions(res.exclusions)
+  const eligible = res.eligibleCount ?? Math.max(0, (res.count || 0) - (res.exclusions?.excludedCount || 0))
+  const truncated = res.truncated
+    ? ' The bench has more history than one read can cover — raise CARBONZAPP_MAX_PAGES if reports are missing.'
+    : ''
+  return {
+    type: res.count > 0 && eligible === 0 ? 'warning' : 'success',
+    text: `Connection OK — the bench returned ${plural(res.count || 0, 'report')}${coverage(res)}. `
+      + `${plural(eligible, 'report')} eligible for import${excludedText ? `; ${excludedText}` : ''}.${truncated}`,
+  }
 }
 
 /**
@@ -42,9 +64,8 @@ export function describeSyncResult(res = {}, { fullResync = false } = {}) {
   const updated = res.updated || 0
   const fetched = res.fetched || 0
   const fetchedTotal = res.fetchedTotal ?? fetched
-  const excluded = res.excludedByRouting || 0
+  const excluded = res.exclusions?.excludedCount || 0
   const stored = res.storedRows
-  const prefix = res.jobPrefix
   const skipped = res.pruneSkipped
 
   // ── A destructive prune was held back ────────────────────────────────────
@@ -60,9 +81,7 @@ export function describeSyncResult(res = {}, { fullResync = false } = {}) {
   }
 
   if (skipped?.reason === 'empty_fetch') {
-    const why = fetchedTotal > 0
-      ? `The bench returned ${plural(fetchedTotal, 'report')}${coverage(res)}, but ${excluded === fetchedTotal ? 'every one of them was' : `${excluded} were`} excluded because the Job # doesn't start with "${prefix}"${excludedJobList(res) ? ` (${excludedJobList(res)})` : ''}.`
-      : 'The bench returned no reports at all — check the API key, the bench connection, and that reports exist for the requested date range.'
+    const why = 'The bench returned no reports at all — check the API key, the bench connection, and that reports exist for the requested date range.'
     return {
       type: 'warning',
       text: `Full resync imported nothing, so your existing ${plural(skipped.wouldDeleteRows, 'record')} were left untouched (nothing was deleted). ${why}`,
@@ -80,14 +99,12 @@ export function describeSyncResult(res = {}, { fullResync = false } = {}) {
     }
   }
 
-  // ── Nothing came back that belongs to this app ───────────────────────────
+  // ── Everything returned was excluded by one of the fixed rules ──────────
   if (fetched === 0 && excluded > 0) {
     return {
       type: 'warning',
-      text: `The bench returned ${plural(fetchedTotal, 'report')}${coverage(res)}, but none were imported: their Job # doesn't start with "${prefix}"`
-        + `${excludedJobList(res) ? ` (${excludedJobList(res)})` : ''}. `
-        + 'Fix the Job # on the bench, or set CARBONZAPP_JOB_PREFIX on the server to match your numbering.',
-      toast: 'Nothing imported — job numbers did not match',
+      text: `The bench returned ${plural(fetchedTotal, 'report')}${coverage(res)}, but none were imported: ${describeExclusions(res.exclusions)}.`,
+      toast: 'Nothing imported — all reports matched an exclusion rule',
     }
   }
 
@@ -104,7 +121,10 @@ export function describeSyncResult(res = {}, { fullResync = false } = {}) {
   // ── Normal outcome ───────────────────────────────────────────────────────
   const parts = [`Synced ${plural(fetched, 'report')}${coverage(res)}: ${imported} new, ${updated} updated.`]
   if (excluded) {
-    parts.push(`${excluded} excluded — Job # doesn't start with "${prefix}"${excludedJobList(res) ? ` (${excludedJobList(res)})` : ''}.`)
+    parts.push(`${describeExclusions(res.exclusions)}.`)
+  }
+  if (res.excludedRowsRemoved) {
+    parts.push(`Removed ${plural(res.excludedRowsRemoved, 'previously imported record')} that now matches an exclusion rule.`)
   }
   const delReports = res.reportsDeleted || 0
   const delInsp = res.inspectionsDeleted || 0

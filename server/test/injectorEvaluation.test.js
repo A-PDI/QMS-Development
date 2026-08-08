@@ -21,11 +21,10 @@ const {
 } = require('../services/injectorEvaluation');
 
 /** Build a normalised injector record directly (no bench round-trip needed). */
-function injector({ serial = 'SN', job = 'QMS-1', part = 'PN-1', steps = [] }) {
+function injector({ serial = 'SN', part = 'PN-1', steps = [] }) {
   return {
     id: serial,
     serial_number: serial,
-    job_number: job,
     part_number: part,
     test_datetime: '2026-06-30T10:00:00Z',
     tests: steps.map((s) => ({
@@ -97,7 +96,6 @@ test('summary counts pass/fail and their percentages', () => {
   assert.strictEqual(s.failed, 5);
   assert.ok(Math.abs(s.passPct - 83.3333) < 0.001);
   assert.ok(Math.abs(s.failPct - 16.6667) < 0.001);
-  assert.deepStrictEqual(s.jobNumbers, ['QMS-1']);
   assert.deepStrictEqual(s.partNumbers, ['PN-1']);
 });
 

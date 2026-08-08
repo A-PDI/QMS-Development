@@ -69,7 +69,7 @@ function fmtDateMDY(isoDate) {
 
 /**
  * Shared right-aligned header block for every injector-grid report.
- * Customer and Shipment Evaluation reports intentionally carry the same three
+ * Custom and Shipment Evaluation reports intentionally carry the same three
  * identifying fields: Part, Vendor and Report Date.
  */
 function drawReportHeaderInfo(doc, {
@@ -1207,7 +1207,7 @@ function splitSerialLines(serial) {
  * test-point rows, in the same order.
  *
  * injectors: array of {
- *   part_number, serial_number, job_number, brand, injector_type,
+ *   part_number, serial_number, brand, injector_type,
  *   machine_name, machine_sn, test_datetime,
  *   tests: [ { name, status, errored, error_description,
  *              primary:{unit,spec,average,status,tank_name},
@@ -1638,7 +1638,7 @@ function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
     const titleX = LM + logoW + 24;
     const titleW = rightX - titleX - 14;
     doc.fontSize(16).font('Helvetica-Bold').fillColor(WHITE);
-    doc.text(opts.title || 'Injector Test Report', titleX, top + (bannerH - 16) / 2 - 2, { width: titleW, height: 20, align: 'left', lineBreak: false, ellipsis: true });
+    doc.text(opts.title || 'Custom Report', titleX, top + (bannerH - 16) / 2 - 2, { width: titleW, height: 20, align: 'left', lineBreak: false, ellipsis: true });
 
     tableTop = top + bannerH + 10;
   }

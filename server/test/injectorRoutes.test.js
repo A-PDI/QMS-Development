@@ -11,7 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const express = require('express');
 
-const { db, extractPdfText, resetInjectorData } = require('./helpers/testEnv');
+const { db, extractPdfText, resetInjectorData, injectorInspectionCount } = require('./helpers/testEnv');
 const { benchBatch } = require('./helpers/benchData');
 const { errorHandler } = require('../middleware/error');
 const injectorRoutes = require('../routes/injector-tests');
@@ -50,7 +50,7 @@ async function withUser(user, fn) {
 /** Import a small batch of injectors and return their ids. */
 async function seedInjectors(count = 4) {
   resetInjectorData();
-  carbonzapp.upsertReports(benchBatch(count, { job: 'QMS-500', prefix: 'RT' }));
+  carbonzapp.upsertReports(benchBatch(count, { job: 'Production', prefix: 'XT' }));
   return db.all('SELECT id FROM injector_test_reports ORDER BY slot_position', []).map((r) => r.id);
 }
 
@@ -70,6 +70,8 @@ test('qc_manager and inspector are refused by every injector route', async () =>
   const calls = [
     ['GET', '/api/injector-tests', null],
     ['POST', '/api/injector-tests/sync', {}],
+    ['POST', '/api/injector-tests/reports/preview', { injector_ids: ids }],
+    ['POST', '/api/injector-tests/reports/custom', { injector_ids: ids }],
     ['POST', '/api/injector-tests/reports/customer', { injector_ids: ids }],
     ['POST', '/api/injector-tests/reports/inspection', { injector_ids: ids }],
     ['POST', '/api/injector-tests/reports/shipment-evaluation', { injector_ids: ids, vendor_name: 'Acme' }],
@@ -129,7 +131,7 @@ test('the shipment evaluation is generated with the vendor name', async () => {
 test('report requests without a selection are rejected', async () => {
   await seedInjectors(2);
   await withUser(ADMIN, async (url) => {
-    const res = await fetch(`${url}/api/injector-tests/reports/customer`, {
+    const res = await fetch(`${url}/api/injector-tests/reports/custom`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ injector_ids: [] }),
@@ -142,7 +144,7 @@ test('report requests without a selection are rejected', async () => {
 test('unknown injector ids produce a not-found response, not a broken report', async () => {
   await seedInjectors(2);
   await withUser(ADMIN, async (url) => {
-    const res = await fetch(`${url}/api/injector-tests/reports/customer`, {
+    const res = await fetch(`${url}/api/injector-tests/reports/custom`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ injector_ids: ['does-not-exist'] }),
@@ -152,25 +154,78 @@ test('unknown injector ids produce a not-found response, not a broken report', a
   });
 });
 
-test('a customer report is streamed as a PDF with a filename header', async () => {
+test('report preview returns JSON and creates no PDF or inspection', async () => {
   const ids = await seedInjectors(3);
+  const before = injectorInspectionCount();
   await withUser(ADMIN, async (url) => {
-    const res = await fetch(`${url}/api/injector-tests/reports/customer`, {
+    const res = await fetch(`${url}/api/injector-tests/reports/preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ injector_ids: ids }),
     });
     assert.strictEqual(res.status, 200);
-    assert.match(res.headers.get('content-disposition'), /attachment; filename="InjectorReport_.*\.pdf"/);
+    assert.match(res.headers.get('content-type'), /^application\/json/);
+    assert.strictEqual(res.headers.get('content-disposition'), null);
+    const body = await res.json();
+    assert.strictEqual(body.preview.title, 'Custom Report Preview');
+    assert.strictEqual(body.preview.injectors.length, 3);
+    assert.ok(body.preview.rows.length > 0);
+  });
+  assert.strictEqual(injectorInspectionCount(), before);
+});
+
+test('a custom report is streamed as a PDF with a filename header', async () => {
+  const ids = await seedInjectors(3);
+  await withUser(ADMIN, async (url) => {
+    const res = await fetch(`${url}/api/injector-tests/reports/custom`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ injector_ids: ids }),
+    });
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers.get('content-disposition'), /attachment; filename="CustomReport_.*\.pdf"/);
     const buffer = Buffer.from(await res.arrayBuffer());
     assert.strictEqual(buffer.subarray(0, 4).toString(), '%PDF');
   });
 });
 
-test('a customer report carries the requested vendor in the shared header', async () => {
+test('the injector list is newest-first, contains no job field and supports all filters', async () => {
+  const ids = await seedInjectors(4);
+  db.run('UPDATE injector_test_reports SET test_datetime = ?, part_number = ?, serial_number = ?, overall_pass = ? WHERE id = ?',
+    ['2026-08-01T10:00:00Z', 'PN-A100', 'SER-A', 1, ids[0]]);
+  db.run('UPDATE injector_test_reports SET test_datetime = ?, part_number = ?, serial_number = ?, overall_pass = ? WHERE id = ?',
+    ['2026-08-04T10:00:00Z', 'PN-B200', 'SER-B', 0, ids[1]]);
+  db.run('UPDATE injector_test_reports SET test_datetime = ?, part_number = ?, serial_number = ?, overall_pass = ? WHERE id = ?',
+    ['2026-08-03T10:00:00Z', 'PN-A300', 'SER-C', 1, ids[2]]);
+  db.run('UPDATE injector_test_reports SET test_datetime = ?, part_number = ?, serial_number = ?, overall_pass = ? WHERE id = ?',
+    ['2026-08-02T10:00:00Z', 'PN-C400', 'SER-D', null, ids[3]]);
+
+  await withUser(ADMIN, async (url) => {
+    const all = await (await fetch(`${url}/api/injector-tests`)).json();
+    assert.deepStrictEqual(all.injectors.map((row) => row.serial_number), ['SER-B', 'SER-C', 'SER-D', 'SER-A']);
+    assert.ok(all.injectors.every((row) => !Object.hasOwn(row, 'job_number')));
+
+    const part = await (await fetch(`${url}/api/injector-tests?part_number=PN-A`)).json();
+    assert.deepStrictEqual(part.injectors.map((row) => row.serial_number), ['SER-C', 'SER-A']);
+
+    const serial = await (await fetch(`${url}/api/injector-tests?serial_number=SER-B`)).json();
+    assert.deepStrictEqual(serial.injectors.map((row) => row.serial_number), ['SER-B']);
+
+    const passed = await (await fetch(`${url}/api/injector-tests?status=pass`)).json();
+    assert.deepStrictEqual(passed.injectors.map((row) => row.serial_number), ['SER-C', 'SER-A']);
+
+    const failed = await (await fetch(`${url}/api/injector-tests?status=fail`)).json();
+    assert.deepStrictEqual(failed.injectors.map((row) => row.serial_number), ['SER-B']);
+
+    const unscored = await (await fetch(`${url}/api/injector-tests?status=unscored`)).json();
+    assert.deepStrictEqual(unscored.injectors.map((row) => row.serial_number), ['SER-D']);
+  });
+});
+
+test('a custom report carries the requested vendor in the shared header', async () => {
   const ids = await seedInjectors(3);
   await withUser(ADMIN, async (url) => {
-    const res = await fetch(`${url}/api/injector-tests/reports/customer`, {
+    const res = await fetch(`${url}/api/injector-tests/reports/custom`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ injector_ids: ids, vendor_name: 'Acme Diesel Supply' }),
