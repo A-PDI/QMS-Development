@@ -137,7 +137,7 @@ async function buildCustomerReport(injectors = [], opts = {}) {
   const buffer = await generateInjectorComparisonPdf(list, {
     ...opts,
     vendorName,
-    title: opts.title || 'Custom Report',
+    title: 'Injector Test Report',
   });
   const part = sanitiseFilePart(list[0] && list[0].part_number, 'Injectors');
   return { buffer, filename: `CustomReport_${part}_${list.length}.pdf` };

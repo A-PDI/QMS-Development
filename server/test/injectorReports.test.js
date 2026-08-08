@@ -125,7 +125,7 @@ test('report part numbers remove all non-numeric characters and deduplicate afte
   );
 });
 
-test('custom and shipment reports share Part, Vendor and Report Date header information', async () => {
+test('custom report uses the Injector Test Report title and shares shipment header information', async () => {
   resetInjectorData();
   await syncWith([
     benchReport({ id: 'header-1', slot: 0, serial: 'HDR001', part: 'PN-0445-120067PX' }),
@@ -146,6 +146,10 @@ test('custom and shipment reports share Part, Vendor and Report Date header info
     assert.ok(header.includes('Vendor: Acme Diesel Supply'));
     assert.ok(header.includes('Report Date: 08/07/2026'));
   }
+  assert.ok(customerHeader.includes('Injector Test Report'));
+  assert.ok(!customerHeader.includes('Custom Report'), 'the workflow name is not used as the PDF title');
+  assert.ok(shipmentHeader.includes('Shipment Evaluation Report'), 'shipment report keeps its own title');
+  assert.ok(!shipmentHeader.includes('Injector Test Report'), 'custom title does not leak into shipment report');
   assert.ok(!customerHeader.includes('Injector:'), 'the former customer-only header field is gone');
   assert.ok(!customerHeader.includes('QMS-724-3'), 'job number is not used in the shared header');
 });
@@ -327,6 +331,7 @@ test('a large batch paginates with repeated headers and no dropped injectors', a
   const serialsSeen = [];
   pages.forEach((page, idx) => {
     const text = page.join('\n');
+    assert.ok(text.includes('Injector Test Report'), `page ${idx + 1} repeats the report title`);
     assert.ok(text.includes('TEST STEP'), `page ${idx + 1} repeats the column headers`);
     assert.ok(text.includes('Peak Torque'), `page ${idx + 1} repeats the test-point rows`);
     assert.ok(/Page \d+ of \d+/.test(text), `page ${idx + 1} is numbered`);
