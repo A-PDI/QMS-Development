@@ -4,8 +4,8 @@
  * Pure functions with no React/DOM dependencies so the selection rules can be
  * unit-tested and reused (the page only wires them to state).
  *
- * Selection is ORDER-AWARE: `selectedIds` is an array whose order defines the
- * injector column order (1, 2, 3 …) in every generated report.
+ * The active selection is always presented in natural ascending serial-number
+ * order, regardless of the order in which injectors were added or removed.
  */
 
 /** Newest test first, with stable identifiers breaking timestamp ties. */
@@ -23,32 +23,70 @@ export function sortByTestDate(injectors = []) {
   })
 }
 
-/** Independent Part Number, Serial Number and result-status filters. */
+function resultStatus(injector) {
+  const stored = String(injector?.result_status ?? '').trim().toLowerCase()
+  if (stored === 'pass' || stored === 'passed') return 'pass'
+  if (stored === 'fail' || stored === 'failed') return 'fail'
+  if (stored === 'dnf') return 'dnf'
+  if (injector?.overall_pass === 1) return 'pass'
+  if (injector?.overall_pass === 0) return 'fail'
+  return 'unknown'
+}
+
+function testDate(value) {
+  const raw = String(value ?? '').trim()
+  const isoDate = raw.match(/^(\d{4}-\d{2}-\d{2})/)
+  if (isoDate) return isoDate[1]
+  const parsed = Date.parse(raw)
+  return Number.isNaN(parsed) ? '' : new Date(parsed).toISOString().slice(0, 10)
+}
+
+/** Independent Part Number, Serial Number, date-range and result filters. */
 export function filterInjectors(injectors = [], {
   partNumber = '',
   serialNumber = '',
   status = '',
+  dateFrom = '',
+  dateTo = '',
 } = {}) {
   const part = String(partNumber ?? '').trim().toLowerCase()
   const serial = String(serialNumber ?? '').trim().toLowerCase()
   const wantedStatus = String(status ?? '').trim().toLowerCase()
+  const from = String(dateFrom ?? '').trim()
+  const to = String(dateTo ?? '').trim()
 
   return sortByTestDate(injectors).filter((injector) => {
     if (part && !String(injector?.part_number ?? '').toLowerCase().includes(part)) return false
     if (serial && !String(injector?.serial_number ?? '').toLowerCase().includes(serial)) return false
-    if (wantedStatus === 'pass' && injector?.overall_pass !== 1) return false
-    if (wantedStatus === 'fail' && injector?.overall_pass !== 0) return false
-    if (wantedStatus === 'unscored' && injector?.overall_pass != null) return false
+    const date = testDate(injector?.test_datetime)
+    if (from && (!date || date < from)) return false
+    if (to && (!date || date > to)) return false
+    const actualStatus = resultStatus(injector)
+    if ((wantedStatus === 'pass' || wantedStatus === 'passed') && actualStatus !== 'pass') return false
+    if ((wantedStatus === 'fail' || wantedStatus === 'failed') && actualStatus !== 'fail') return false
+    if (wantedStatus === 'dnf' && actualStatus !== 'dnf') return false
+    if ((wantedStatus === 'unscored' || wantedStatus === 'unknown') && actualStatus !== 'unknown') return false
     return true
   })
 }
 
-/** Toggle one injector, appending to the end so pick order is preserved. */
+/** Natural serial ordering (SN-2 before SN-10), with blank serials last. */
+export function sortBySerialNumber(injectors = []) {
+  return [...injectors].sort((a, b) => {
+    const as = String(a?.serial_number ?? '').trim()
+    const bs = String(b?.serial_number ?? '').trim()
+    if (!as && bs) return 1
+    if (as && !bs) return -1
+    return as.localeCompare(bs, undefined, { numeric: true, sensitivity: 'base' })
+  })
+}
+
+/** Toggle one injector. Display/report order is applied by orderedSelection. */
 export function toggleSelected(selectedIds = [], id) {
   return selectedIds.includes(id) ? selectedIds.filter((x) => x !== id) : [...selectedIds, id]
 }
 
-/** Add every given injector that isn't selected yet (keeps existing order). */
+/** Add every given injector that isn't selected yet. */
 export function addToSelection(selectedIds = [], injectors = []) {
   const have = new Set(selectedIds)
   return [...selectedIds, ...injectors.map((i) => i.id).filter((id) => !have.has(id))]
@@ -74,21 +112,10 @@ export function toggleAll(selectedIds = [], injectors = []) {
     : addToSelection(selectedIds, injectors)
 }
 
-/** The selected injector records, in selection order, limited to `available`. */
+/** Selected injector records, dynamically sorted by serial number. */
 export function orderedSelection(selectedIds = [], available = []) {
   const byId = new Map(available.map((i) => [i.id, i]))
-  return selectedIds.map((id) => byId.get(id)).filter(Boolean)
-}
-
-/** Move a selected injector up (-1) or down (+1) in the report column order. */
-export function moveSelected(selectedIds = [], id, direction) {
-  const idx = selectedIds.indexOf(id)
-  if (idx < 0) return selectedIds
-  const swap = idx + direction
-  if (swap < 0 || swap >= selectedIds.length) return selectedIds
-  const next = [...selectedIds]
-  ;[next[idx], next[swap]] = [next[swap], next[idx]]
-  return next
+  return sortBySerialNumber(selectedIds.map((id) => byId.get(id)).filter(Boolean))
 }
 
 /** True when an injector row carries usable test-bench results. */

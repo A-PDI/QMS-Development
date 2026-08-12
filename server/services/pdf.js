@@ -15,6 +15,7 @@ const {
 } = require('./injectorSteps');
 const { MIN_INJECTOR_COL_W, planInjectorPages } = require('./reportPagination');
 const { evaluateShipment } = require('./injectorEvaluation');
+const { DNF, FAIL, PASS, injectorOutcome, measurementOutcome } = require('./injectorResult');
 const { drawHorizontalBarChart, drawStatCards } = require('./pdfCharts');
 
 const LOGO_PATH = path.join(__dirname, '../assets/pdi-logo.png');
@@ -1249,7 +1250,7 @@ function generateInjectorComparisonPdf(injectors = [], opts = {}) {
  *   rowOrder  — ordered array of row keys
  *   rowMap    — key -> { label, spec, unit }
  *   injValues — per-injector Map: key -> { value, status, error }
- *   results   — per-injector { overall: 'PASS'|'FAIL'|'—' }
+ *   results   — per-injector { overall: 'PASS'|'FAIL'|'DNF'|'—' }
  */
 function buildInjectorComparisonModel(injectors = [], sharedRows = null) {
   const list = Array.isArray(injectors) ? injectors : [];
@@ -1321,7 +1322,7 @@ function buildInjectorComparisonModel(injectors = [], sharedRows = null) {
       m.set(rowKey(t, 1), {
         value: primaryLines.join(' / '),
         lines: primaryLines,
-        status: err.errored ? 'fail' : t.primary.status,
+        status: measurementOutcome(t, t.primary),
         error: err.errored,
         error_description: err.description,
       });
@@ -1330,7 +1331,7 @@ function buildInjectorComparisonModel(injectors = [], sharedRows = null) {
         m.set(rowKey(t, 2), {
           value: secondaryLines.join(' / '),
           lines: secondaryLines,
-          status: err.errored ? 'fail' : t.secondary.status,
+          status: measurementOutcome(t, t.secondary),
           error: err.errored,
           error_description: err.description,
         });
@@ -1353,7 +1354,7 @@ function buildInjectorComparisonModel(injectors = [], sharedRows = null) {
         m.set(key, {
           value: formatErrorValue(err.description),
           lines: [formatErrorValue(err.description)],
-          status: 'fail',
+          status: DNF,
           error: true,
           error_description: err.description,
         });
@@ -1362,13 +1363,11 @@ function buildInjectorComparisonModel(injectors = [], sharedRows = null) {
     }
   });
 
-  // Overall per-injector result: any errored or failing scored step → FAIL.
+  // Overall per-injector result comes from the same classifier used by sync,
+  // selection filters and shipment analytics.
   const results = list.map((inj) => {
-    const tests = (inj.tests || []).filter((t) => !isFlushStep(t));
-    const scored = tests.filter((t) => t.primary && t.status !== 'skip');
-    const hasError = (inj.tests || []).some((t) => stepErrorInfo(t).errored);
-    const failed = scored.filter((t) => t.status === 'fail').length;
-    const overall = (hasError || failed > 0) ? 'FAIL' : (scored.length === 0 ? '—' : 'PASS');
+    const outcome = injectorOutcome(inj);
+    const overall = outcome === PASS ? 'PASS' : (outcome === FAIL ? 'FAIL' : (outcome === DNF ? 'DNF' : '—'));
     return { overall };
   });
 
@@ -1735,13 +1734,14 @@ function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
       const isMessage = lines.some((line) => isErrorValue(line) || line === NO_TEST_LABEL);
       if (isMessage) {
         // "No Test" over the condition, or the condition on its own.
-        drawErrorValue(doc, lines, cx, y, injColW, rowH, valFont);
+        drawErrorValue(doc, lines, cx, y, injColW, rowH, valFont, cell && cell.status === DNF ? AMBER : RED);
       } else {
         const val = lines[0] || '';
         let color = DGRAY;
         if (cell) {
           if (cell.status === 'pass') color = GREEN;
           else if (cell.status === 'fail') color = RED;
+          else if (cell.status === DNF) color = AMBER;
         }
         doc.fontSize(valFont).font(cell && (cell.status === 'pass' || cell.status === 'fail') ? 'Helvetica-Bold' : 'Helvetica').fillColor(color);
         doc.text(val || '—', cx + 2, y + (rowH - valFont) / 2 - 1, { width: injColW - 4, align: 'center', lineBreak: false, ellipsis: true });
@@ -1764,7 +1764,7 @@ function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
     doc.strokeColor(BORDER).lineWidth(0.3).moveTo(rx, y).lineTo(rx, y + resultRowH).stroke();
     const overall = (model.results[idx] && model.results[idx].overall) || '—';
     doc.fontSize(injColW < 58 ? 8 : 9).font('Helvetica-Bold')
-       .fillColor(overall === 'FAIL' ? RED : (overall === 'PASS' ? GREEN : DGRAY));
+       .fillColor(overall === 'FAIL' ? RED : (overall === 'PASS' ? GREEN : (overall === 'DNF' ? AMBER : DGRAY)));
     doc.text(overall, rx + 2, y + (resultRowH - 9) / 2, { width: injColW - 4, align: 'center', lineBreak: false });
     rx += injColW;
   });
@@ -1785,7 +1785,7 @@ function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
       const pageNote = multiPage ? `Page ${displayPage} of ${displayPageCount} · ` : '';
       doc.fontSize(6.5).font('Helvetica').fillColor(LGRAY);
       doc.text(
-        `${pageNote}Generated ${new Date().toISOString().slice(0, 19).replace('T', ' ')} · Flow value = average reading · Green = Pass · Red = Fail`,
+        `${pageNote}Generated ${new Date().toISOString().slice(0, 19).replace('T', ' ')} · Flow value = average reading · Green = Pass · Red = Fail · Orange = DNF`,
         LM, footY, { width: usableW, align: 'right', lineBreak: false, height: 8 }
       );
     }
@@ -1802,7 +1802,7 @@ function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
  * is shrunk, and split onto a second line, until it fits the column rather than
  * overflowing into its neighbours.
  */
-function drawErrorValue(doc, value, x, y, w, h, maxFont) {
+function drawErrorValue(doc, value, x, y, w, h, maxFont, color = RED) {
   const given = Array.isArray(value) ? value.filter(Boolean) : [String(value || '')];
   const availW = Math.max(8, w - 4);
   const fits = (size, s) => {
@@ -1817,7 +1817,7 @@ function drawErrorValue(doc, value, x, y, w, h, maxFont) {
     const text = lines[0].trim();
     const oneLineFont = Math.max(REPORT_TABLE_FONT_MIN, Math.min(maxFont, h - 6));
     if (fits(oneLineFont, text)) {
-      doc.fontSize(oneLineFont).font('Helvetica-Bold').fillColor(RED);
+      doc.fontSize(oneLineFont).font('Helvetica-Bold').fillColor(color);
       doc.text(text, x + 2, y + (h - oneLineFont) / 2 - 1, {
         width: availW, align: 'center', lineBreak: false,
       });
@@ -1843,7 +1843,7 @@ function drawErrorValue(doc, value, x, y, w, h, maxFont) {
   }
   const lineH = font + 1.2;
   const top = y + (h - lineH * lines.length) / 2;
-  doc.fontSize(font).font('Helvetica-Bold').fillColor(RED);
+  doc.fontSize(font).font('Helvetica-Bold').fillColor(color);
   lines.forEach((line, i) => {
     doc.text(line, x + 2, top + i * lineH, {
       width: availW, align: 'center', lineBreak: false, ellipsis: true,
@@ -1856,7 +1856,7 @@ function drawErrorValue(doc, value, x, y, w, h, maxFont) {
 // ─────────────────────────────────────────────────────────────────────────────
 /**
  * Multi-page landscape report evaluating a selected group of injectors:
- *   Page 1  — test summary: pass/fail counts and percentages, failure counts by
+ *   Page 1  — pass/fail/DNF summary, actual failure counts by
  *             test point, a most-common-failure chart and a passing-injector
  *             consistency chart.
  *   Page 2+ — the full test detail grid (same layout and pagination rules as
@@ -1950,12 +1950,11 @@ function drawShipmentSummaryPage(doc, evaluation, opts = {}) {
     x: LM, y, width: usableW, height: 58,
     cards: [
       { label: 'Total Tested', value: summary.total, color: NAVY },
-      { label: 'Passed', value: summary.passed, sub: pct(summary.passPct), color: GREEN },
-      { label: 'Failed', value: summary.failed, sub: pct(summary.failPct), color: RED },
-      { label: 'Pass Percentage', value: pct(summary.passPct), sub: `${summary.passed} of ${summary.total}`, color: GREEN },
-      { label: 'Fail Percentage', value: pct(summary.failPct), sub: `${summary.failed} of ${summary.total}`, color: RED },
+      { label: 'Total Passed', value: summary.passed, sub: `${pct(summary.passPct)} · Yield`, color: GREEN },
+      { label: 'Total Failed', value: summary.failed, sub: `${pct(summary.failPct)} · Component`, color: RED },
+      { label: 'Total DNF', value: summary.dnf, sub: `${pct(summary.dnfPct)} · Bench interrupted`, color: AMBER },
       ...(summary.untested
-        ? [{ label: 'No Result', value: summary.untested, sub: 'not scored', color: AMBER }]
+        ? [{ label: 'No Result', value: summary.untested, sub: 'not scored', color: DGRAY }]
         : []),
     ],
   });
@@ -1969,10 +1968,10 @@ function drawShipmentSummaryPage(doc, evaluation, opts = {}) {
 
   drawHorizontalBarChart(doc, {
     x: LM, y, width: usableW, height: failureH,
-    title: 'Failure Count by Test Point',
-    note: 'Injectors that failed each test point, ranked most to least common. An injector can fail more than one test point, so these counts may total more than the number of failed injectors.',
+    title: 'Actual Component Failures by Test Point',
+    note: 'DNF bench interruptions are excluded. Delivery and Return are counted independently. An injector can fail more than one test point.',
     rows: failureRows.slice(0, 8).map((f) => ({
-      label: `${f.label} (${f.code})`,
+      label: `Failed: ${f.label} (${f.code})`,
       value: f.count,
       valueText: `${f.count} failed  ·  ${f.pct.toFixed(1)}% of batch`,
       color: RED,
@@ -1987,7 +1986,7 @@ function drawShipmentSummaryPage(doc, evaluation, opts = {}) {
   const gap = 10;
   const halfW = (usableW - gap) / 2;
   const passingCount = summary.passed;
-  const passingNote = `Passing injectors only (${passingCount} of ${summary.total}); failed injectors are excluded.`;
+  const passingNote = `Passing injectors only (${passingCount} of ${summary.total}); Failed and DNF injectors are excluded.`;
 
   drawHorizontalBarChart(doc, {
     x: LM, y, width: halfW, height: deviationH,

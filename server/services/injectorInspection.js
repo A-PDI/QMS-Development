@@ -26,6 +26,7 @@
 const crypto = require('crypto');
 const db = require('../db/adapter');
 const { isFlushStep, stepLabel, stepResultValue, stepErrorInfo } = require('./injectorSteps');
+const { measurementOutcome } = require('./injectorResult');
 
 const FUEL_INJECTOR_FORM = 'PDI-IQI-012';
 
@@ -67,7 +68,8 @@ function buildDimensionalFromTests(tests) {
     const spec = p.spec || '';
     // Dimensional status uses the shared P/F/A code so it renders in the app
     // (PFNToggle) and PDF (statusToGlyph) identically. '' when not scored.
-    const statusVal = t.status === 'fail' ? 'F' : (t.status === 'pass' ? 'P' : '');
+    const primaryOutcome = measurementOutcome(t, p);
+    const statusVal = primaryOutcome === 'fail' ? 'F' : (primaryOutcome === 'pass' ? 'P' : '');
     const err = stepErrorInfo(t);
     // ALWAYS the mapped test-step name — a bench error never renames a step.
     const primaryLabel = stepLabel(t, 'primary', p.tank_name) || `Step ${id}`;
@@ -93,7 +95,8 @@ function buildDimensionalFromTests(tests) {
     if (t.secondary) {
       id += 1;
       const s = t.secondary;
-      const sStatusVal = s.status === 'fail' ? 'F' : (s.status === 'pass' ? 'P' : '');
+      const secondaryOutcome = measurementOutcome(t, s);
+      const sStatusVal = secondaryOutcome === 'fail' ? 'F' : (secondaryOutcome === 'pass' ? 'P' : '');
       // The secondary tank either has its own name ("Inductance") or reuses the
       // step name with a tank suffix ("Peak HP [R]"). Only when neither applies
       // do we disambiguate with the raw tank name.

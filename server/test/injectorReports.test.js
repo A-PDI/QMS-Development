@@ -101,7 +101,10 @@ test('report preview uses the comparison model without creating a PDF or inspect
   resetInjectorData();
   await syncWith([
     benchReport({ id: 'preview-1', slot: 0, serial: 'PV001' }),
-    benchReport({ id: 'preview-1', slot: 1, serial: 'PV002', errorOn: 'IVM06' }),
+    benchReport({
+      id: 'preview-1', slot: 1, serial: 'PV002', errorOn: 'IVM06',
+      flow: { IVM06: null, IVM06_RETURN: null },
+    }),
   ]);
   const selected = loadSelectedInjectors(storedInjectors().map((row) => row.id));
   const before = injectorInspectionCount();
@@ -109,8 +112,10 @@ test('report preview uses the comparison model without creating a PDF or inspect
 
   assert.strictEqual(preview.title, 'Custom Report Preview');
   assert.deepStrictEqual(preview.injectors.map((injector) => injector.serialNumber), ['PV001', 'PV002']);
-  assert.ok(preview.rows.some((row) => row.label === 'Peak Torque'));
-  assert.ok(preview.rows.some((row) => row.values.some((cell) => cell.error)));
+  assert.ok(preview.rows.some((row) => row.label === 'Peak Torque - Delivery'));
+  assert.ok(preview.rows.some((row) => row.label === 'Peak Torque - Return'));
+  assert.ok(preview.rows.some((row) => row.values.some((cell) => cell.status === 'dnf')));
+  assert.deepStrictEqual(preview.injectors.map((injector) => injector.result), ['PASS', 'DNF']);
   assert.ok(preview.injectors.every((injector) => !Object.hasOwn(injector, 'jobNumber')));
   assert.strictEqual(injectorInspectionCount(), before);
 });
@@ -208,18 +213,14 @@ test('selecting a set of injector rows reports exactly that set', async () => {
   for (const inj of otherRows) assert.ok(!text.includes(inj.serial_number), `${inj.serial_number} should not appear`);
 });
 
-test('report column order follows the selection order', async () => {
+test('report column order is always ascending by serial number', async () => {
   resetInjectorData();
   await syncWith(benchBatch(4));
   const rows = storedInjectors();
   const order = [rows[3].id, rows[0].id, rows[2].id];
 
   const selected = loadSelectedInjectors(order);
-  assert.deepStrictEqual(
-    selected.map((r) => r.id),
-    order,
-    'selection order is preserved'
-  );
+  assert.deepStrictEqual(selected.map((r) => r.serial_number), ['SN001', 'SN003', 'SN004']);
 });
 
 // ── Scenario 9: Generate Both ────────────────────────────────────────────────
@@ -292,7 +293,8 @@ test('a flagged step reports its measured value, not the error message', async (
   const rows = sectionData.__items[0].dimensional;
   const values = rows.map((a) => a.actual1);
 
-  assert.ok(dimensional.includes('Peak Torque'), `expected Peak Torque in ${JSON.stringify(dimensional)}`);
+  assert.ok(dimensional.includes('Peak Torque - Delivery'), `expected Peak Torque Delivery in ${JSON.stringify(dimensional)}`);
+  assert.ok(dimensional.includes('Peak Torque - Return'), `expected Peak Torque Return in ${JSON.stringify(dimensional)}`);
   assert.ok(!dimensional.some((m) => /error/i.test(m)), 'no step name carries error text');
   assert.ok(values.includes('291'), `expected the measured value, got ${JSON.stringify(values)}`);
   assert.ok(!values.some((v) => /excess return|error/i.test(String(v))), 'no message in a value cell');
@@ -300,7 +302,7 @@ test('a flagged step reports its measured value, not the error message', async (
   // The step still FAILS and still records why.
   const flagged = rows.find((r) => String(r.actual1) === '291');
   assert.strictEqual(flagged.status, 'F');
-  assert.strictEqual(flagged.__error, 'Excess Return', 'the condition is still recorded on the row');
+  assert.strictEqual(flagged.__error, 'Out of Range', 'the bench condition is still recorded on the row');
   assert.strictEqual(inspection.disposition, 'FAIL');
 });
 
@@ -313,7 +315,7 @@ test('a flagged step with no reading at all still shows the condition', async ()
   const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [result.inspections[0].inspection_id]);
   const values = JSON.parse(inspection.section_data).__items[0].dimensional.map((a) => a.actual1);
 
-  assert.ok(values.includes('Excess Return'), `expected the fallback text, got ${JSON.stringify(values)}`);
+  assert.ok(values.includes('Error: Out of Range'), `expected the fallback text, got ${JSON.stringify(values)}`);
 });
 
 // ── Scenario 10: large batches paginate ──────────────────────────────────────
@@ -440,10 +442,15 @@ test('the shipment evaluation report has a summary page plus detail pages', asyn
   resetInjectorData();
   await syncWith(benchBatch(30, {
     perReport: 6,
-    // 4 injectors fail IVM01, 2 error on IVM06.
+    // 4 prior component failures, one DNF interruption, and independent Peak
+    // Torque Delivery/Return failures.
     customise: (i) => (i < 4
       ? { flow: { IVM01: 9999 } }
-      : (i < 6 ? { errorOn: 'IVM06' } : {})),
+      : (i === 4
+          ? { errorOn: 'IVM06' }
+          : (i === 5
+              ? { errorOn: 'IVM06', flow: { IVM06: 291 } }
+              : (i === 6 ? { errorOn: 'IVM06', flow: { IVM06_RETURN: 90 } } : {})))),
   }));
   const selected = loadSelectedInjectors(storedInjectors().map((r) => r.id));
 
@@ -455,6 +462,12 @@ test('the shipment evaluation report has a summary page plus detail pages', asyn
   assert.match(filename, /^ShipmentEvaluation_.*Acme/);
   assert.ok(summary.includes('Shipment Evaluation Report'));
   assert.ok(summary.includes('TOTAL TESTED'));
+  assert.ok(summary.includes('TOTAL PASSED'));
+  assert.ok(summary.includes('TOTAL FAILED'));
+  assert.ok(summary.includes('TOTAL DNF'));
+  assert.ok(summary.includes('23'), '23 injectors passed');
+  assert.ok(summary.includes('6'), '6 injectors had actual component failures');
+  assert.ok(summary.includes('1'), 'one injector was interrupted by the bench');
 
   // Header identifies the shipment by part number, vendor and report date —
   // there is no job number and no identification strip below the banner.
@@ -465,7 +478,7 @@ test('the shipment evaluation report has a summary page plus detail pages', asyn
   assert.ok(!summary.includes('INJECTORS TESTED'), 'the identification strip is gone');
 
   // One failure representation, and the two deviation charts.
-  assert.ok(summary.includes('Failure Count by Test Point'));
+  assert.ok(summary.includes('Actual Component Failures by Test Point'));
   assert.ok(!summary.includes('Most Common Failure Points'), 'the duplicate failure panel is gone');
   assert.ok(summary.includes('Average Deviation'));
   assert.ok(summary.includes('Maximum Deviation'));
@@ -474,12 +487,14 @@ test('the shipment evaluation report has a summary page plus detail pages', asyn
   assert.ok(!/n=\d/.test(summary), 'the sample count is no longer shown on the deviation rows');
   // Failure analysis uses normalised step names, never raw API error text.
   assert.ok(summary.includes('Peak HP'), 'failing test point named by its display name');
-  assert.ok(summary.includes('Peak Torque'), 'errored test point named by its display name');
+  assert.ok(summary.includes('Failed: Peak Torque - Delivery'), 'Delivery failure is attributed independently');
+  assert.ok(summary.includes('Failed: Peak Torque - Return'), 'Return failure is attributed independently');
   assert.ok(!/HP ERROR|#1000/i.test(summary), 'raw bench error text must not appear on the summary');
 
   const detail = pages.slice(1).map((p) => p.join('\n')).join('\n');
   assert.ok(detail.includes('TEST STEP'), 'detail pages use the comparison grid');
   assert.ok(detail.includes('FAIL'), 'flagged injectors still read FAIL');
+  assert.ok(detail.includes('DNF'), 'bench-interrupted injectors read DNF separately');
   assert.ok(!/Excess Return|Error:/.test(detail),
     'the detail grid shows measured values, not error messages');
 });
@@ -494,7 +509,7 @@ test('a flagged step reading zero shows "No Test" over the condition', async () 
   const text = extractPdfText(buffer);
 
   assert.ok(text.includes('No Test'), 'the zero reading is replaced by "No Test"');
-  assert.ok(text.includes('Excess Return'), 'the condition is named underneath');
+  assert.ok(text.includes('Error: Out of Range'), 'the bench condition is named underneath');
   assert.ok(!text.includes('0.00'), 'the bare zero is not shown');
   assert.ok(text.includes('FAIL'), 'the injector still fails');
 });

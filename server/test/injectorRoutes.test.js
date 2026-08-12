@@ -191,14 +191,14 @@ test('a custom report is streamed as a PDF with a filename header', async () => 
 
 test('the injector list is newest-first, contains no job field and supports all filters', async () => {
   const ids = await seedInjectors(4);
-  db.run('UPDATE injector_test_reports SET test_datetime = ?, part_number = ?, serial_number = ?, overall_pass = ? WHERE id = ?',
-    ['2026-08-01T10:00:00Z', 'PN-A100', 'SER-A', 1, ids[0]]);
-  db.run('UPDATE injector_test_reports SET test_datetime = ?, part_number = ?, serial_number = ?, overall_pass = ? WHERE id = ?',
-    ['2026-08-04T10:00:00Z', 'PN-B200', 'SER-B', 0, ids[1]]);
-  db.run('UPDATE injector_test_reports SET test_datetime = ?, part_number = ?, serial_number = ?, overall_pass = ? WHERE id = ?',
-    ['2026-08-03T10:00:00Z', 'PN-A300', 'SER-C', 1, ids[2]]);
-  db.run('UPDATE injector_test_reports SET test_datetime = ?, part_number = ?, serial_number = ?, overall_pass = ? WHERE id = ?',
-    ['2026-08-02T10:00:00Z', 'PN-C400', 'SER-D', null, ids[3]]);
+  db.run('UPDATE injector_test_reports SET test_datetime = ?, part_number = ?, serial_number = ?, overall_pass = ?, result_status = ? WHERE id = ?',
+    ['2026-08-01T10:00:00Z', 'PN-A100', 'SER-A', 1, 'pass', ids[0]]);
+  db.run('UPDATE injector_test_reports SET test_datetime = ?, part_number = ?, serial_number = ?, overall_pass = ?, result_status = ? WHERE id = ?',
+    ['2026-08-04T10:00:00Z', 'PN-B200', 'SER-B', 0, 'fail', ids[1]]);
+  db.run('UPDATE injector_test_reports SET test_datetime = ?, part_number = ?, serial_number = ?, overall_pass = ?, result_status = ? WHERE id = ?',
+    ['2026-08-03T10:00:00Z', 'PN-A300', 'SER-C', 1, 'pass', ids[2]]);
+  db.run('UPDATE injector_test_reports SET test_datetime = ?, part_number = ?, serial_number = ?, overall_pass = ?, result_status = ? WHERE id = ?',
+    ['2026-08-02T10:00:00Z', 'PN-C400', 'SER-D', null, 'dnf', ids[3]]);
 
   await withUser(ADMIN, async (url) => {
     const all = await (await fetch(`${url}/api/injector-tests`)).json();
@@ -217,8 +217,11 @@ test('the injector list is newest-first, contains no job field and supports all 
     const failed = await (await fetch(`${url}/api/injector-tests?status=fail`)).json();
     assert.deepStrictEqual(failed.injectors.map((row) => row.serial_number), ['SER-B']);
 
-    const unscored = await (await fetch(`${url}/api/injector-tests?status=unscored`)).json();
-    assert.deepStrictEqual(unscored.injectors.map((row) => row.serial_number), ['SER-D']);
+    const dnf = await (await fetch(`${url}/api/injector-tests?status=dnf`)).json();
+    assert.deepStrictEqual(dnf.injectors.map((row) => row.serial_number), ['SER-D']);
+
+    const dateRange = await (await fetch(`${url}/api/injector-tests?date_from=2026-08-02&date_to=2026-08-03`)).json();
+    assert.deepStrictEqual(dateRange.injectors.map((row) => row.serial_number), ['SER-C', 'SER-D']);
   });
 });
 

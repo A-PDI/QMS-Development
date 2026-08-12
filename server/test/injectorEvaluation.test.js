@@ -2,10 +2,8 @@
 /**
  * Shipment-evaluation analytics.
  *
- * Covers requirement scenarios 11–14: failure counts by test point are correct;
- * only fully passing injectors take part in the consistency calculation;
- * missing/errored IVM measurements are handled safely; and a zero mean never
- * causes an error.
+ * Covers DNF classification, distinct Peak Torque Delivery/Return failures,
+ * summary counters, and passing-injector consistency calculations.
  */
 
 const test = require('node:test');
@@ -36,13 +34,23 @@ function injector({ serial = 'SN', part = 'PN-1', steps = [] }) {
       error_raw: s.errored ? (s.errorRaw || 'HP ERROR (out of range) #1000') : '',
       internal: /^FL/i.test(s.name),
       primary: s.noTank ? null : {
-        tank_name: '',
+        tank_name: s.tankName || (String(s.name).includes('06') ? '[D]' : ''),
         unit: 'mm3/STRK',
         spec: '10.0 +/- 2.0',
-        average: s.errored ? 'Error: Out of Range' : (s.value === undefined ? '' : String(s.value)),
-        status: s.errored ? 'fail' : (s.status || 'pass'),
+        min_green: s.min === undefined ? 0 : s.min,
+        max_green: s.max === undefined ? 100 : s.max,
+        average: s.value === undefined ? (s.errored ? 'Error: Out of Range' : '') : String(s.value),
+        status: s.status || 'pass',
       },
-      secondary: null,
+      secondary: s.returnValue === undefined ? null : {
+        tank_name: '[R]',
+        unit: 'mm3/STRK',
+        spec: '0 - 80',
+        min_green: s.returnMin === undefined ? 0 : s.returnMin,
+        max_green: s.returnMax === undefined ? 80 : s.returnMax,
+        average: String(s.returnValue),
+        status: s.returnStatus || 'pass',
+      },
     })),
   };
 }
@@ -54,20 +62,30 @@ const flowSteps = (values, extra = {}) => Object.entries(values).map(([code, val
 }));
 
 // ── Outcome + percentages ────────────────────────────────────────────────────
-test('an injector with any failing or errored step is a failure', () => {
+test('a bench interruption is DNF unless a component failure was demonstrated', () => {
   const pass = injector({ serial: 'A', steps: flowSteps({ IVM01: 10, IVM02: 20 }) });
   const failed = injector({ serial: 'B', steps: [
     { name: 'iVM.01', value: 10 },
     { name: 'iVM.02', value: 99, status: 'fail' },
   ] });
-  const errored = injector({ serial: 'C', steps: [
+  const dnf = injector({ serial: 'C', steps: [
     { name: 'iVM.01', value: 10 },
     { name: 'iVM.06', errored: true },
+  ] });
+  const priorFailure = injector({ serial: 'D', steps: [
+    { name: 'iVM.01', value: 999, status: 'fail' },
+    { name: 'iVM.06', errored: true },
+  ] });
+  const errorPointFailure = injector({ serial: 'E', steps: [
+    { name: 'iVM.01', value: 10 },
+    { name: 'iVM.06', value: 120, min: 0, max: 80, errored: true },
   ] });
 
   assert.strictEqual(injectorOutcome(pass), 'pass');
   assert.strictEqual(injectorOutcome(failed), 'fail');
-  assert.strictEqual(injectorOutcome(errored), 'fail');
+  assert.strictEqual(injectorOutcome(dnf), 'dnf');
+  assert.strictEqual(injectorOutcome(priorFailure), 'fail');
+  assert.strictEqual(injectorOutcome(errorPointFailure), 'fail');
 });
 
 test('percentages never divide by zero', () => {
@@ -81,21 +99,24 @@ test('percentages never divide by zero', () => {
   assert.strictEqual(empty.failPct, 0);
 });
 
-test('summary counts pass/fail and their percentages', () => {
+test('summary counts pass, actual failures, and DNF independently', () => {
   const list = [
     ...Array.from({ length: 25 }, (_, i) => injector({ serial: `P${i}`, steps: flowSteps({ IVM01: 10 }) })),
     ...Array.from({ length: 5 }, (_, i) => injector({
       serial: `F${i}`,
       steps: [{ name: 'iVM.01', value: 99, status: 'fail' }],
     })),
+    injector({ serial: 'DNF-1', steps: [{ name: 'iVM.01', value: 10 }, { name: 'iVM.06', errored: true }] }),
   ];
   const s = summarise(list);
 
-  assert.strictEqual(s.total, 30);
+  assert.strictEqual(s.total, 31);
   assert.strictEqual(s.passed, 25);
   assert.strictEqual(s.failed, 5);
-  assert.ok(Math.abs(s.passPct - 83.3333) < 0.001);
-  assert.ok(Math.abs(s.failPct - 16.6667) < 0.001);
+  assert.strictEqual(s.dnf, 1);
+  assert.ok(Math.abs(s.passPct - 80.6452) < 0.001);
+  assert.ok(Math.abs(s.failPct - 16.1290) < 0.001);
+  assert.ok(Math.abs(s.dnfPct - 3.2258) < 0.001);
   assert.deepStrictEqual(s.partNumbers, ['PN-1']);
 });
 
@@ -136,22 +157,28 @@ test('counts how many injectors failed each test point, ranked', () => {
   assert.strictEqual(summarise(list).failed, 5);
 });
 
-test('an excess-return result counts as a failure of that test point', () => {
+test('Peak Torque Delivery and Return failures are counted independently', () => {
   const list = [
-    injector({ serial: 'A', steps: flowSteps({ IVM01: 10, IVM06: 60 }) }),
-    // Bench "out of range" = the EXCESS RETURN condition.
-    injector({ serial: 'B', steps: [{ name: 'iVM.01', value: 10 }, { name: 'iVM.06', errored: true }] }),
+    injector({ serial: 'A', steps: [{ name: 'iVM.06', value: 60, returnValue: 20 }] }),
+    injector({ serial: 'B', steps: [{ name: 'iVM.06', value: 120, min: 0, max: 80, returnValue: 20, errored: true }] }),
+    injector({ serial: 'C', steps: [{ name: 'iVM.06', value: 60, returnValue: 90, errored: true }] }),
+    injector({ serial: 'D', steps: [{ name: 'iVM.06', errored: true }] }),
   ];
   const failures = failuresByTestPoint(list);
-  const ivm06 = failures.find((f) => f.code === 'IVM06');
+  const delivery = failures.find((f) => f.code === 'IVM06-D');
+  const returnPoint = failures.find((f) => f.code === 'IVM06-R');
 
-  assert.strictEqual(ivm06.count, 1);
-  assert.strictEqual(ivm06.label, 'Peak Torque', 'the error does not rename the test point');
-  // …and the injector itself is a failure everywhere downstream.
+  assert.strictEqual(delivery.count, 1);
+  assert.strictEqual(delivery.label, 'Peak Torque - Delivery');
+  assert.strictEqual(returnPoint.count, 1);
+  assert.strictEqual(returnPoint.label, 'Peak Torque - Return');
   assert.strictEqual(injectorOutcome(list[1]), 'fail');
+  assert.strictEqual(injectorOutcome(list[2]), 'fail');
+  assert.strictEqual(injectorOutcome(list[3]), 'dnf');
   const s = summarise(list);
-  assert.strictEqual(s.failed, 1);
+  assert.strictEqual(s.failed, 2);
   assert.strictEqual(s.passed, 1);
+  assert.strictEqual(s.dnf, 1);
   // Excluded from the deviation analysis, which is passing injectors only.
   const [ivm06Consistency] = consistencyOfPassingInjectors(list, ['IVM06']);
   assert.strictEqual(ivm06Consistency.sampleCount, 1);

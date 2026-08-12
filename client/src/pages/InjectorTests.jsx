@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Gauge, RefreshCw, Settings, Trash2, Search, Printer, ChevronUp, ChevronDown, X,
+  Gauge, RefreshCw, Settings, Trash2, Search, Printer, X,
   AlertTriangle, CheckCircle2, Loader2, XCircle, Save, FileText, Files, BarChart3, Info, ShieldAlert, Eye,
 } from 'lucide-react'
 import api from '../lib/api'
@@ -14,7 +14,6 @@ import {
   toggleAll,
   areAllSelected,
   orderedSelection,
-  moveSelected,
   validateSelectionForReport,
   describeSelection,
   vendorPromptReport,
@@ -58,7 +57,9 @@ export default function InjectorTests() {
   const [partFilter, setPartFilter] = useState('')
   const [serialFilter, setSerialFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
-  // Selection is ORDER-AWARE: the array order defines report column order.
+  const [dateFromFilter, setDateFromFilter] = useState('')
+  const [dateToFilter, setDateToFilter] = useState('')
+  // Selected rows are presented and reported in natural serial-number order.
   const [selectedIds, setSelectedIds] = useState(() => [])
   const selected = useMemo(() => new Set(selectedIds), [selectedIds])
   const [showOrder, setShowOrder] = useState(false)
@@ -93,13 +94,15 @@ export default function InjectorTests() {
       partNumber: partFilter,
       serialNumber: serialFilter,
       status: statusFilter,
+      dateFrom: dateFromFilter,
+      dateTo: dateToFilter,
     }),
-    [injectors, partFilter, serialFilter, statusFilter]
+    [injectors, partFilter, serialFilter, statusFilter, dateFromFilter, dateToFilter]
   )
   const allVisibleSelected = areAllSelected(selectedIds, filtered)
 
   // Filters only change the visible list; selections persist until explicitly
-  // cleared, and selection order continues to drive report columns.
+  // cleared and are re-sorted by serial whenever the set changes.
   const orderedSelected = useMemo(() => orderedSelection(selectedIds, injectors), [selectedIds, injectors])
   const selectedCount = orderedSelected.length
   const selectionIssue = useMemo(
@@ -127,7 +130,6 @@ export default function InjectorTests() {
   const toggleAllVisible = () => setSelectedIds(prev => toggleAll(prev, filtered))
   const clearSelection = () => setSelectedIds([])
   const removeSelected = (id) => setSelectedIds(prev => prev.filter(x => x !== id))
-  const move = (id, dir) => setSelectedIds(prev => moveSelected(prev, id, dir))
 
   // ── Sync / settings ────────────────────────────────────────────────────────
   const handleSync = async (fullResync = false, { allowLargePrune = false } = {}) => {
@@ -532,7 +534,7 @@ export default function InjectorTests() {
 
         {/* Report filters + selection controls */}
         <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_180px_auto] gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-[1fr_1fr_150px_150px_160px_auto] gap-2">
             <div className="relative">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input value={partFilter} onChange={e => setPartFilter(e.target.value)}
@@ -547,15 +549,29 @@ export default function InjectorTests() {
                 placeholder="Filter by serial number…"
                 className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
             </div>
+            <label className="flex min-h-[40px] items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm text-gray-600 focus-within:ring-1 focus-within:ring-pdi-navy">
+              <span className="text-xs font-medium whitespace-nowrap">From</span>
+              <input type="date" value={dateFromFilter} onChange={e => setDateFromFilter(e.target.value)}
+                aria-label="Filter from test date"
+                max={dateToFilter || undefined}
+                className="min-w-0 flex-1 bg-transparent text-sm text-gray-800 focus:outline-none" />
+            </label>
+            <label className="flex min-h-[40px] items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm text-gray-600 focus-within:ring-1 focus-within:ring-pdi-navy">
+              <span className="text-xs font-medium whitespace-nowrap">To</span>
+              <input type="date" value={dateToFilter} onChange={e => setDateToFilter(e.target.value)}
+                aria-label="Filter through test date"
+                min={dateFromFilter || undefined}
+                className="min-w-0 flex-1 bg-transparent text-sm text-gray-800 focus:outline-none" />
+            </label>
             <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
-              aria-label="Filter by pass or fail status"
+              aria-label="Filter by result status"
               className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]">
               <option value="">All statuses</option>
-              <option value="pass">Pass</option>
-              <option value="fail">Fail</option>
-              <option value="unscored">No result</option>
+              <option value="pass">Passed</option>
+              <option value="fail">Failed</option>
+              <option value="dnf">DNF</option>
             </select>
-            <div className="flex items-center gap-2 sm:col-span-2 lg:col-span-1">
+            <div className="flex items-center gap-2 sm:col-span-2 lg:col-span-3 2xl:col-span-1">
               <button onClick={toggleAllVisible} disabled={filtered.length === 0}
                 className="px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 min-h-[40px] whitespace-nowrap">
                 {allVisibleSelected ? 'Deselect visible' : 'Select all visible'}
@@ -568,7 +584,7 @@ export default function InjectorTests() {
           </div>
 
           {/* Report actions */}
-          <div className="flex flex-col lg:flex-row lg:items-center gap-2 pt-2 border-t border-gray-100">
+          <div className="flex flex-col 2xl:flex-row 2xl:items-center gap-2 pt-2 border-t border-gray-100">
             <div className="text-sm text-gray-600 flex-1 min-w-0">
               {selectedCount === 0
                 ? <span className="text-gray-400">Select one or more injectors to generate reports.</span>
@@ -576,7 +592,7 @@ export default function InjectorTests() {
               {selectedCount > 0 && (
                 <button onClick={() => setShowOrder(s => !s)}
                   className="ml-2 text-xs text-pdi-teal hover:underline">
-                  {showOrder ? 'hide column order' : 'set column order'}
+                  {showOrder ? 'hide selected list' : 'view selected list'}
                 </button>
               )}
             </div>
@@ -613,17 +629,17 @@ export default function InjectorTests() {
           )}
         </div>
 
-        {/* Report column order */}
+        {/* Automatically ordered active selection */}
         {showOrder && orderedSelected.length > 0 && (
           <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
             <div className="flex items-center justify-between">
-              <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Report Column Order</h4>
+              <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Selected Injectors · Serial Number Order</h4>
               <button onClick={clearSelection} className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-600">
                 <Trash2 size={13} /> Clear
               </button>
             </div>
             <p className="text-xs text-gray-400">
-              Injectors appear in report columns in this order (1, 2, 3 …). Large batches continue on further pages.
+              This list re-sorts automatically in ascending serial-number order whenever injectors are added or removed.
             </p>
             <ol className="space-y-1.5">
               {orderedSelected.map((inj, idx) => (
@@ -639,14 +655,6 @@ export default function InjectorTests() {
                     <div className="text-xs text-gray-400 truncate">Tested {fmtDate(inj.test_datetime)}</div>
                   </div>
                   <div className="flex items-center gap-0.5 shrink-0">
-                    <button onClick={() => move(inj.id, -1)} disabled={idx === 0} title="Move up" aria-label="Move up"
-                      className="p-1.5 text-gray-500 hover:text-pdi-navy hover:bg-white rounded disabled:opacity-30 disabled:hover:bg-transparent">
-                      <ChevronUp size={16} />
-                    </button>
-                    <button onClick={() => move(inj.id, 1)} disabled={idx === orderedSelected.length - 1} title="Move down" aria-label="Move down"
-                      className="p-1.5 text-gray-500 hover:text-pdi-navy hover:bg-white rounded disabled:opacity-30 disabled:hover:bg-transparent">
-                      <ChevronDown size={16} />
-                    </button>
                     <button onClick={() => removeSelected(inj.id)} title="Remove" aria-label="Remove"
                       className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-white rounded">
                       <X size={16} />
@@ -853,6 +861,7 @@ function ReportPreviewModal({ preview, onClose }) {
 }
 
 function previewCellClass(cell) {
+  if (cell?.status === 'dnf') return 'bg-orange-50 font-semibold text-orange-700'
   if (cell?.error || cell?.status === 'fail') return 'bg-red-50 font-semibold text-red-700'
   if (cell?.status === 'pass') return 'text-green-700'
   return 'text-gray-700'
@@ -862,24 +871,27 @@ function resultClass(result) {
   const normalized = String(result || '').toLowerCase()
   if (normalized === 'pass') return 'text-green-700'
   if (normalized === 'fail') return 'text-red-700'
+  if (normalized === 'dnf') return 'text-orange-700'
   return 'text-gray-600'
 }
 
 function InjectorFlowBadge({ injector }) {
-  const { overall_pass, steps_passed, steps_total } = injector
-  if (!hasTestResults(injector) || overall_pass == null) {
+  const { overall_pass, result_status, steps_passed, steps_total } = injector
+  const status = String(result_status || (overall_pass === 1 ? 'pass' : (overall_pass === 0 ? 'fail' : 'unknown'))).toLowerCase()
+  if (!hasTestResults(injector) || status === 'unknown') {
     return (
       <span className="inline-flex items-center gap-1 text-xs text-gray-500">
         <span className="text-gray-400">No result</span>
       </span>
     )
   }
-  const pass = overall_pass === 1
   return (
     <span className="inline-flex items-center gap-1.5 text-xs">
-      {pass
-        ? <span className="inline-flex items-center gap-1 bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium"><CheckCircle2 size={12} /> Pass</span>
-        : <span className="inline-flex items-center gap-1 bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium"><XCircle size={12} /> Fail</span>}
+      {status === 'pass'
+        ? <span className="inline-flex items-center gap-1 bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium"><CheckCircle2 size={12} /> Passed</span>
+        : status === 'dnf'
+          ? <span className="inline-flex items-center gap-1 bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium"><AlertTriangle size={12} /> DNF</span>
+          : <span className="inline-flex items-center gap-1 bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium"><XCircle size={12} /> Failed</span>}
       <span className="text-gray-500">{steps_passed}/{steps_total} steps</span>
     </span>
   )
