@@ -51,10 +51,10 @@ function requireAdmin(req, res, next) {
 // ── List injectors ─────────────────────────────────────────────────────────
 router.get('/', requireAdmin, (req, res, next) => {
   try {
-    const { search, part_number, serial_number, status } = req.query;
+    const { search, part_number, serial_number, status, date_from, date_to } = req.query;
     let sql = `SELECT id, report_ext_id, slot_position, part_number, serial_number,
                       brand, injector_type, machine_name, machine_sn, test_datetime, ext_status,
-                      overall_pass, steps_total, steps_passed, steps_failed, inspection_id, synced_at
+                      overall_pass, result_status, steps_total, steps_passed, steps_failed, inspection_id, synced_at
                FROM injector_test_reports
               WHERE (serial_number IS NULL OR UPPER(TRIM(serial_number)) NOT LIKE 'R%')
                 AND (job_number IS NULL OR UPPER(job_number) NOT LIKE '%RMA%')`;
@@ -72,9 +72,19 @@ router.get('/', requireAdmin, (req, res, next) => {
       sql += ' AND serial_number LIKE ?';
       params.push(`%${serial_number}%`);
     }
-    if (status === 'pass') sql += ' AND overall_pass = 1';
-    else if (status === 'fail') sql += ' AND overall_pass = 0';
-    else if (status === 'unscored') sql += ' AND overall_pass IS NULL';
+    const wantedStatus = String(status || '').trim().toLowerCase();
+    if (wantedStatus === 'pass' || wantedStatus === 'passed') sql += " AND result_status = 'pass'";
+    else if (wantedStatus === 'fail' || wantedStatus === 'failed') sql += " AND result_status = 'fail'";
+    else if (wantedStatus === 'dnf') sql += " AND result_status = 'dnf'";
+    else if (wantedStatus === 'unscored' || wantedStatus === 'unknown') sql += " AND (result_status IS NULL OR result_status = 'unknown')";
+    if (date_from) {
+      sql += ' AND date(test_datetime) >= date(?)';
+      params.push(date_from);
+    }
+    if (date_to) {
+      sql += ' AND date(test_datetime) <= date(?)';
+      params.push(date_to);
+    }
 
     // One continuous list, newest test first. Remaining keys only make equal
     // timestamps deterministic.

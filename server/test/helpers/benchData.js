@@ -15,7 +15,7 @@
  *   serial    injector serial number
  *   job       raw bench job number (excluded only when it contains "RMA")
  *   part      part number
- *   flow      { IVM01, IVM06 } measured averages (null = no reading at all)
+ *   flow      { IVM01, IVM06, IVM06_RETURN } averages (null = no reading)
  *   errorOn   step code to attach a bench error to, e.g. 'IVM06'
  *   errorText raw API error description
  */
@@ -31,8 +31,8 @@ function benchReport({
   errorText = 'HP ERROR (out of range) #1000',
 } = {}) {
   const stepName = (code, label) => (errorOn === code ? `${label} : ${errorText}` : label);
-  const tank = (value, min, max, target) => ({
-    tank_name: '',
+  const tank = (value, min, max, target, tankName = '') => ({
+    tank_name: tankName,
     tank_unit: 'mm3/STRK',
     text_green: `${target} +/- ${((max - min) / 2).toFixed(1)}`,
     min_green: String(min),
@@ -63,13 +63,13 @@ function benchReport({
       },
       {
         TestInfo: { test_name: stepName('IVM01', 'iVM.01'), test_order: 1, status: 4, hp: '1600', inj_1: '750' },
-        PrimaryTank: tank(flow.IVM01 !== undefined ? flow.IVM01 : 230, 220, 240, 230),
+        PrimaryTank: tank(flow.IVM01 !== undefined ? flow.IVM01 : 230, 220, 240, 230, '[D]'),
         SecondaryTank: null,
       },
       {
         TestInfo: { test_name: stepName('IVM06', 'iVM.06'), test_order: 2, status: 4, hp: '1800', inj_1: '1200' },
-        PrimaryTank: tank(flow.IVM06 !== undefined ? flow.IVM06 : 260, 234, 276, 255),
-        SecondaryTank: null,
+        PrimaryTank: tank(flow.IVM06 !== undefined ? flow.IVM06 : 260, 234, 276, 255, '[D]'),
+        SecondaryTank: tank(flow.IVM06_RETURN !== undefined ? flow.IVM06_RETURN : 28, 0, 80, 40, '[R]'),
       },
     ],
   };

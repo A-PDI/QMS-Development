@@ -135,6 +135,8 @@ function migrateSchema() {
     'ALTER TABLE inspection_templates ADD COLUMN parent_template_id TEXT',
     // Per-user page permissions
     'ALTER TABLE users ADD COLUMN permissions TEXT',
+    // Four-state injector result: pass / fail / dnf / unknown.
+    'ALTER TABLE injector_test_reports ADD COLUMN result_status TEXT',
     // Free-text detail on an activity entry (e.g. why a closed inspection was
     // reopened). No-op on a fresh DB — the CREATE TABLE below already has it.
     'ALTER TABLE inspection_activity_log ADD COLUMN notes TEXT',
@@ -249,6 +251,7 @@ function migrateSchema() {
       test_datetime TEXT,
       ext_status INTEGER,
       overall_pass INTEGER,
+      result_status TEXT,
       steps_total INTEGER DEFAULT 0,
       steps_passed INTEGER DEFAULT 0,
       steps_failed INTEGER DEFAULT 0,

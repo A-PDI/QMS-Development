@@ -2,10 +2,8 @@
 /**
  * Test-step naming and error handling.
  *
- * Covers requirement scenarios 1–3: a valid result keeps its step name and
- * value; an out-of-range result keeps the step name and shows the named
- * condition ("Excess Return"); and different API error messages never change
- * the step name.
+ * Covers stable naming, error parsing, and the three interrupted-sequence
+ * outcomes (DNF, prior-step failure, and out-of-band error-point failure).
  */
 
 const test = require('node:test');
@@ -39,11 +37,12 @@ test('normalises the formatting variations of a test-step code', () => {
   assert.strictEqual(normaliseStepCode('iVM.06 : HP ERROR (out of range) #1000'), 'IVM06');
 });
 
-test('IVM06 displays as Peak Torque regardless of the result', () => {
-  assert.strictEqual(stepDisplayName('iVM.06'), 'Peak Torque');
-  assert.strictEqual(stepDisplayName('IVM06'), 'Peak Torque');
-  assert.strictEqual(stepDisplayName('iVM.06 : HP ERROR (out of range) #1000'), 'Peak Torque');
-  assert.strictEqual(stepDisplayName('iVM.06 : SKIPPED'), 'Peak Torque');
+test('IVM06 names Delivery and Return as distinct Peak Torque points', () => {
+  assert.strictEqual(stepDisplayName('iVM.06'), 'Peak Torque - Delivery');
+  assert.strictEqual(stepDisplayName('IVM06', 'primary', '[D]'), 'Peak Torque - Delivery');
+  assert.strictEqual(stepDisplayName('IVM06', 'secondary', '[R]'), 'Peak Torque - Return');
+  assert.strictEqual(stepDisplayName('iVM.06 : HP ERROR (out of range) #1000'), 'Peak Torque - Delivery');
+  assert.strictEqual(stepDisplayName('iVM.06 : SKIPPED', 'secondary', '[R]'), 'Peak Torque - Return');
 });
 
 test('leak test steps display their specified test pressure', () => {
@@ -81,10 +80,11 @@ test('splits a bench name into step code and error description', () => {
 });
 
 test('formats API error descriptions for display', () => {
-  // An out-of-range result is the known EXCESS RETURN condition, so it is named
-  // rather than reported as a generic error.
-  assert.strictEqual(formatErrorDescription('HP ERROR (out of range) #1000'), 'Excess Return');
-  assert.strictEqual(formatErrorDescription('LP ERROR (Out Of Range)'), 'Excess Return');
+  // Generic out-of-range text is not assumed to be a Return failure; the tank
+  // reading and band determine the exact measurement that failed.
+  assert.strictEqual(formatErrorDescription('HP ERROR (out of range) #1000'), 'Out of Range');
+  assert.strictEqual(formatErrorDescription('LP ERROR (Out Of Range)'), 'Out of Range');
+  assert.strictEqual(formatErrorDescription('Excess Return'), 'Excess Return');
   assert.strictEqual(formatErrorValue('Excess Return'), 'Excess Return', 'no "Error:" prefix on a named condition');
 
   // Machine faults keep the API wording behind the "Error:" prefix.
@@ -103,14 +103,14 @@ test('different API errors never change the test-step name', () => {
     'ERROR (timeout) #77',
   ];
   const expectedValues = [
-    'Excess Return',
+    'Error: Out of Range',
     'Error: Communication Failure',
     'Error: Invalid Measurement',
     'Error: Timeout',
   ];
   errors.forEach((errText, i) => {
     const step = { name: 'iVM.06', raw_name: `iVM.06 : ${errText}` };
-    assert.strictEqual(stepLabel(step), 'Peak Torque', `step name changed for: ${errText}`);
+    assert.strictEqual(stepLabel(step), 'Peak Torque - Delivery', `step name changed for: ${errText}`);
     assert.strictEqual(stepResultValue(step, { average: '' }), expectedValues[i]);
     assert.strictEqual(stepErrorInfo(step).raw, errText, 'original API description not preserved');
   });
@@ -118,7 +118,7 @@ test('different API errors never change the test-step name', () => {
 
 test('a valid result keeps its numeric value', () => {
   const step = { name: 'iVM.06', raw_name: 'iVM.06', errored: false };
-  assert.strictEqual(stepLabel(step), 'Peak Torque');
+  assert.strictEqual(stepLabel(step), 'Peak Torque - Delivery');
   assert.strictEqual(stepResultValue(step, { average: '224.5' }), '224.5');
   assert.strictEqual(numericValue('224.5'), 224.5);
   assert.strictEqual(isErrorValue('224.5'), false);
@@ -145,14 +145,18 @@ function benchReport(overrides = {}) {
         TestInfo: { test_name: 'iVM.01', test_order: 1, status: 4 },
         PrimaryTank: {
           tank_name: '', tank_unit: 'mm3/STRK', text_green: '230.0 +/- 10.0',
-          min_green: '220.0', max_green: '240.0', AvrResult: '231.5', results: '231.5',
+          min_green: '220.0', max_green: '240.0', AvrResult: overrides.step1Value ?? '231.5', results: overrides.step1Value ?? '231.5',
         },
       },
       {
         TestInfo: { test_name: overrides.step6Name || 'iVM.06', test_order: 2, status: 4 },
         PrimaryTank: {
-          tank_name: '', tank_unit: 'mm3/STRK', text_green: '255.0 +/- 21.0',
+          tank_name: '[D]', tank_unit: 'mm3/STRK', text_green: '255.0 +/- 21.0',
           min_green: '234.0', max_green: '276.0', AvrResult: overrides.step6Value ?? '260.0',
+        },
+        SecondaryTank: {
+          tank_name: '[R]', tank_unit: 'mm3/STRK', text_green: '40.0 +/- 40.0',
+          min_green: '0', max_green: '80', AvrResult: overrides.step6Return ?? '28.0',
         },
       },
     ],
@@ -164,12 +168,13 @@ test('sync keeps the step name and moves the error into the value', () => {
   const step = tests.find((t) => normaliseStepCode(t.name) === 'IVM06');
 
   assert.strictEqual(step.name, 'iVM.06', 'step name must not contain the error text');
-  assert.strictEqual(step.display_name, 'Peak Torque');
+  assert.strictEqual(step.display_name, 'Peak Torque - Delivery');
+  assert.strictEqual(stepLabel(step, 'secondary', step.secondary.tank_name), 'Peak Torque - Return');
   assert.ok(step.errored);
-  assert.strictEqual(step.error_description, 'Excess Return');
+  assert.strictEqual(step.error_description, 'Out of Range');
   assert.strictEqual(step.error_raw, 'HP ERROR (out of range) #1000', 'the API text is preserved');
-  assert.strictEqual(step.primary.average, 'Excess Return');
-  assert.strictEqual(step.status, 'fail');
+  assert.strictEqual(step.primary.average, 'Error: Out of Range');
+  assert.strictEqual(step.status, 'dnf');
 
   // A valid step in the same report is unaffected.
   const ok = tests.find((t) => normaliseStepCode(t.name) === 'IVM01');
@@ -178,12 +183,30 @@ test('sync keeps the step name and moves the error into the value', () => {
   assert.strictEqual(ok.status, 'pass');
 });
 
-test('an errored step fails the injector overall', () => {
+test('bench-error classification distinguishes DNF, prior failure, and error-point failure', () => {
   const good = mapReportToInjector(benchReport());
   assert.strictEqual(good.overall_pass, 1);
+  assert.strictEqual(good.result_status, 'pass');
   assert.strictEqual(good.steps_failed, 0);
 
-  const bad = mapReportToInjector(benchReport({ step6Name: 'iVM.06 : HP ERROR (out of range) #1000', step6Value: '' }));
-  assert.strictEqual(bad.overall_pass, 0);
-  assert.strictEqual(bad.steps_failed, 1);
+  const dnf = mapReportToInjector(benchReport({ step6Name: 'iVM.06 : HP ERROR (out of range) #1000', step6Value: '' }));
+  assert.strictEqual(dnf.overall_pass, null);
+  assert.strictEqual(dnf.result_status, 'dnf');
+  assert.strictEqual(dnf.steps_failed, 0);
+
+  const priorFailure = mapReportToInjector(benchReport({
+    step1Value: '999.0',
+    step6Name: 'iVM.06 : HP ERROR (out of range) #1000',
+    step6Value: '',
+  }));
+  assert.strictEqual(priorFailure.overall_pass, 0);
+  assert.strictEqual(priorFailure.result_status, 'fail');
+
+  const errorPointFailure = mapReportToInjector(benchReport({
+    step6Name: 'iVM.06 : HP ERROR (out of range) #1000',
+    step6Value: '291.0',
+  }));
+  assert.strictEqual(errorPointFailure.overall_pass, 0);
+  assert.strictEqual(errorPointFailure.result_status, 'fail');
+  assert.strictEqual(errorPointFailure.steps_failed, 1);
 });

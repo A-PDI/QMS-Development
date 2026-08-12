@@ -21,33 +21,19 @@ const {
   stepErrorInfo,
   numericValue,
 } = require('./injectorSteps');
-
-const PASS = 'pass';
-const FAIL = 'fail';
-const UNKNOWN = 'unknown';
+const {
+  PASS,
+  FAIL,
+  DNF,
+  UNKNOWN,
+  injectorOutcome,
+  measurementOutcome,
+  stepHasExplicitFailure,
+} = require('./injectorResult');
 
 /** Customer-facing test steps for one injector (excludes the internal flush). */
 function testPointsOf(injector) {
   return (injector && Array.isArray(injector.tests) ? injector.tests : []).filter((t) => !isFlushStep(t));
-}
-
-/**
- * Overall outcome of one injector: 'pass' | 'fail' | 'unknown'.
- * An errored step — including one on the internal flush diagnostic, which
- * aborts the run — is a failure, never a pass.
- */
-function injectorOutcome(injector) {
-  if (!injector) return UNKNOWN;
-  const all = Array.isArray(injector.tests) ? injector.tests : [];
-  if (all.some((t) => stepErrorInfo(t).errored)) return FAIL;
-
-  const scored = testPointsOf(injector).filter((t) => t.primary && t.status !== 'skip');
-  if (scored.length === 0) {
-    if (injector.overall_pass === 1) return PASS;
-    if (injector.overall_pass === 0) return FAIL;
-    return UNKNOWN;
-  }
-  return scored.some((t) => t.status === FAIL) ? FAIL : PASS;
 }
 
 /** Percentage helper that never divides by zero. */
@@ -80,6 +66,7 @@ function summarise(injectors = []) {
   const outcomes = list.map(injectorOutcome);
   const passed = outcomes.filter((o) => o === PASS).length;
   const failed = outcomes.filter((o) => o === FAIL).length;
+  const dnf = outcomes.filter((o) => o === DNF).length;
   const untested = outcomes.filter((o) => o === UNKNOWN).length;
   const total = list.length;
 
@@ -90,9 +77,11 @@ function summarise(injectors = []) {
     total,
     passed,
     failed,
+    dnf,
     untested,
     passPct: percentage(passed, total),
     failPct: percentage(failed, total),
+    dnfPct: percentage(dnf, total),
     partNumbers,
     partNumber: partNumbers.length === 1 ? partNumbers[0] : (partNumbers[0] || ''),
     multiplePartNumbers: partNumbers.length > 1,
@@ -122,12 +111,30 @@ function failuresByTestPoint(injectors = []) {
     for (const t of testPointsOf(inj)) {
       const code = stepCode(t);
       if (!code) continue;
+      if (code === 'IVM06') {
+        const peakTorqueMeasurements = [
+          { key: `${code}|delivery`, code: `${code}-D`, role: 'primary', tank: t.primary },
+          { key: `${code}|return`, code: `${code}-R`, role: 'secondary', tank: t.secondary },
+        ];
+        for (const point of peakTorqueMeasurements) {
+          if (!point.tank) continue;
+          if (!points.has(point.key)) {
+            points.set(point.key, {
+              code: point.code,
+              label: stepLabel(t, point.role, point.tank.tank_name),
+              count: 0,
+              order: order++,
+            });
+          }
+          if (measurementOutcome(t, point.tank) === FAIL) points.get(point.key).count += 1;
+        }
+        continue;
+      }
+
       if (!points.has(code)) {
         points.set(code, { code, label: stepLabel(t, 'primary', t.primary && t.primary.tank_name), count: 0, order: order++ });
       }
-      const entry = points.get(code);
-      const errored = stepErrorInfo(t).errored;
-      if (errored || t.status === FAIL) entry.count += 1;
+      if (stepHasExplicitFailure(t)) points.get(code).count += 1;
     }
   }
 
@@ -167,7 +174,9 @@ function consistencyOfPassingInjectors(injectors = [], codes = IVM_FLOW_CODES) {
   const passing = list.filter((inj) => injectorOutcome(inj) === PASS);
 
   return codes.map((code) => {
-    const label = typeof STEP_DISPLAY_NAMES[code] === 'string' ? STEP_DISPLAY_NAMES[code] : code;
+    const label = code === 'IVM06'
+      ? 'Peak Torque - Delivery'
+      : (typeof STEP_DISPLAY_NAMES[code] === 'string' ? STEP_DISPLAY_NAMES[code] : code);
     const measurements = [];
     let unit = '';
     let excluded = 0;
@@ -267,6 +276,7 @@ function evaluateShipment(injectors = []) {
 module.exports = {
   PASS,
   FAIL,
+  DNF,
   UNKNOWN,
   injectorOutcome,
   percentage,

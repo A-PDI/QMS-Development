@@ -31,6 +31,12 @@ const {
   formatErrorDescription,
   formatErrorValue,
 } = require('./injectorSteps');
+const {
+  injectorOutcome,
+  outcomeToOverallPass,
+  stepHasExplicitFailure,
+  stepOutcome,
+} = require('./injectorResult');
 
 const CARBONZAPP_URL = 'https://cloudx.carbonzapp.com/userapi/v1/client/getReports';
 
@@ -180,7 +186,10 @@ function normaliseTests(report) {
         average: avr != null ? String(avr) : (errored ? errorValue : ''),
         error: errored,
         error_description: errorDescription,
-        status: errored ? FAIL : tankStatus(t2),
+        // Keep the measurement's independent band result even when the bench
+        // interrupted the step. The shared classifier decides whether that
+        // proves a component failure or represents a DNF.
+        status: tankStatus(t2),
         // Which display label this tank uses ("Resistance" vs "Inductance").
         role,
       };
@@ -189,19 +198,17 @@ function normaliseTests(report) {
     const primary = tankView(pt, 'primary');
     const secondary = st ? tankView(st, 'secondary') : null;
 
-    // Overall step status: errors always fail; otherwise skipped if TestInfo
-    // says so or no tank; otherwise the worst of primary/secondary.
+    // Overall step status. An interrupted step is DNF unless one of its
+    // measured tanks is explicitly outside the green acceptance range.
     let status = SKIP;
-    if (errored) {
-      status = FAIL;
-    } else if (!skipped && primary) {
+    if (!skipped && primary && !errored) {
       const parts = [primary.status, secondary ? secondary.status : null].filter(Boolean);
       if (parts.includes(FAIL)) status = FAIL;
       else if (parts.includes(PASS)) status = PASS;
       else status = SKIP;
     }
 
-    return {
+    const normalised = {
       // Step code with any bench anomaly text removed — never the error message.
       name: parsed.base || (ti.test_name || ''),
       code: normaliseStepCode(parsed.base),
@@ -221,6 +228,8 @@ function normaliseTests(report) {
       primary,
       secondary,
     };
+    normalised.status = stepOutcome(normalised);
+    return normalised;
   });
 }
 
@@ -230,16 +239,14 @@ function normaliseTests(report) {
 function mapReportToInjector(report) {
   const slot = report.SlotsData || {};
   const tests = normaliseTests(report);
-  // Customer-facing steps only (FL(W) is internal). An errored step is scored
-  // as a FAIL — a step the bench could not measure is not a pass.
+  // Customer-facing steps only (FL(W) is internal). A bench interruption does
+  // not count as a component failure unless a preceding point failed or the
+  // interrupted point contains an out-of-band measured value.
   const scored = tests.filter((t) => !t.internal && !t.skipped && (t.primary || t.errored));
-  const failed = scored.filter((t) => t.status === FAIL).length;
+  const failed = scored.filter(stepHasExplicitFailure).length;
   const passed = scored.filter((t) => t.status === PASS).length;
-  // An error on the internal flush step aborts the whole run → not a pass.
-  const internalError = tests.some((t) => t.internal && t.errored);
-  const overallPass = internalError
-    ? 0
-    : (scored.length === 0 ? null : (failed === 0 ? 1 : 0));
+  const resultStatus = injectorOutcome({ tests });
+  const overallPass = outcomeToOverallPass(resultStatus);
 
   return {
     report_ext_id: report._id != null ? String(report._id) : '',
@@ -256,6 +263,7 @@ function mapReportToInjector(report) {
     test_datetime: report.datetime || report.created_at || null,
     ext_status: report.status != null ? Number(report.status) : null,
     overall_pass: overallPass,
+    result_status: resultStatus,
     steps_total: scored.length,
     steps_passed: passed,
     steps_failed: failed,
@@ -579,12 +587,12 @@ function upsertReports(rawReports) {
       db.run(
         `UPDATE injector_test_reports SET
            part_number = ?, serial_number = ?, job_number = ?, brand = ?, injector_type = ?,
-           machine_name = ?, machine_sn = ?, test_datetime = ?, ext_status = ?, overall_pass = ?,
+           machine_name = ?, machine_sn = ?, test_datetime = ?, ext_status = ?, overall_pass = ?, result_status = ?,
            steps_total = ?, steps_passed = ?, steps_failed = ?, report_json = ?, synced_at = ?
          WHERE id = ?`,
         [
           inj.part_number, inj.serial_number, inj.job_number, inj.brand, inj.injector_type,
-          inj.machine_name, inj.machine_sn, inj.test_datetime, inj.ext_status, inj.overall_pass,
+          inj.machine_name, inj.machine_sn, inj.test_datetime, inj.ext_status, inj.overall_pass, inj.result_status,
           inj.steps_total, inj.steps_passed, inj.steps_failed, JSON.stringify(inj.report_json), now,
           existing.id,
         ]
@@ -596,13 +604,13 @@ function upsertReports(rawReports) {
       db.run(
         `INSERT INTO injector_test_reports
            (id, report_ext_id, slot_position, part_number, serial_number, job_number, brand, injector_type,
-            machine_name, machine_sn, test_datetime, ext_status, overall_pass,
+            machine_name, machine_sn, test_datetime, ext_status, overall_pass, result_status,
             steps_total, steps_passed, steps_failed, report_json, synced_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id, inj.report_ext_id, inj.slot_position, inj.part_number, inj.serial_number, inj.job_number,
           inj.brand, inj.injector_type, inj.machine_name, inj.machine_sn, inj.test_datetime, inj.ext_status,
-          inj.overall_pass, inj.steps_total, inj.steps_passed, inj.steps_failed,
+          inj.overall_pass, inj.result_status, inj.steps_total, inj.steps_passed, inj.steps_failed,
           JSON.stringify(inj.report_json), now, now,
         ]
       );

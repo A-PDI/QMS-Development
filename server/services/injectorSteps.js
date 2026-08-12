@@ -52,14 +52,12 @@ const ERROR_HINTS = /(error|fail|out\s*of\s*range|invalid|timeout|timed\s*out|co
 /**
  * Bench errors that describe a KNOWN physical condition rather than a machine
  * fault. These are shown by their quality-department name and WITHOUT the
- * "Error:" prefix, because they are a test outcome the inspector recognises —
- * e.g. the bench's "out of range" on the return tank is an EXCESS RETURN.
- *
- * They are still failures: any step with one of these conditions fails, which
- * fails the injector in every downstream report.
+ * "Error:" prefix. Generic "out of range" text is deliberately not renamed:
+ * the measured tank and its acceptance band determine whether Delivery or
+ * Return actually failed.
  */
 const NAMED_ERROR_CONDITIONS = [
-  { match: /out\s*of\s*range/i, term: 'Excess Return' },
+  { match: /excess\s*return/i, term: 'Excess Return' },
 ];
 
 /** The named condition for a raw API error description, or null. */
@@ -152,7 +150,13 @@ function tankSuffix(tankName) {
  */
 function stepDisplayName(rawName, role = 'primary', tankName = '') {
   const { base } = splitStepName(rawName);
-  const entry = STEP_DISPLAY_NAMES[normaliseStepCode(base)];
+  const code = normaliseStepCode(base);
+  const entry = STEP_DISPLAY_NAMES[code];
+  if (code === 'IVM06') {
+    const tankCode = String(tankName || '').replace(/[[\]]/g, '').trim().toUpperCase();
+    const measurement = tankCode === 'R' || role === 'secondary' ? 'Return' : 'Delivery';
+    return `Peak Torque - ${measurement}`;
+  }
   if (entry && typeof entry === 'object') return entry[role] || entry.primary || base;
   const label = typeof entry === 'string' ? entry : (base || 'Step');
   return `${label}${tankSuffix(tankName)}`;
@@ -177,7 +181,7 @@ function titleCase(text) {
  * Turn the API's raw error text into a short human description. Known physical
  * conditions get their quality-department name; everything else preserves the
  * API's own wording:
- *   "HP ERROR (out of range) #1000" → "Excess Return"
+ *   "HP ERROR (out of range) #1000" → "Out of Range"
  *   "ERROR: Communication Failure"  → "Communication Failure"
  *   "Invalid Measurement"           → "Invalid Measurement"
  */

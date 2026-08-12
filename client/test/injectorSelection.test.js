@@ -7,6 +7,7 @@ import assert from 'node:assert'
 
 import {
   sortByTestDate,
+  sortBySerialNumber,
   filterInjectors,
   toggleSelected,
   addToSelection,
@@ -14,7 +15,6 @@ import {
   areAllSelected,
   toggleAll,
   orderedSelection,
-  moveSelected,
   hasTestResults,
   validateSelectionForReport,
   describeSelection,
@@ -29,34 +29,38 @@ const inj = (id, extra = {}) => ({
   steps_total: 10,
   steps_passed: 10,
   overall_pass: 1,
+  result_status: 'pass',
   test_datetime: '2026-06-30T10:00:00Z',
   ...extra,
 })
 
 const list = [
   inj('1', { test_datetime: '2026-06-30T10:00:00Z' }),
-  inj('2', { serial_number: 'ABC-222', part_number: '0445120231', overall_pass: 0, steps_passed: 8, test_datetime: '2026-07-02T10:00:00Z' }),
+  inj('2', { serial_number: 'ABC-222', part_number: '0445120231', overall_pass: 0, result_status: 'fail', steps_passed: 8, test_datetime: '2026-07-02T10:00:00Z' }),
   inj('3', { serial_number: 'ABC-333', test_datetime: '2026-07-01T10:00:00Z' }),
-  inj('4', { serial_number: 'ZX-400', overall_pass: null, steps_total: 0, steps_passed: 0, test_datetime: '2026-06-01T10:00:00Z' }),
+  inj('4', { serial_number: 'ZX-400', overall_pass: null, result_status: 'unknown', steps_total: 0, steps_passed: 0, test_datetime: '2026-06-01T10:00:00Z' }),
+  inj('5', { serial_number: 'DNF-500', overall_pass: null, result_status: 'dnf', steps_passed: 1, test_datetime: '2026-06-15T10:00:00Z' }),
 ]
 
 // ── Ordering and filtering ──────────────────────────────────────────────────
 test('injectors are one continuous list ordered by newest test date first', () => {
-  assert.deepStrictEqual(sortByTestDate(list).map((i) => i.id), ['2', '3', '1', '4'])
-  assert.deepStrictEqual(list.map((i) => i.id), ['1', '2', '3', '4'], 'source array is not mutated')
+  assert.deepStrictEqual(sortByTestDate(list).map((i) => i.id), ['2', '3', '1', '5', '4'])
+  assert.deepStrictEqual(list.map((i) => i.id), ['1', '2', '3', '4', '5'], 'source array is not mutated')
 })
 
-test('part, serial and pass/fail filters work independently and together', () => {
+test('part, serial, date range, and four-state result filters work together', () => {
   assert.deepStrictEqual(filterInjectors(list, { partNumber: '0445' }).map((i) => i.id), ['2'])
   assert.deepStrictEqual(filterInjectors(list, { serialNumber: 'abc' }).map((i) => i.id), ['2', '3'])
   assert.deepStrictEqual(filterInjectors(list, { status: 'pass' }).map((i) => i.id), ['3', '1'])
   assert.deepStrictEqual(filterInjectors(list, { status: 'fail' }).map((i) => i.id), ['2'])
+  assert.deepStrictEqual(filterInjectors(list, { status: 'dnf' }).map((i) => i.id), ['5'])
   assert.deepStrictEqual(filterInjectors(list, { status: 'unscored' }).map((i) => i.id), ['4'])
   assert.deepStrictEqual(filterInjectors(list, { serialNumber: 'abc', status: 'pass' }).map((i) => i.id), ['3'])
+  assert.deepStrictEqual(filterInjectors(list, { dateFrom: '2026-06-30', dateTo: '2026-07-01' }).map((i) => i.id), ['3', '1'])
 })
 
 // ── Selection ───────────────────────────────────────────────────────────────
-test('selection preserves pick order (which drives report column order)', () => {
+test('active selection re-sorts by serial after additions and removals', () => {
   let selected = []
   selected = toggleSelected(selected, '3')
   selected = toggleSelected(selected, '1')
@@ -65,7 +69,10 @@ test('selection preserves pick order (which drives report column order)', () => 
 
   selected = toggleSelected(selected, '1')
   assert.deepStrictEqual(selected, ['3', '2'])
-  assert.deepStrictEqual(orderedSelection(selected, list).map((i) => i.id), ['3', '2'])
+  assert.deepStrictEqual(orderedSelection(selected, list).map((i) => i.id), ['2', '3'])
+
+  const natural = [inj('10', { serial_number: 'SN-10' }), inj('02', { serial_number: 'SN-2' })]
+  assert.deepStrictEqual(sortBySerialNumber(natural).map((i) => i.serial_number), ['SN-2', 'SN-10'])
 })
 
 test('select-all-visible adds only missing rows and keeps hidden selections', () => {
@@ -80,16 +87,8 @@ test('select-all-visible adds only missing rows and keeps hidden selections', ()
 
 test('selection helper functions retain stable order', () => {
   const selected = addToSelection(['3'], list)
-  assert.deepStrictEqual(selected, ['3', '1', '2', '4'])
-  assert.deepStrictEqual(removeFromSelection(selected, [list[1], list[3]]), ['3', '1'])
-})
-
-test('column order can be rearranged', () => {
-  const selected = ['1', '2', '3']
-  assert.deepStrictEqual(moveSelected(selected, '3', -1), ['1', '3', '2'])
-  assert.deepStrictEqual(moveSelected(selected, '1', -1), selected)
-  assert.deepStrictEqual(moveSelected(selected, '3', 1), selected)
-  assert.deepStrictEqual(moveSelected(selected, 'unknown', 1), selected)
+  assert.deepStrictEqual(selected, ['3', '1', '2', '4', '5'])
+  assert.deepStrictEqual(removeFromSelection(selected, [list[1], list[3]]), ['3', '1', '5'])
 })
 
 // ── Validation ───────────────────────────────────────────────────────────────

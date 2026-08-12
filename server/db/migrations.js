@@ -7,6 +7,7 @@
 
 const { v4: uuidv4 } = require('uuid');
 const { TEMPLATES } = require('./seed');
+const { injectorOutcome, outcomeToOverallPass } = require('../services/injectorResult');
 
 // ─── PDI-IQI-005 Rev B sections ──────────────────────────────────────────────
 const RECEIVING_ITEMS = [
@@ -307,6 +308,7 @@ function applyMigrations(db) {
       ['test_datetime', 'TEXT'],
       ['ext_status',    'INTEGER'],
       ['overall_pass',  'INTEGER'],
+      ['result_status', 'TEXT'],
       ['steps_total',   'INTEGER DEFAULT 0'],
       ['steps_passed',  'INTEGER DEFAULT 0'],
       ['steps_failed',  'INTEGER DEFAULT 0'],
@@ -337,6 +339,7 @@ function applyMigrations(db) {
         test_datetime TEXT,
         ext_status INTEGER,
         overall_pass INTEGER,
+        result_status TEXT,
         steps_total INTEGER DEFAULT 0,
         steps_passed INTEGER DEFAULT 0,
         steps_failed INTEGER DEFAULT 0,
@@ -362,6 +365,28 @@ function applyMigrations(db) {
     db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_injector_reports_unique ON injector_test_reports(report_ext_id, slot_position)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_injector_reports_datetime ON injector_test_reports(test_datetime DESC)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_injector_reports_serial ON injector_test_reports(serial_number)');
+  });
+
+  // ── Migration: classify interrupted injector runs as DNF ─────────────────
+  // Re-evaluate cached rows so existing deployments immediately distinguish a
+  // bench interruption from a demonstrated component failure.
+  once('classify_injector_dnf_results', () => {
+    const info = db.all('PRAGMA table_info(injector_test_reports)', []);
+    if (!info || !info.some((column) => column.name === 'result_status')) return;
+
+    const rows = db.all('SELECT id, overall_pass, report_json FROM injector_test_reports', []);
+    for (const row of rows) {
+      let report = {};
+      try { report = row.report_json ? JSON.parse(row.report_json) : {}; } catch (_) { report = {}; }
+      const outcome = injectorOutcome({
+        overall_pass: row.overall_pass,
+        tests: Array.isArray(report.tests) ? report.tests : [],
+      });
+      db.run(
+        'UPDATE injector_test_reports SET result_status = ?, overall_pass = ? WHERE id = ?',
+        [outcome, outcomeToOverallPass(outcome), row.id]
+      );
+    }
   });
 
   // ── Migration: ensure app_settings table exists with the right shape ──────
