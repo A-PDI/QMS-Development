@@ -33,14 +33,29 @@ function tankMeasurement(tank) {
   return numericValue(measuredValue(tank));
 }
 
+/**
+ * Whether the bench actually evaluated this measurement.
+ *
+ * CarbonZapp writes 0/0.0 into interrupted steps that never ran. The report
+ * layer has always rendered that combination as "No Test"; treating the same
+ * placeholder as an out-of-range result here would incorrectly turn a bench
+ * interruption into a component failure.
+ */
+function tankWasEvaluated(step, tank) {
+  const value = tankMeasurement(tank);
+  if (value == null) return false;
+  if (stepErrorInfo(step).errored && Math.abs(value) <= EPS) return false;
+  return true;
+}
+
 function tankHasDefinedRange(tank) {
   if (!tank) return false;
   return finiteNumber(tank.min_green) != null || finiteNumber(tank.max_green) != null;
 }
 
-function tankOutOfBounds(tank) {
+function tankOutOfBounds(tank, step = null) {
   const value = tankMeasurement(tank);
-  if (value == null || !tankHasDefinedRange(tank)) return false;
+  if (!tankWasEvaluated(step, tank) || !tankHasDefinedRange(tank)) return false;
   const min = finiteNumber(tank.min_green);
   const max = finiteNumber(tank.max_green);
   return (min != null && value < min - EPS) || (max != null && value > max + EPS);
@@ -50,8 +65,8 @@ function tankOutOfBounds(tank) {
 function measurementOutcome(step, tank) {
   if (!tank) return stepErrorInfo(step).errored ? DNF : UNKNOWN;
   if (stepErrorInfo(step).errored) {
-    if (tankOutOfBounds(tank)) return FAIL;
-    if (tankMeasurement(tank) != null && tankHasDefinedRange(tank)) return PASS;
+    if (tankOutOfBounds(tank, step)) return FAIL;
+    if (tankWasEvaluated(step, tank) && tankHasDefinedRange(tank)) return PASS;
     return DNF;
   }
   if (tank.status === FAIL) return FAIL;
@@ -63,7 +78,7 @@ function measurementOutcome(step, tank) {
 function stepHasExplicitFailure(step) {
   if (!step) return false;
   if (stepErrorInfo(step).errored) {
-    return [step.primary, step.secondary].filter(Boolean).some(tankOutOfBounds);
+    return [step.primary, step.secondary].filter(Boolean).some((tank) => tankOutOfBounds(tank, step));
   }
   return step.status === FAIL
     || [step.primary, step.secondary].filter(Boolean).some((tank) => tank.status === FAIL);
@@ -133,6 +148,20 @@ function outcomeToOverallPass(outcome) {
   return null;
 }
 
+/** Persistable row-level result and step counters from one shared rule set. */
+function injectorScorecard(injector) {
+  const points = customerTestPoints(injector)
+    .filter((step) => step && !step.skipped && (step.primary || stepErrorInfo(step).errored));
+  const outcome = injectorOutcome(injector);
+  return {
+    outcome,
+    overallPass: outcomeToOverallPass(outcome),
+    stepsTotal: points.length,
+    stepsPassed: points.filter((step) => stepOutcome(step) === PASS).length,
+    stepsFailed: points.filter(stepHasExplicitFailure).length,
+  };
+}
+
 module.exports = {
   PASS,
   FAIL,
@@ -140,6 +169,7 @@ module.exports = {
   UNKNOWN,
   SKIP,
   tankMeasurement,
+  tankWasEvaluated,
   tankHasDefinedRange,
   tankOutOfBounds,
   measurementOutcome,
@@ -148,4 +178,5 @@ module.exports = {
   customerTestPoints,
   injectorOutcome,
   outcomeToOverallPass,
+  injectorScorecard,
 };

@@ -32,9 +32,7 @@ const {
   formatErrorValue,
 } = require('./injectorSteps');
 const {
-  injectorOutcome,
-  outcomeToOverallPass,
-  stepHasExplicitFailure,
+  injectorScorecard,
   stepOutcome,
 } = require('./injectorResult');
 
@@ -242,11 +240,7 @@ function mapReportToInjector(report) {
   // Customer-facing steps only (FL(W) is internal). A bench interruption does
   // not count as a component failure unless a preceding point failed or the
   // interrupted point contains an out-of-band measured value.
-  const scored = tests.filter((t) => !t.internal && !t.skipped && (t.primary || t.errored));
-  const failed = scored.filter(stepHasExplicitFailure).length;
-  const passed = scored.filter((t) => t.status === PASS).length;
-  const resultStatus = injectorOutcome({ tests });
-  const overallPass = outcomeToOverallPass(resultStatus);
+  const scorecard = injectorScorecard({ tests });
 
   return {
     report_ext_id: report._id != null ? String(report._id) : '',
@@ -262,11 +256,11 @@ function mapReportToInjector(report) {
     machine_sn: report.machine_sn || null,
     test_datetime: report.datetime || report.created_at || null,
     ext_status: report.status != null ? Number(report.status) : null,
-    overall_pass: overallPass,
-    result_status: resultStatus,
-    steps_total: scored.length,
-    steps_passed: passed,
-    steps_failed: failed,
+    overall_pass: scorecard.overallPass,
+    result_status: scorecard.outcome,
+    steps_total: scorecard.stepsTotal,
+    steps_passed: scorecard.stepsPassed,
+    steps_failed: scorecard.stepsFailed,
     tests,
     // Keep the trimmed but complete data we need for the custom PDF.
     report_json: {
