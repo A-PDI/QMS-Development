@@ -361,7 +361,7 @@ export default function InjectorTests() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-8 space-y-4">
+      <div className="w-full max-w-[1600px] mx-auto px-3 sm:px-6 py-4 sm:py-8 space-y-4">
         {/* Page header */}
         <div className="mb-1">
           <h1 className="text-xl sm:text-2xl font-bold text-pdi-navy flex items-center gap-2">
@@ -534,7 +534,7 @@ export default function InjectorTests() {
 
         {/* Report filters + selection controls */}
         <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-[1fr_1fr_150px_150px_160px_auto] gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_160px_160px_170px_auto] gap-2">
             <div className="relative">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input value={partFilter} onChange={e => setPartFilter(e.target.value)}

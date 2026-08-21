@@ -194,6 +194,14 @@ test('bench-error classification distinguishes DNF, prior failure, and error-poi
   assert.strictEqual(dnf.result_status, 'dnf');
   assert.strictEqual(dnf.steps_failed, 0);
 
+  const zeroNoTest = mapReportToInjector(benchReport({
+    step6Name: 'iVM.06 : HP ERROR (out of range) #1000',
+    step6Value: '0.0',
+  }));
+  assert.strictEqual(zeroNoTest.overall_pass, null, 'an errored zero is a no-test placeholder');
+  assert.strictEqual(zeroNoTest.result_status, 'dnf');
+  assert.strictEqual(zeroNoTest.steps_failed, 0);
+
   const priorFailure = mapReportToInjector(benchReport({
     step1Value: '999.0',
     step6Name: 'iVM.06 : HP ERROR (out of range) #1000',

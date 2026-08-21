@@ -16,6 +16,7 @@ const PDFDocument = require('pdfkit');
 const { db, extractPdfPages, extractPdfText, resetInjectorData, injectorInspectionCount } = require('./helpers/testEnv');
 const { benchReport, benchBatch } = require('./helpers/benchData');
 const carbonzapp = require('../services/carbonzapp');
+const { applyMigrations } = require('../db/migrations');
 const {
   splitSerialLines,
   numericPartNumber,
@@ -75,6 +76,36 @@ test('repeated synchronisation updates rather than duplicates records', async ()
   assert.strictEqual(second.updated, 8, 'existing rows updated in place');
   assert.strictEqual(storedInjectors().length, 8, 'no duplicate injector rows');
   assert.strictEqual(second.inspectionsCreated, 0);
+});
+
+test('the follow-up migration repairs cached zero/no-test failures without a resync', async () => {
+  resetInjectorData();
+  await syncWith([benchReport({ serial: 'CACHED-DNF', errorOn: 'IVM06', flow: { IVM06: 0 } })]);
+  const row = storedInjectors()[0];
+  const report = JSON.parse(row.report_json);
+  const errorStep = report.tests.find((step) => step.errored);
+
+  // Reproduce the row shape written by the first PR #50 classifier.
+  errorStep.status = 'fail';
+  errorStep.primary.status = 'fail';
+  db.run(
+    `UPDATE injector_test_reports
+     SET result_status = 'fail', overall_pass = 0, steps_failed = 1, report_json = ?
+     WHERE id = ?`,
+    [JSON.stringify(report), row.id]
+  );
+  db.run("DELETE FROM schema_migrations WHERE id = 'reclassify_injector_dnf_zero_no_test_results'");
+
+  applyMigrations(db);
+
+  const repaired = db.get(
+    'SELECT result_status, overall_pass, steps_passed, steps_failed FROM injector_test_reports WHERE id = ?',
+    [row.id]
+  );
+  assert.strictEqual(repaired.result_status, 'dnf');
+  assert.strictEqual(repaired.overall_pass, null);
+  assert.strictEqual(repaired.steps_passed, 1);
+  assert.strictEqual(repaired.steps_failed, 0);
 });
 
 // ── Scenario 7: one injector → a report about only that injector ─────────────
@@ -500,7 +531,7 @@ test('the shipment evaluation report has a summary page plus detail pages', asyn
 });
 
 // ── Result cell rules ────────────────────────────────────────────────────────
-test('a flagged step reading zero shows "No Test" over the condition', async () => {
+test('a flagged zero is shown as "No Test" and classified as DNF', async () => {
   resetInjectorData();
   await syncWith([benchReport({ serial: 'ZERO0001', errorOn: 'IVM06', flow: { IVM06: 0 } })]);
   const selected = loadSelectedInjectors(storedInjectors().map((r) => r.id));
@@ -511,7 +542,7 @@ test('a flagged step reading zero shows "No Test" over the condition', async () 
   assert.ok(text.includes('No Test'), 'the zero reading is replaced by "No Test"');
   assert.ok(text.includes('Error: Out of Range'), 'the bench condition is named underneath');
   assert.ok(!text.includes('0.00'), 'the bare zero is not shown');
-  assert.ok(text.includes('FAIL'), 'the injector still fails');
+  assert.ok(text.includes('DNF'), 'a no-test bench interruption is not a component failure');
 });
 
 test('a zero on a step the bench did NOT flag stays a zero', async () => {

@@ -7,7 +7,7 @@
 
 const { v4: uuidv4 } = require('uuid');
 const { TEMPLATES } = require('./seed');
-const { injectorOutcome, outcomeToOverallPass } = require('../services/injectorResult');
+const { injectorScorecard } = require('../services/injectorResult');
 
 // ─── PDI-IQI-005 Rev B sections ──────────────────────────────────────────────
 const RECEIVING_ITEMS = [
@@ -367,26 +367,49 @@ function applyMigrations(db) {
     db.exec('CREATE INDEX IF NOT EXISTS idx_injector_reports_serial ON injector_test_reports(serial_number)');
   });
 
+  function reclassifyCachedInjectorResults() {
+    const info = db.all('PRAGMA table_info(injector_test_reports)', []);
+    if (!info || !info.some((column) => column.name === 'result_status')) return;
+
+    const rows = db.all(
+      `SELECT id, overall_pass, steps_total, steps_passed, steps_failed, report_json
+       FROM injector_test_reports`,
+      []
+    );
+    for (const row of rows) {
+      let report = {};
+      try { report = row.report_json ? JSON.parse(row.report_json) : {}; } catch (_) { report = {}; }
+      const tests = Array.isArray(report.tests) ? report.tests : [];
+      const scorecard = injectorScorecard({
+        overall_pass: row.overall_pass,
+        tests,
+      });
+      db.run(
+        `UPDATE injector_test_reports
+         SET result_status = ?, overall_pass = ?, steps_total = ?, steps_passed = ?, steps_failed = ?
+         WHERE id = ?`,
+        [scorecard.outcome, scorecard.overallPass,
+          tests.length ? scorecard.stepsTotal : row.steps_total,
+          tests.length ? scorecard.stepsPassed : row.steps_passed,
+          tests.length ? scorecard.stepsFailed : row.steps_failed,
+          row.id]
+      );
+    }
+  }
+
   // ── Migration: classify interrupted injector runs as DNF ─────────────────
   // Re-evaluate cached rows so existing deployments immediately distinguish a
   // bench interruption from a demonstrated component failure.
   once('classify_injector_dnf_results', () => {
-    const info = db.all('PRAGMA table_info(injector_test_reports)', []);
-    if (!info || !info.some((column) => column.name === 'result_status')) return;
+    reclassifyCachedInjectorResults();
+  });
 
-    const rows = db.all('SELECT id, overall_pass, report_json FROM injector_test_reports', []);
-    for (const row of rows) {
-      let report = {};
-      try { report = row.report_json ? JSON.parse(row.report_json) : {}; } catch (_) { report = {}; }
-      const outcome = injectorOutcome({
-        overall_pass: row.overall_pass,
-        tests: Array.isArray(report.tests) ? report.tests : [],
-      });
-      db.run(
-        'UPDATE injector_test_reports SET result_status = ?, overall_pass = ? WHERE id = ?',
-        [outcome, outcomeToOverallPass(outcome), row.id]
-      );
-    }
+  // PR #50's first classifier treated CarbonZapp's zero placeholder on an
+  // interrupted step as an out-of-range measurement. Re-run the shared rules
+  // under a new migration id so deployments that already applied the original
+  // DNF migration repair their cached rows without relying on a bench resync.
+  once('reclassify_injector_dnf_zero_no_test_results', () => {
+    reclassifyCachedInjectorResults();
   });
 
   // ── Migration: ensure app_settings table exists with the right shape ──────
