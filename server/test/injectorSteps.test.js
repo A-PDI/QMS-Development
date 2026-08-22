@@ -218,3 +218,15 @@ test('bench-error classification distinguishes DNF, prior failure, and error-poi
   assert.strictEqual(errorPointFailure.result_status, 'fail');
   assert.strictEqual(errorPointFailure.steps_failed, 1);
 });
+
+test('sync uses the report test datetime instead of its later API creation timestamp', () => {
+  const report = benchReport();
+  report.datetime = '2026-08-21T13:40:56+00:00';
+  report.created_at = '2026-08-21T23:16:35.067000Z';
+
+  const injector = mapReportToInjector(report);
+
+  assert.strictEqual(injector.test_datetime, report.datetime);
+  assert.strictEqual(injector.report_json.test_datetime, report.datetime);
+  assert.notStrictEqual(injector.test_datetime, report.created_at);
+});
