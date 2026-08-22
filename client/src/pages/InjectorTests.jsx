@@ -8,6 +8,7 @@ import api from '../lib/api'
 import { useToast } from '../hooks/useToast'
 import { chooseSaveTarget, writeBlobToTarget, deriveFilename } from '../lib/download'
 import { describeConnectionResult, describeSyncResult } from '../lib/syncStatus'
+import { formatInjectorTestDateTime } from '../lib/injectorDateTime'
 import {
   filterInjectors,
   toggleSelected,
@@ -353,12 +354,6 @@ export default function InjectorTests() {
     }
   }
 
-  const fmtDate = (value) => {
-    if (!value) return '—'
-    const parsed = new Date(value)
-    return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString()
-  }
-
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="w-full max-w-[1600px] mx-auto px-3 sm:px-6 py-4 sm:py-8 space-y-4">
@@ -652,7 +647,7 @@ export default function InjectorTests() {
                       {inj.part_number || '—'}
                       <span className="text-gray-400 font-normal"> · SN {inj.serial_number || '—'}</span>
                     </div>
-                    <div className="text-xs text-gray-400 truncate">Tested {fmtDate(inj.test_datetime)}</div>
+                    <div className="text-xs text-gray-400 truncate">Tested {formatInjectorTestDateTime(inj.test_datetime)}</div>
                   </div>
                   <div className="flex items-center gap-0.5 shrink-0">
                     <button onClick={() => removeSelected(inj.id)} title="Remove" aria-label="Remove"
@@ -677,7 +672,7 @@ export default function InjectorTests() {
                 : 'No injectors match the current filters.'}
             </div>
           ) : (
-            <InjectorList injectors={filtered} selected={selected} onToggle={toggle} fmtDate={fmtDate} />
+            <InjectorList injectors={filtered} selected={selected} onToggle={toggle} />
           )}
         </div>
 
@@ -709,7 +704,7 @@ function ReportButton({ kind, icon: Icon, generating, disabled, onClick, accent,
 }
 
 // ── One continuous, test-date-ordered list of injectors ──────────────────────
-function InjectorList({ injectors, selected, onToggle, fmtDate }) {
+function InjectorList({ injectors, selected, onToggle }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="flex items-center justify-between gap-3 px-3 py-2.5 bg-gray-50 border-b border-gray-200">
@@ -742,7 +737,7 @@ function InjectorList({ injectors, selected, onToggle, fmtDate }) {
                 <td className="px-3 py-2.5 font-medium text-gray-900">{i.part_number || '—'}</td>
                 <td className="px-3 py-2.5 text-gray-700">{i.serial_number || '—'}</td>
                 <td className="px-3 py-2.5"><InjectorFlowBadge injector={i} /></td>
-                <td className="px-3 py-2.5 text-gray-500 text-xs">{fmtDate(i.test_datetime)}</td>
+                <td className="px-3 py-2.5 text-gray-500 text-xs">{formatInjectorTestDateTime(i.test_datetime)}</td>
               </tr>
             ))}
           </tbody>
@@ -761,7 +756,7 @@ function InjectorList({ injectors, selected, onToggle, fmtDate }) {
                 <InjectorFlowBadge injector={i} />
               </div>
               <div className="text-xs text-gray-500 mt-0.5">SN: {i.serial_number || '—'}</div>
-              <div className="text-xs text-gray-400 mt-0.5">{fmtDate(i.test_datetime)}</div>
+              <div className="text-xs text-gray-400 mt-0.5">{formatInjectorTestDateTime(i.test_datetime)}</div>
             </div>
           </div>
         ))}
