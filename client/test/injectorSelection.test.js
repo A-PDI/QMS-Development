@@ -138,14 +138,14 @@ test('the selection is described without job-number grouping', () => {
   assert.strictEqual(describeSelection([list[0], list[1]]), '2 injectors')
 })
 
-test('vendor information is requested for every output that uses the shared header', () => {
-  assert.strictEqual(vendorPromptReport(['report']), 'Custom Report')
-  assert.strictEqual(vendorPromptReport(['preview']), 'Custom Report')
+test('vendor information is requested for the shipment report only', () => {
   assert.strictEqual(vendorPromptReport(['evaluation']), 'Shipment Evaluation Report')
   assert.strictEqual(
-    vendorPromptReport(['report', 'evaluation']), 'Custom Report and Shipment Evaluation',
-    'one prompt covers both when both are selected'
+    vendorPromptReport(['report', 'evaluation']), 'Shipment Evaluation Report',
+    'the one prompt still covers a run that also produces the custom report'
   )
+  assert.strictEqual(vendorPromptReport(['report']), '', 'the custom report never asks for a vendor')
+  assert.strictEqual(vendorPromptReport(['preview']), '')
   assert.strictEqual(vendorPromptReport(['inspection']), '', 'the inspection record needs no vendor')
   assert.strictEqual(vendorPromptReport([]), '')
 })

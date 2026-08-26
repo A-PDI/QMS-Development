@@ -102,7 +102,7 @@ export default function InjectorTests() {
   const [syncing, setSyncing] = useState(false)
   const [generating, setGenerating] = useState(false)   // a run is in progress
   const generatingRef = useRef(false)                   // blocks repeated clicks
-  const [vendorName, setVendorName] = useState('')     // remembered between customer/evaluation reports
+  const [vendorName, setVendorName] = useState('')     // remembered between shipment evaluation runs
   const [showSettings, setShowSettings] = useState(false)
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [savingKey, setSavingKey] = useState(false)
@@ -333,9 +333,10 @@ export default function InjectorTests() {
     const { outputs } = outputSelection
     const formats = reportFormats(outputSelection)
 
-    // Both the Custom Report and the Shipment Evaluation carry a Part / Vendor
-    // / Report Date header, so one prompt covers whichever is selected.
-    let vendor = vendorName
+    // Only the Shipment Evaluation Report needs a vendor: it identifies the
+    // shipment on the report header. The Custom Report is never asked for one —
+    // its header falls back to the test bench's brand.
+    let vendor = ''
     const vendorReport = vendorPromptReport(outputs)
     if (vendorReport) {
       const answer = window.prompt(`Vendor name for the ${vendorReport}`, vendorName)
@@ -344,8 +345,8 @@ export default function InjectorTests() {
         return
       }
       vendor = String(answer).trim()
-      if (!vendor && outputs.includes('evaluation')) {
-        const msg = 'A vendor name is required for the Shipment Evaluation Report.'
+      if (!vendor) {
+        const msg = `A vendor name is required for the ${vendorReport}.`
         setStatusMsg({ type: 'error', text: msg })
         showToast(msg, 'error')
         return

@@ -1,6 +1,7 @@
 import { Check, X } from 'lucide-react'
 
-// Visual styling per option. Selected = solid, with a check (P) / X (F) / "A" glyph.
+// Visual styling per option. Selected = solid, with a check (P) / X (F) / "A"
+// or "N/A" glyph.
 const SELECTED_STYLE = {
   P: 'bg-green-600 text-white border-green-600',
   F: 'bg-red-600 text-white border-red-600',
@@ -8,9 +9,12 @@ const SELECTED_STYLE = {
   N: 'bg-gray-400 text-white border-gray-400',
 }
 
+const LABELS = { P: 'Pass', F: 'Fail', A: 'Accepted', N: 'Not applicable' }
+
 function Glyph({ option, size = 16 }) {
   if (option === 'P') return <Check size={size} strokeWidth={3} />
   if (option === 'F') return <X size={size} strokeWidth={3} />
+  if (option === 'N') return <span className="text-[10px] font-bold leading-none">N/A</span>
   return <span className="text-xs font-bold leading-none">{option}</span>
 }
 
@@ -24,8 +28,8 @@ export default function PFNToggle({ value, onChange, readOnly = false, options =
             key={opt}
             type="button"
             disabled={readOnly}
-            aria-label={opt === 'P' ? 'Pass' : opt === 'F' ? 'Fail' : opt === 'A' ? 'Accepted' : opt}
-            title={opt === 'P' ? 'Pass' : opt === 'F' ? 'Fail' : opt === 'A' ? 'Accepted' : opt}
+            aria-label={LABELS[opt] || opt}
+            title={LABELS[opt] || opt}
             onClick={() => !readOnly && onChange(selected ? '' : opt)}
             className={`w-10 h-10 sm:w-9 sm:h-9 flex items-center justify-center rounded border transition-colors ${
               selected

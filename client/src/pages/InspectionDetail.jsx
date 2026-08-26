@@ -19,11 +19,13 @@ import SectionCamshaftBore from '../components/inspection/SectionCamshaftBore'
 import SectionFireRingProtrusion from '../components/inspection/SectionFireRingProtrusion'
 import SectionValveRecession from '../components/inspection/SectionValveRecession'
 import SectionVacuumTest from '../components/inspection/SectionVacuumTest'
+import SectionGrooveSpecs from '../components/inspection/SectionGrooveSpecs'
 import AddFireRingModal from '../components/inspection/AddFireRingModal'
 import FileUploadZone from '../components/FileUploadZone'
 import { formatDate, formatDateTime, formatFileSize, canAddFireRing } from '../lib/utils'
 import { HEADER_FIELD_LABELS, dispositionColor, dispositionLabel } from '../lib/constants'
 import { getItemDisposition } from '../lib/itemCompletion'
+import { isReceivingSection } from '../lib/sections'
 
 const SECTION_COMPONENTS = {
   pfn_checklist: SectionReceiving,
@@ -35,6 +37,7 @@ const SECTION_COMPONENTS = {
   fire_ring_protrusion: SectionFireRingProtrusion,
   valve_recession: SectionValveRecession,
   vacuum_test: SectionVacuumTest,
+  groove_specs: SectionGrooveSpecs,
 }
 
 export default function InspectionDetail() {
@@ -487,6 +490,7 @@ export default function InspectionDetail() {
                       readOnly={true}
                       sectionKey={attKeyFor(itemIdx, key)}
                       attachments={attachments}
+                      allowNA={isReceivingSection(key, section)}
                     />
                   </div>
                 </div>

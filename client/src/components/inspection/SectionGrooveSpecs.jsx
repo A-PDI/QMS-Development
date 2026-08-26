@@ -6,11 +6,11 @@ import MeasurementInput from './MeasurementInput'
  * Fire Ring (Cylinder Head, section C — Dimensional Inspection).
  *
  * Layout requirements:
- *  - All specs (Groove Diameter, Groove Depth, Wire Protrusion) live in the
- *    section header as reference only.
- *  - Only items flagged `entry: true` get a per-cylinder data-entry chart
- *    (row 1 = Cylinder 1..N headers, row 2 = inputs). Currently that is just
- *    Wire Protrusion.
+ *  - Items flagged `entry: true` get a per-cylinder data-entry chart
+ *    (row 1 = Cylinder 1..N headers, row 2 = inputs). Groove Diameter, Groove
+ *    Depth and Wire Protrusion all use this format.
+ *  - Any remaining reference-only spec is listed in the section header
+ *    instead; the header is dropped when every spec has its own chart.
  *
  * Data shape (per section):
  *   { measurements: [ { id, cylinders: string[], status: '', notes: '' } ] }
@@ -49,6 +49,8 @@ export default function SectionGrooveSpecs({
   const entryItems = items.filter(it =>
     it.entry === true || (it.entry === undefined && /wire protrusion/i.test(it.measurement || ''))
   )
+  // Specs without a chart of their own stay in the header for reference.
+  const referenceItems = items.filter(it => !entryItems.includes(it))
 
   function setRow(itemId, patch) {
     const base = items.map(item => rowFor(data, item, count))
@@ -66,20 +68,22 @@ export default function SectionGrooveSpecs({
 
   return (
     <div className="space-y-4">
-      {/* Spec reference header — all specs live here */}
-      <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-        <div className="text-xs font-semibold text-gray-500 mb-1.5">Specifications</div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-          {items.map(item => (
-            <div key={item.id} className="text-xs">
-              <span className="font-semibold text-gray-700">{item.measurement}</span>
-              {item.spec && (
-                <span className="block text-gray-500 font-mono mt-0.5">{item.spec}</span>
-              )}
-            </div>
-          ))}
+      {/* Spec reference header — only for specs with no chart of their own */}
+      {referenceItems.length > 0 && (
+        <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+          <div className="text-xs font-semibold text-gray-500 mb-1.5">Specifications</div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            {referenceItems.map(item => (
+              <div key={item.id} className="text-xs">
+                <span className="font-semibold text-gray-700">{item.measurement}</span>
+                {item.spec && (
+                  <span className="block text-gray-500 font-mono mt-0.5">{item.spec}</span>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Data-entry charts — only for items that require measurement */}
       <div className="space-y-3">

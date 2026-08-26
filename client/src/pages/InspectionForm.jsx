@@ -24,6 +24,7 @@ import AuthImage from '../components/AuthImage'
 import { initSectionData, mergeSectionData, formatFileSize } from '../lib/utils'
 import { getItemsCompletion, deriveOverallDisposition, getItemDisposition, ITEM_DISPOSITION_KEY } from '../lib/itemCompletion'
 import { dispositionColor, HEADER_FIELD_LABELS, COMPONENT_TYPE_LABELS } from '../lib/constants'
+import { isReceivingSection, isVisualSection, supportsPassAll, hasNonPassRows, passAllRows } from '../lib/sections'
 
 // Statuses that are still editable in the inspection form (not yet finalized).
 const EDITABLE_STATUSES = new Set(['draft', 'partially_complete'])
@@ -72,7 +73,7 @@ function detectAcceptedItems(sectionData) {
   return false
 }
 
-function CollapsibleSection({ title, children, defaultOpen = true, onDelete }) {
+function CollapsibleSection({ title, children, defaultOpen = true, onDelete, headerAction }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -80,11 +81,12 @@ function CollapsibleSection({ title, children, defaultOpen = true, onDelete }) {
         <button
           type="button"
           onClick={() => setOpen(o => !o)}
-          className="flex-1 flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 text-left"
+          className="flex-1 flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 text-left min-w-0"
         >
           <span className="text-sm sm:text-base font-semibold text-pdi-navy truncate pr-2">{title}</span>
           {open ? <ChevronUp size={16} className="text-pdi-navy flex-shrink-0" /> : <ChevronDown size={16} className="text-pdi-navy flex-shrink-0" />}
         </button>
+        {headerAction && <div className="flex-shrink-0 pr-2">{headerAction}</div>}
         {onDelete && (
           <button
             type="button"
@@ -498,6 +500,16 @@ export default function InspectionForm() {
     })
     setNewItemName('')
     setAddingItemKey(null)
+  }
+
+  // "Pass All" — mark every item in a checklist section (Section B) as Pass.
+  function handlePassAll(sectionKey, section) {
+    const current = sectionData[sectionKey]
+    if (hasNonPassRows(section, current) &&
+        !window.confirm(`Mark every item in "${section.title}" as Pass? This replaces the results already selected in this section.`)) {
+      return
+    }
+    setSectionData(d => ({ ...d, [sectionKey]: passAllRows(section, d[sectionKey]) }))
   }
 
   function handleEditItem(sectionKey, itemId, nameOrMeasurement, requirementOrLocation) {
@@ -918,11 +930,24 @@ export default function InspectionForm() {
               onDelete: (itemId) => handleDeleteItem(key, itemId),
               onEdit: (itemId, a, b) => handleEditItem(key, itemId, a, b),
             } : undefined
+            // Section A items may be marked N/A; Section B gets a "Pass All".
+            const allowNA = isReceivingSection(key, section)
+            const showPassAll = isVisualSection(key, section) && supportsPassAll(section)
             return (
               <CollapsibleSection
                 key={key}
                 title={section.title}
                 onDelete={isAdmin ? () => handleDeleteSection(key) : undefined}
+                headerAction={showPassAll ? (
+                  <button
+                    type="button"
+                    onClick={() => handlePassAll(key, section)}
+                    title="Mark every item in this section as Pass"
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-pdi-navy bg-white border border-pdi-navy/30 rounded-lg hover:bg-pdi-navy hover:text-white transition-colors min-h-[34px]"
+                  >
+                    <CheckSquare size={13} /> Pass All
+                  </button>
+                ) : undefined}
               >
                 <Component
                   section={section}
@@ -936,6 +961,7 @@ export default function InspectionForm() {
                     uploadingKey,
                   } : {})}
                   adminItemTools={adminTools}
+                  allowNA={allowNA}
                 />
 
                 {/* Admin: Add item button in section footer */}

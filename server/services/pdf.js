@@ -479,6 +479,12 @@ function isMeasurementRowFilled(d) {
   ].some(hasValue);
 }
 
+// An item marked "not applicable" — these are omitted from the report.
+function isNotApplicable(value) {
+  const sv = String(value == null ? '' : value).trim().toUpperCase();
+  return sv === 'N' || sv === 'NA' || sv === 'N/A';
+}
+
 /**
  * Normalise a status cell value to one of 'P' | 'F' | 'A' | '' so we can pick
  * the right glyph (a status column may hold P/F/A, PASS/FAIL/ACCEPT/REJECT, or
@@ -842,23 +848,35 @@ function renderPhotoGrid(doc, atts) {
 
 function renderPfnChecklist(doc, section, data, secAtts = []) {
   const title = section.title || 'Receiving Checklist';
-  ensureSpace(doc, 60);
-  renderSectionTitle(doc, title);
 
   const items   = section.items || [];
   const dataArr = Array.isArray(data) ? data : [];
 
+  // Items the inspector marked N/A don't apply to this part, so they are left
+  // out of the report entirely. A section where every item is N/A is omitted.
+  const shownItems = items.filter(item => {
+    const d = dataArr.find(r => r.id === item.id) || {};
+    return !isNotApplicable(d.status);
+  });
+  if (shownItems.length === 0) return;
+
+  ensureSpace(doc, 60);
+  renderSectionTitle(doc, title);
+
   const header = ['#', 'Check Item', 'Requirement', 'Finding', 'Status'];
   const cw     = [24, 175, 183, 114, 36]; // sum = 532
-  const rows   = items.map(item => {
+  const rows   = shownItems.map(item => {
     const d = dataArr.find(r => r.id === item.id) || {};
     return [String(item.id), item.name || '', item.requirement || '', d.finding || '', d.status || ''];
   });
 
   renderTable(doc, header, rows, cw, { statusColIdx: 4, sectionTitle: title });
 
+  // Photos attached to an N/A item are left out with the item itself.
+  const shownIds = new Set(shownItems.map(item => String(item.id)));
   const allImgsPfn = secAtts.filter(a =>
-    (a.mime_type || '').startsWith('image/') && a.file_path && fs.existsSync(a.file_path)
+    (a.mime_type || '').startsWith('image/') && a.file_path && fs.existsSync(a.file_path) &&
+    (a.item_id == null || shownIds.has(String(a.item_id)))
   );
   if (allImgsPfn.length > 0) { vspace(doc, 4); renderPhotoGrid(doc, allImgsPfn); }
 }
@@ -1100,11 +1118,12 @@ function renderGrooveSpecs(doc, section, data, secAtts = []) {
   const items = section.items || [];
   const meas  = Array.isArray(data.measurements) ? data.measurements : [];
 
-  // All specs are listed in the header; only items flagged for entry get a
-  // per-cylinder data row.
+  // Items flagged for entry get a per-cylinder data row; any remaining
+  // reference-only spec is listed in the header instead.
   const entryItems = items.filter(it =>
     it.entry === true || (it.entry === undefined && /wire protrusion/i.test(it.measurement || ''))
   );
+  const referenceItems = items.filter(it => !entryItems.includes(it));
 
   // Omit the whole section if none of the entry items have any cylinder value
   // or status recorded.
@@ -1119,15 +1138,17 @@ function renderGrooveSpecs(doc, section, data, secAtts = []) {
   ensureSpace(doc, 80);
   renderSectionTitle(doc, title);
 
-  // ── Specifications block (reference only) ───────────────────────────────
-  doc.fontSize(8).font('Helvetica-Bold').fillColor(DGRAY);
-  put(doc, 'Specifications', M, doc.y, { width: PW }, doc.y + 12);
-  doc.fontSize(8).font('Helvetica').fillColor(BLACK);
-  for (const item of items) {
-    const line = item.spec ? `${item.measurement}:  ${item.spec}` : item.measurement;
-    put(doc, line, M + 6, doc.y, { width: PW - 6 }, doc.y + 12);
+  // ── Specifications block (specs with no data row of their own) ──────────
+  if (referenceItems.length > 0) {
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(DGRAY);
+    put(doc, 'Specifications', M, doc.y, { width: PW }, doc.y + 12);
+    doc.fontSize(8).font('Helvetica').fillColor(BLACK);
+    for (const item of referenceItems) {
+      const line = item.spec ? `${item.measurement}:  ${item.spec}` : item.measurement;
+      put(doc, line, M + 6, doc.y, { width: PW - 6 }, doc.y + 12);
+    }
+    vspace(doc, 4);
   }
-  vspace(doc, 4);
 
   // ── Data-entry chart(s) ─────────────────────────────────────────────────
   if (entryItems.length === 0) return;

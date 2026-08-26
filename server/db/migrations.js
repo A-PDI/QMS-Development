@@ -57,11 +57,10 @@ const IQI_005_V2_SECTIONS = {
     section_type: 'groove_specs',
     optional: true,
     cylinder_count: 6,
-    // All three specs are shown in the section header. Only items flagged
-    // `entry: true` get per-cylinder data-entry fields (Wire Protrusion only).
+    // Every spec (entry: true) gets its own per-cylinder data-entry chart.
     items: [
-      { id: 1, measurement: 'Groove Diameter', location: '', spec: '6.300" Groove OD for CAT, 5.990" Groove OD for Cummins', entry: false },
-      { id: 2, measurement: 'Groove Depth',    location: '', spec: '.029-.031"', entry: false },
+      { id: 1, measurement: 'Groove Diameter', location: '', spec: '6.300" Groove OD for CAT, 5.990" Groove OD for Cummins', entry: true },
+      { id: 2, measurement: 'Groove Depth',    location: '', spec: '.029-.031"', entry: true },
       { id: 3, measurement: 'Wire Protrusion', location: '', spec: '.008-.010"', entry: true },
     ],
   },
@@ -261,6 +260,73 @@ function applyMigrations(db) {
           JSON.stringify(sections),
           row.id,
         ]);
+      }
+    }
+  });
+
+  // ── Migration: Fire Ring data entry for every spec ────────────────────────
+  // Groove Diameter and Groove Depth used to be reference-only text in the
+  // section header. They now get their own per-cylinder entry chart, exactly
+  // like Wire Protrusion, so flag every Fire Ring spec `entry: true`.
+  once('iqi_005_fire_ring_all_entry', () => {
+    const rows = db.all(
+      "SELECT id, sections FROM inspection_templates WHERE sections LIKE ?",
+      ['%"section_type":"groove_specs"%']
+    );
+    for (const row of rows) {
+      let sections;
+      try {
+        sections = JSON.parse(row.sections);
+      } catch {
+        continue;
+      }
+      let changed = false;
+      for (const key of Object.keys(sections)) {
+        const s = sections[key];
+        if (!s || s.section_type !== 'groove_specs' || !Array.isArray(s.items)) continue;
+        for (const it of s.items) {
+          if (it.entry !== true) { it.entry = true; changed = true; }
+        }
+      }
+      if (changed) {
+        db.run('UPDATE inspection_templates SET sections = ? WHERE id = ?', [
+          JSON.stringify(sections),
+          row.id,
+        ]);
+      }
+    }
+  });
+
+  // ── Migration: clear the legacy 'N' placeholder status ────────────────────
+  // Receiving / Visual checklist rows used to be created with status 'N', which
+  // no control could ever select — it simply meant "not answered yet". 'N' is
+  // now the inspector-chosen "N/A" code (and N/A items are left out of the
+  // PDF), so blank out every 'N' that predates the change.
+  once('clear_legacy_na_status', () => {
+    const rows = db.all("SELECT id, section_data FROM inspections WHERE section_data LIKE ?", ['%"N"%']);
+    for (const row of rows) {
+      let data;
+      try {
+        data = JSON.parse(row.section_data || '{}');
+      } catch {
+        continue;
+      }
+      let changed = false;
+      // Checklist answers are objects carrying an item id plus a status/result
+      // code; no other section type ever stores 'N' in those fields.
+      const walk = (node) => {
+        if (Array.isArray(node)) { node.forEach(walk); return; }
+        if (!node || typeof node !== 'object') return;
+        if (node.id !== undefined) {
+          for (const field of ['status', 'result']) {
+            if (node[field] === 'N') { node[field] = ''; changed = true; }
+          }
+        }
+        for (const value of Object.values(node)) walk(value);
+      };
+      walk(data);
+      if (changed) {
+        db.run('UPDATE inspections SET section_data = ? WHERE id = ?', [JSON.stringify(data), row.id]);
       }
     }
   });
