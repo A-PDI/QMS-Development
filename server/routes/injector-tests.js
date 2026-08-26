@@ -9,11 +9,10 @@
  *   GET  /settings                      → CarbonZapp settings (masked key, last sync)
  *   PUT  /settings                      → save the CarbonZapp API key
  *   POST /sync                          → "Sync Now" — import test records ONLY
- *   POST /export/xlsx                   → selected injectors as an Excel workbook
- *   POST /export/pdf                    → selected injectors as a PDF listing
  *   POST /reports/preview               → selected comparison data (JSON only)
  *   POST /reports/custom                → Custom Report PDF for selected injectors
  *                                          (optional vendor_name; bench brand fallback)
+ *   POST /reports/custom.xlsx           → the same Custom Report as a workbook
  *   POST /reports/inspection            → create/refresh inspection record(s)
  *   POST /reports/shipment-evaluation   → Shipment Evaluation PDF (supplier_evaluation;
  *                                          requires vendor_name)
@@ -40,7 +39,6 @@ const {
 } = require('../services/injectorReports');
 const {
   normaliseCriteria,
-  hasCriteria,
   needsStepData,
   matchesStepCriteria,
   matchedStepLabels,
@@ -49,7 +47,6 @@ const {
 const {
   buildExportModel,
   buildInjectorWorkbook,
-  buildInjectorListPdf,
   exportFilename,
 } = require('../services/injectorExport');
 
@@ -158,24 +155,6 @@ function queryInjectors(criteria) {
     injectors.push({ ...summary, matched_steps: matchedStepLabels(hydrated, criteria) });
   }
   return { injectors, total: totalRow ? totalRow.c : injectors.length };
-}
-
-/**
- * The same query, hydrated with the stored test steps — what the exporters
- * need. Used when an export is driven by the ACTIVE FILTERS rather than by an
- * explicit list of ids, so a 3,000-row export does not have to be requested
- * with 3,000 ids in the body.
- */
-function loadFilteredInjectors(criteria) {
-  const { sql: filterSql, params } = buildListFilters(criteria);
-  const rows = db.all(
-    `SELECT ${LIST_COLUMNS}, report_json FROM injector_test_reports
-      WHERE ${BASE_EXCLUSIONS}${filterSql}${LIST_ORDER}`,
-    params
-  );
-  return rows
-    .map(carbonzapp.hydrateInjectorRow)
-    .filter((injector) => matchesStepCriteria(injector, criteria));
 }
 
 // ── List injectors ─────────────────────────────────────────────────────────
@@ -357,105 +336,26 @@ function reportFailure(err, { type, count, user, noun = 'report' }, next) {
   ));
 }
 
-// ── Export the selected injectors ──────────────────────────────────────────
-// An export is a RECORD LIST, not an engineering report: it says which
-// injectors were selected, how each scored and which test steps it failed.
-// The page's filters only decide which records get here — they never appear in
-// or change the exported file.
-// Two further consequences follow, and both differ from the report routes above:
-//   • a record with no bench results is still exportable — it simply lists as
-//     "No result" — so the report-blocking validation is not applied here
-//   • the row-per-injector layout scales far better than a column-per-injector
-//     PDF, hence the much higher cap
-const MAX_INJECTORS_PER_EXPORT = 5000;
-
+// ── The Custom Report, as a workbook ───────────────────────────────────────
+// The Excel counterpart of POST /reports/custom: same selection rules, same
+// cap, same validation — one report, two formats — so a selection that makes a
+// PDF always makes a workbook too.
 const XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
-/**
- * Resolve what to export. An explicit `injector_ids` selection always wins;
- * otherwise the request's `filters` are applied, which lets the client export
- * a whole filtered set without sending thousands of ids.
- */
-function resolveExportSelection(req) {
-  const body = req.body || {};
-  const criteria = normaliseCriteria(body.filters || {});
-  const ids = Array.isArray(body.injector_ids) ? body.injector_ids : [];
-
-  if (ids.length > MAX_INJECTORS_PER_EXPORT) {
-    throw new AppError(
-      `Select at most ${MAX_INJECTORS_PER_EXPORT} injectors for one export.`,
-      400, 'VALIDATION_ERROR'
-    );
-  }
-
-  // `use_filters` lets the client ask for the whole filtered set explicitly,
-  // rather than it being inferred from an empty selection.
-  const fromFilters = ids.length === 0 && (body.use_filters === true || hasCriteria(criteria));
-  const injectors = fromFilters ? loadFilteredInjectors(criteria) : loadSelectedInjectors(ids);
-
-  if (!fromFilters && ids.length === 0) {
-    throw new AppError(
-      'Select at least one injector, or apply a filter, to export.',
-      400, 'VALIDATION_ERROR'
-    );
-  }
-  if (injectors.length === 0) {
-    throw new AppError('No matching injectors found. Refresh the list and try again.', 404, 'NOT_FOUND');
-  }
-  if (injectors.length > MAX_INJECTORS_PER_EXPORT) {
-    throw new AppError(
-      `That filter matches ${injectors.length} injectors — narrow it to ${MAX_INJECTORS_PER_EXPORT} or fewer.`,
-      400, 'VALIDATION_ERROR'
-    );
-  }
-
-  // Missing serial/part numbers do not block an export; they are surfaced as
-  // the same non-blocking warnings the reports use.
-  const { warnings } = validateSelection(injectors);
-  return { injectors, warnings, fromFilters };
-}
-
-/**
- * Build the shared export model for one request.
- *
- * The filters chose WHICH injectors are here and play no further part: they are
- * deliberately not passed to the exporter, so the file that comes out is the
- * same whether the records were filtered or ticked by hand.
- */
-function exportModelFor(req) {
-  const { injectors, warnings, fromFilters } = resolveExportSelection(req);
-  const model = buildExportModel(injectors, {
-    title: String((req.body && req.body.title) || 'Injector Test Results').slice(0, 120),
-    vendorName: String((req.body && req.body.vendor_name) || '').slice(0, 120),
-  });
-  return { model, warnings, fromFilters };
-}
-
-router.post('/export/xlsx', requireAdmin, async (req, res, next) => {
+router.post('/reports/custom.xlsx', requireAdmin, async (req, res, next) => {
   let count = 0;
   try {
-    const { model, warnings } = exportModelFor(req);
-    count = model.summary.total;
+    const { injectors, validation } = resolveSelection(req);
+    count = injectors.length;
+    const model = buildExportModel(injectors, {
+      vendorName: String((req.body && req.body.vendor_name) || '').slice(0, 120),
+    });
     const buffer = await buildInjectorWorkbook(model);
     const filename = exportFilename(model, 'xlsx');
-    console.log(`[InjectorExport] xlsx: ${count} injector(s) → ${filename} (user=${req.user?.id})`);
-    sendFile(res, buffer, filename, XLSX_CONTENT_TYPE, warnings);
+    console.log(`[InjectorReports] custom report (xlsx): ${count} injector(s) → ${filename} (user=${req.user?.id})`);
+    sendFile(res, buffer, filename, XLSX_CONTENT_TYPE, validation.warnings);
   } catch (err) {
-    return reportFailure(err, { type: 'export/xlsx', count, user: req.user, noun: 'export' }, next);
-  }
-});
-
-router.post('/export/pdf', requireAdmin, async (req, res, next) => {
-  let count = 0;
-  try {
-    const { model, warnings } = exportModelFor(req);
-    count = model.summary.total;
-    const buffer = await buildInjectorListPdf(model);
-    const filename = exportFilename(model, 'pdf');
-    console.log(`[InjectorExport] pdf: ${count} injector(s) → ${filename} (user=${req.user?.id})`);
-    sendPdf(res, buffer, filename, warnings);
-  } catch (err) {
-    return reportFailure(err, { type: 'export/pdf', count, user: req.user, noun: 'export' }, next);
+    return reportFailure(err, { type: `${REPORT_TYPES.CUSTOMER}/xlsx`, count, user: req.user }, next);
   }
 });
 

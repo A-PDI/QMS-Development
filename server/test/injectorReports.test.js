@@ -244,14 +244,41 @@ test('selecting a set of injector rows reports exactly that set', async () => {
   for (const inj of otherRows) assert.ok(!text.includes(inj.serial_number), `${inj.serial_number} should not appear`);
 });
 
-test('report column order is always ascending by serial number', async () => {
+test('report column order is the order the injectors were arranged in', async () => {
   resetInjectorData();
   await syncWith(benchBatch(4));
   const rows = storedInjectors();
   const order = [rows[3].id, rows[0].id, rows[2].id];
 
+  // The selection panel is reorderable, so the ids arrive in the user's order
+  // and must come back in it — never re-sorted behind their back.
   const selected = loadSelectedInjectors(order);
-  assert.deepStrictEqual(selected.map((r) => r.serial_number), ['SN001', 'SN003', 'SN004']);
+  assert.deepStrictEqual(selected.map((r) => r.serial_number), ['SN004', 'SN001', 'SN003']);
+
+  const reversed = loadSelectedInjectors([...order].reverse());
+  assert.deepStrictEqual(reversed.map((r) => r.serial_number), ['SN003', 'SN001', 'SN004']);
+});
+
+test('an id that no longer exists is dropped without disturbing the order', async () => {
+  resetInjectorData();
+  await syncWith(benchBatch(3));
+  const rows = storedInjectors();
+
+  const selected = loadSelectedInjectors([rows[2].id, 'gone-missing', rows[0].id]);
+  assert.deepStrictEqual(selected.map((r) => r.serial_number), ['SN003', 'SN001']);
+});
+
+test('the arranged order reaches the generated report columns', async () => {
+  resetInjectorData();
+  await syncWith(benchBatch(3));
+  const rows = storedInjectors();
+  const arranged = [rows[2].id, rows[0].id, rows[1].id];
+
+  const { buffer } = await buildCustomerReport(loadSelectedInjectors(arranged));
+  const text = extractPdfText(buffer).join(' ');
+  const positionOf = (serial) => text.indexOf(serial);
+  assert.ok(positionOf('SN003') < positionOf('SN001'), 'SN003 is the first column');
+  assert.ok(positionOf('SN001') < positionOf('SN002'), 'SN002 is the last column');
 });
 
 // ── Scenario 9: Generate Both ────────────────────────────────────────────────

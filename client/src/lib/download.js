@@ -17,6 +17,11 @@
 
 const DEFAULT_EXTENSION = '.pdf'
 
+// Extensions this app produces. deriveFilename strips whichever one a name
+// already carries, so a PDF name can be re-pointed at a workbook without the
+// old extension surviving in the middle ("Batch.pdf_Report.xlsx").
+const KNOWN_EXTENSIONS = ['.pdf', '.xlsx', '.xls', '.csv']
+
 /** True when the browser can offer a real "Save As" dialog. */
 export function isSaveFilePickerSupported(win = typeof window !== 'undefined' ? window : undefined) {
   return !!win && typeof win.showSaveFilePicker === 'function'
@@ -43,13 +48,23 @@ export function ensureExtension(name, extension = DEFAULT_EXTENSION) {
   return `${base.replace(/\.+$/, '')}${ext}`
 }
 
+/** Strip a trailing known extension, whichever one the name carries. */
+function stripExtension(name) {
+  const text = String(name ?? '')
+  const lower = text.toLowerCase()
+  const hit = KNOWN_EXTENSIONS.find((ext) => lower.endsWith(ext))
+  return hit ? text.slice(0, -hit.length) : text
+}
+
 /**
  * Build a related filename from one the user chose:
- *   deriveFilename('Batch 12.pdf', 'Inspection') → 'Batch 12_Inspection.pdf'
+ *   deriveFilename('Batch 12.pdf', 'Inspection')          → 'Batch 12_Inspection.pdf'
+ *   deriveFilename('Batch 12.pdf', 'Report', '.xlsx')     → 'Batch 12_Report.xlsx'
+ *   deriveFilename('Batch 12.pdf', '', '.xlsx')           → 'Batch 12.xlsx'
  */
 export function deriveFilename(filename, suffix, extension = DEFAULT_EXTENSION) {
   const ext = extension.startsWith('.') ? extension : `.${extension}`
-  const base = String(filename ?? '').replace(new RegExp(`${ext.replace('.', '\\.')}$`, 'i'), '')
+  const base = stripExtension(filename)
   const suffixPart = String(suffix ?? '').trim()
   return ensureExtension(`${base}${suffixPart ? `_${suffixPart}` : ''}`, ext)
 }

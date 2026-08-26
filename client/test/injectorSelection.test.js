@@ -20,6 +20,19 @@ import {
   describeSelection,
   vendorPromptReport,
   suggestReportName,
+  moveSelected,
+  moveSelectedTo,
+  sortSelectionBySerial,
+  OUTPUTS,
+  FORMATS,
+  emptyOutputs,
+  toggleOutput,
+  toggleFormat,
+  formatsApply,
+  reportFormats,
+  validateOutputs,
+  producesFiles,
+  describeOutputs,
   parseTokens,
   emptyFilters,
   buildInjectorQuery,
@@ -66,19 +79,18 @@ test('part, serial, date range, and four-state result filters work together', ()
 })
 
 // ── Selection ───────────────────────────────────────────────────────────────
-test('active selection re-sorts by serial after additions and removals', () => {
+test('the selection keeps the order injectors were added in', () => {
   let selected = []
   selected = toggleSelected(selected, '3')
   selected = toggleSelected(selected, '1')
   selected = toggleSelected(selected, '2')
-  assert.deepStrictEqual(selected, ['3', '1', '2'])
+  assert.deepStrictEqual(selected, ['3', '1', '2'], 'a new injector goes to the end')
 
   selected = toggleSelected(selected, '1')
   assert.deepStrictEqual(selected, ['3', '2'])
-  assert.deepStrictEqual(orderedSelection(selected, list).map((i) => i.id), ['2', '3'])
-
-  const natural = [inj('10', { serial_number: 'SN-10' }), inj('02', { serial_number: 'SN-2' })]
-  assert.deepStrictEqual(sortBySerialNumber(natural).map((i) => i.serial_number), ['SN-2', 'SN-10'])
+  // The order is the report's column order and is never re-sorted behind the
+  // user's back — only the helpers below change it.
+  assert.deepStrictEqual(orderedSelection(selected, list).map((i) => i.id), ['3', '2'])
 })
 
 test('select-all-visible adds only missing rows and keeps hidden selections', () => {
@@ -126,11 +138,16 @@ test('the selection is described without job-number grouping', () => {
   assert.strictEqual(describeSelection([list[0], list[1]]), '2 injectors')
 })
 
-test('vendor information is requested for every report that uses the shared header', () => {
-  assert.strictEqual(vendorPromptReport('customer'), 'Custom Report')
-  assert.strictEqual(vendorPromptReport('both'), 'Custom Report')
-  assert.strictEqual(vendorPromptReport('evaluation'), 'Shipment Evaluation Report')
-  assert.strictEqual(vendorPromptReport('inspection'), '')
+test('vendor information is requested for every output that uses the shared header', () => {
+  assert.strictEqual(vendorPromptReport(['report']), 'Custom Report')
+  assert.strictEqual(vendorPromptReport(['preview']), 'Custom Report')
+  assert.strictEqual(vendorPromptReport(['evaluation']), 'Shipment Evaluation Report')
+  assert.strictEqual(
+    vendorPromptReport(['report', 'evaluation']), 'Custom Report and Shipment Evaluation',
+    'one prompt covers both when both are selected'
+  )
+  assert.strictEqual(vendorPromptReport(['inspection']), '', 'the inspection record needs no vendor')
+  assert.strictEqual(vendorPromptReport([]), '')
 })
 
 test('suggested filenames contain part, optional vendor and count but no job number', () => {
@@ -248,4 +265,102 @@ test('active filters are described in the words shown above the list', () => {
     ['Failed NEW-CODE'],
     'an unmapped step code falls back to the code itself'
   )
+})
+
+
+// ── Report order ────────────────────────────────────────────────────────────
+test('an injector moves one place at a time and stops at the ends', () => {
+  const order = ['a', 'b', 'c', 'd']
+  assert.deepStrictEqual(moveSelected(order, 'c', -1), ['a', 'c', 'b', 'd'])
+  assert.deepStrictEqual(moveSelected(order, 'b', 1), ['a', 'c', 'b', 'd'])
+
+  assert.deepStrictEqual(moveSelected(order, 'a', -1), order, 'the first cannot move earlier')
+  assert.deepStrictEqual(moveSelected(order, 'd', 1), order, 'the last cannot move later')
+  assert.deepStrictEqual(moveSelected(order, 'nope', -1), order, 'an unknown id changes nothing')
+  assert.deepStrictEqual(order, ['a', 'b', 'c', 'd'], 'the source array is not mutated')
+})
+
+test('dragging moves an injector to an arbitrary position', () => {
+  const order = ['a', 'b', 'c', 'd']
+  assert.deepStrictEqual(moveSelectedTo(order, 3, 0), ['d', 'a', 'b', 'c'], 'last to first')
+  assert.deepStrictEqual(moveSelectedTo(order, 0, 3), ['b', 'c', 'd', 'a'], 'first to last')
+  assert.deepStrictEqual(moveSelectedTo(order, 1, 1), order, 'a no-op drop changes nothing')
+  assert.deepStrictEqual(moveSelectedTo(order, 0, 99), ['b', 'c', 'd', 'a'], 'past the end clamps')
+  assert.deepStrictEqual(moveSelectedTo(order, 9, 0), order, 'an out-of-range source is ignored')
+})
+
+test('sort by serial resets the order naturally, with blanks last', () => {
+  const available = [
+    inj('x', { serial_number: 'SN-10' }),
+    inj('y', { serial_number: 'SN-2' }),
+    inj('z', { serial_number: '' }),
+  ]
+  assert.deepStrictEqual(sortSelectionBySerial(['x', 'z', 'y'], available), ['y', 'x', 'z'])
+  assert.deepStrictEqual(sortBySerialNumber(available).map((i) => i.serial_number), ['SN-2', 'SN-10', ''])
+})
+
+// ── Outputs ─────────────────────────────────────────────────────────────────
+test('the four outputs toggle independently and keep a stable order', () => {
+  assert.deepStrictEqual(OUTPUTS.map((o) => o.value), ['preview', 'report', 'inspection', 'evaluation'])
+  assert.deepStrictEqual(FORMATS.map((f) => f.value), ['xlsx', 'pdf'])
+  assert.deepStrictEqual(emptyOutputs(), { outputs: [], formats: [] })
+
+  let outputs = toggleOutput([], 'evaluation')
+  outputs = toggleOutput(outputs, 'preview')
+  assert.deepStrictEqual(outputs, ['preview', 'evaluation'], 'listed in OUTPUTS order, not click order')
+
+  outputs = toggleOutput(outputs, 'evaluation')
+  assert.deepStrictEqual(outputs, ['preview'], 'clicking again removes it')
+
+  assert.deepStrictEqual(toggleFormat(toggleFormat([], 'pdf'), 'xlsx'), ['xlsx', 'pdf'])
+})
+
+test('the Excel/PDF choice applies to Preview and Report only', () => {
+  assert.strictEqual(formatsApply(['preview']), true)
+  assert.strictEqual(formatsApply(['report']), true)
+  assert.strictEqual(formatsApply(['inspection', 'evaluation']), false, 'those two are always PDF')
+  assert.strictEqual(formatsApply([]), false)
+
+  // A format ticked against Inspection or Evaluation produces no extra file.
+  assert.deepStrictEqual(reportFormats({ outputs: ['evaluation'], formats: ['xlsx'] }), [])
+  assert.deepStrictEqual(reportFormats({ outputs: ['report'], formats: ['xlsx', 'pdf'] }), ['xlsx', 'pdf'])
+})
+
+test('Preview and Report are one document, so together they make one file each', () => {
+  const both = { outputs: ['preview', 'report'], formats: ['pdf'] }
+  assert.deepStrictEqual(reportFormats(both), ['pdf'], 'not two copies of the same PDF')
+  assert.deepStrictEqual(
+    reportFormats({ outputs: ['preview'], formats: ['pdf'] }),
+    reportFormats({ outputs: ['report'], formats: ['pdf'] })
+  )
+})
+
+test('Report needs a format; Preview on its own does not', () => {
+  assert.strictEqual(validateOutputs(emptyOutputs()).ok, false)
+  assert.match(validateOutputs(emptyOutputs()).message, /at least one of Preview/)
+
+  assert.strictEqual(validateOutputs({ outputs: ['report'], formats: [] }).ok, false)
+  assert.match(validateOutputs({ outputs: ['report'], formats: [] }).message, /Excel or PDF/)
+
+  assert.strictEqual(validateOutputs({ outputs: ['report'], formats: ['xlsx'] }).ok, true)
+  assert.strictEqual(validateOutputs({ outputs: ['preview'], formats: [] }).ok, true)
+  assert.strictEqual(validateOutputs({ outputs: ['inspection'] }).ok, true)
+  assert.strictEqual(validateOutputs({ outputs: ['evaluation'] }).ok, true)
+})
+
+test('a run only asks where to save when it will actually write a file', () => {
+  assert.strictEqual(producesFiles({ outputs: ['preview'], formats: [] }), false, 'preview alone writes nothing')
+  assert.strictEqual(producesFiles({ outputs: ['preview'], formats: ['pdf'] }), true)
+  assert.strictEqual(producesFiles({ outputs: ['inspection'] }), true)
+  assert.strictEqual(producesFiles({ outputs: ['evaluation'] }), true)
+  assert.strictEqual(producesFiles(emptyOutputs()), false)
+})
+
+test('the chosen outputs are described the way the page announces them', () => {
+  assert.strictEqual(
+    describeOutputs({ outputs: ['preview', 'report', 'evaluation'], formats: ['xlsx', 'pdf'] }),
+    'Preview, Report (Excel + PDF), Evaluation'
+  )
+  assert.strictEqual(describeOutputs({ outputs: ['inspection'], formats: ['xlsx'] }), 'Inspection')
+  assert.strictEqual(describeOutputs(emptyOutputs()), '')
 })

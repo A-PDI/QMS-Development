@@ -92,6 +92,14 @@ test('illegal filename characters are replaced, useful ones are kept', () => {
 test('related filenames derive from the chosen one', () => {
   assert.strictEqual(deriveFilename('Batch 12.pdf', 'Inspection'), 'Batch 12_Inspection.pdf')
   assert.strictEqual(deriveFilename('Batch 12_Inspection.pdf', '2'), 'Batch 12_Inspection_2.pdf')
+
+  // Switching format must not leave the old extension inside the name.
+  assert.strictEqual(deriveFilename('Batch 12.pdf', 'Report', '.xlsx'), 'Batch 12_Report.xlsx')
+  assert.strictEqual(deriveFilename('Batch 12.pdf', '', '.xlsx'), 'Batch 12.xlsx')
+  assert.strictEqual(deriveFilename('Batch 12.xlsx', '', '.pdf'), 'Batch 12.pdf')
+  assert.strictEqual(deriveFilename('Batch 12', 'Report', '.xlsx'), 'Batch 12_Report.xlsx')
+  assert.strictEqual(deriveFilename('Rev 2.1 batch.pdf', '', '.xlsx'), 'Rev 2.1 batch.xlsx',
+    'a dot inside the name is not an extension')
 })
 
 // ── Scenario 15: the user can change the filename ────────────────────────────

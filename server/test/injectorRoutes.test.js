@@ -13,6 +13,7 @@ const express = require('express');
 
 const { db, extractPdfText, resetInjectorData, injectorInspectionCount } = require('./helpers/testEnv');
 const { benchBatch } = require('./helpers/benchData');
+const ExcelJS = require('exceljs');
 const { errorHandler } = require('../middleware/error');
 const injectorRoutes = require('../routes/injector-tests');
 const carbonzapp = require('../services/carbonzapp');
@@ -341,144 +342,98 @@ test('the step catalog lists the points in the synced data with their counts', a
 });
 
 // ── Export ───────────────────────────────────────────────────────────────────
-test('the selected injectors export as an Excel workbook', async () => {
+test('the custom report is also served as an Excel workbook', async () => {
   const ids = await seedInjectors(3);
   await withUser(ADMIN, async (url) => {
-    const res = await fetch(`${url}/api/injector-tests/export/xlsx`, {
+    const res = await fetch(`${url}/api/injector-tests/reports/custom.xlsx`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ injector_ids: ids }),
     });
     assert.strictEqual(res.status, 200);
     assert.match(res.headers.get('content-type'), /spreadsheetml\.sheet/);
-    assert.match(res.headers.get('content-disposition'), /attachment; filename="InjectorTestResults_.*_3\.xlsx"/);
+    assert.match(res.headers.get('content-disposition'), /attachment; filename="CustomReport_.*_3\.xlsx"/);
     const buffer = Buffer.from(await res.arrayBuffer());
     assert.strictEqual(buffer.subarray(0, 2).toString(), 'PK', 'an xlsx file is a zip archive');
   });
 });
 
-test('the selected injectors export as a PDF listing', async () => {
+test('the workbook columns follow the order the injectors were sent in', async () => {
   const ids = await seedInjectors(3);
   await withUser(ADMIN, async (url) => {
-    const res = await fetch(`${url}/api/injector-tests/export/pdf`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ injector_ids: ids }),
-    });
-    assert.strictEqual(res.status, 200);
-    assert.strictEqual(res.headers.get('content-type'), 'application/pdf');
-    assert.match(res.headers.get('x-report-filename'), /^InjectorTestResults_.*_3\.pdf$/);
-    const text = extractPdfText(Buffer.from(await res.arrayBuffer())).join(' ');
-    assert.match(text, /Injector Test Results/);
-    assert.match(text, /XT001/, 'every selected serial is listed');
+    const workbookFor = async (order) => {
+      const res = await fetch(`${url}/api/injector-tests/reports/custom.xlsx`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ injector_ids: order }),
+      });
+      assert.strictEqual(res.status, 200);
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(Buffer.from(await res.arrayBuffer()));
+      return wb.getWorksheet('Comparison').getRow(1).values.slice(4)
+        .map((header) => String(header).split('SN ')[1]);
+    };
+
+    assert.deepStrictEqual(await workbookFor(ids), ['XT001', 'XT002', 'XT003']);
+    assert.deepStrictEqual(await workbookFor([ids[2], ids[0], ids[1]]), ['XT003', 'XT001', 'XT002']);
   });
 });
 
-test('an export can be driven by the filters instead of by a list of ids', async () => {
-  await seedForFiltering();
+test('the two report formats accept exactly the same selections', async () => {
+  const ids = await seedInjectors(2);
+  // A record the bench never scored blocks BOTH formats, not just the PDF.
+  db.run(
+    "UPDATE injector_test_reports SET report_json = '{}', steps_total = 0 WHERE id = ?",
+    [ids[1]]
+  );
   await withUser(ADMIN, async (url) => {
-    const res = await fetch(`${url}/api/injector-tests/export/pdf`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filters: { steps: 'IVM06-R', step_status: 'fail' } }),
-    });
-    assert.strictEqual(res.status, 200);
-    assert.match(res.headers.get('x-report-filename'), /_2\.pdf$/, 'only the two failing injectors are exported');
-
-    const text = extractPdfText(Buffer.from(await res.arrayBuffer())).join(' ');
-    assert.match(text, /SN002/);
-    assert.match(text, /SN004/);
-    assert.ok(!text.includes('SN001'), 'a passing injector is not in a failures export');
-  });
-});
-
-test('a filter only chooses the records — it never shows up in the export', async () => {
-  await seedForFiltering();
-  await withUser(ADMIN, async (url) => {
-    const post = (path, body) => fetch(url + path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-
-    // The two injectors that failed Peak Torque - Return, found by filtering…
-    const filtered = await post('/api/injector-tests/export/pdf', {
-      filters: { steps: 'IVM06-R', step_status: 'fail' },
-    });
-    // …and the same two, picked by id.
-    const list = await (await fetch(`${url}/api/injector-tests?steps=IVM06-R&step_status=fail`)).json();
-    const byId = await post('/api/injector-tests/export/pdf', {
-      injector_ids: list.injectors.map((row) => row.id),
-    });
-
-    const textOf = async (res) => extractPdfText(Buffer.from(await res.arrayBuffer()))
-      .join(' ')
-      // The generation timestamp is the one thing that legitimately differs.
-      .replace(/Generated \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/, 'Generated —');
-
-    const filteredText = await textOf(filtered);
-    assert.strictEqual(filteredText, await textOf(byId), 'the two exports are identical');
-    assert.ok(!/filter/i.test(filteredText), 'the exported PDF never mentions a filter');
-    assert.ok(!/Peak Torque - Return[^,]*failed/i.test(filteredText), 'no filter phrase is printed');
-  });
-});
-
-test('an export with neither a selection nor a filter is refused', async () => {
-  await seedInjectors(2);
-  await withUser(ADMIN, async (url) => {
-    for (const path of ['/api/injector-tests/export/xlsx', '/api/injector-tests/export/pdf']) {
+    for (const path of ['/api/injector-tests/reports/custom', '/api/injector-tests/reports/custom.xlsx']) {
       const res = await fetch(url + path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ injector_ids: ids }),
       });
-      assert.strictEqual(res.status, 400);
-      const err = await res.json();
-      assert.match(err.error, /at least one injector, or apply a filter/i);
-      assert.strictEqual(err.code, 'VALIDATION_ERROR');
+      assert.strictEqual(res.status, 400, `${path} should refuse an unscored record`);
+      assert.match((await res.json()).error, /no test-bench results/i);
     }
   });
 });
 
-test('an export includes a record with no bench results instead of refusing it', async () => {
-  const ids = await seedInjectors(2);
-  // A record the bench never scored — blocked for reports, listable in an export.
-  db.run(
-    "UPDATE injector_test_reports SET report_json = '{}', steps_total = 0, steps_passed = 0, " +
-    "steps_failed = 0, result_status = 'unknown', overall_pass = NULL WHERE id = ?",
-    [ids[1]]
-  );
+test('a filter only chooses the records — it never shows up in the workbook', async () => {
+  await seedForFiltering();
   await withUser(ADMIN, async (url) => {
-    const report = await fetch(`${url}/api/injector-tests/reports/custom`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ injector_ids: ids }),
-    });
-    assert.strictEqual(report.status, 400, 'a report still refuses an unscored record');
+    // The two injectors that failed Peak Torque - Return, found by filtering.
+    const list = await (await fetch(`${url}/api/injector-tests?steps=IVM06-R&step_status=fail`)).json();
+    assert.deepStrictEqual(list.injectors.map((row) => row.serial_number).sort(), ['SN002', 'SN004']);
 
-    const res = await fetch(`${url}/api/injector-tests/export/pdf`, {
+    const res = await fetch(`${url}/api/injector-tests/reports/custom.xlsx`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ injector_ids: ids }),
+      body: JSON.stringify({ injector_ids: list.injectors.map((row) => row.id) }),
     });
     assert.strictEqual(res.status, 200);
-    const text = extractPdfText(Buffer.from(await res.arrayBuffer())).join(' ');
-    assert.match(text, /No result/, 'the unscored record is listed as having no result');
+
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(Buffer.from(await res.arrayBuffer()));
+    const text = wb.worksheets
+      .map((sheet) => sheet.getRows(1, sheet.rowCount).map((row) => row.values.join(' ')).join('\n'))
+      .join('\n');
+    assert.ok(!/filter/i.test(text), 'the workbook never mentions a filter');
+    assert.match(text, /SN002/);
+    assert.ok(!/SN001/.test(text), 'a passing injector is not in a failures workbook');
   });
 });
 
-test('the export routes are admin-only like every other injector route', async () => {
+test('the workbook and step routes are admin-only like every other injector route', async () => {
   const ids = await seedInjectors(2);
   for (const user of [QC_MANAGER, INSPECTOR]) {
     await withUser(user, async (url) => {
-      for (const path of ['/api/injector-tests/export/xlsx', '/api/injector-tests/export/pdf']) {
-        const res = await fetch(url + path, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ injector_ids: ids }),
-        });
-        assert.strictEqual(res.status, 403, `${user.role} POST ${path} should be 403`);
-      }
+      const res = await fetch(`${url}/api/injector-tests/reports/custom.xlsx`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ injector_ids: ids }),
+      });
+      assert.strictEqual(res.status, 403, `${user.role} POST /reports/custom.xlsx should be 403`);
       const steps = await fetch(`${url}/api/injector-tests/steps`);
       assert.strictEqual(steps.status, 403, `${user.role} GET /steps should be 403`);
     });

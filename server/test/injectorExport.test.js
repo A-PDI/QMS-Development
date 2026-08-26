@@ -1,16 +1,14 @@
 'use strict';
 /**
- * Excel and PDF export of a selected set of injector test records.
- *
- * The two formats are built from ONE model, so these tests assert the model
- * once and then check that each format actually carries it.
+ * The Custom Report as an Excel workbook: the report grid the preview shows and
+ * the PDF prints, plus the flat data behind it.
  */
 
 const test = require('node:test');
 const assert = require('node:assert');
 const ExcelJS = require('exceljs');
 
-const { db, extractPdfText, resetInjectorData } = require('./helpers/testEnv');
+const { db, resetInjectorData } = require('./helpers/testEnv');
 const { benchBatch } = require('./helpers/benchData');
 const carbonzapp = require('../services/carbonzapp');
 const { loadSelectedInjectors } = require('../services/injectorReports');
@@ -18,7 +16,6 @@ const {
   SUMMARY_COLUMNS,
   buildExportModel,
   buildInjectorWorkbook,
-  buildInjectorListPdf,
   exportFilename,
   specificationOf,
   failedStepLabels,
@@ -125,7 +122,8 @@ test('the workbook holds the injectors, their steps and a summary', async () => 
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await buildInjectorWorkbook(model));
 
-  assert.deepStrictEqual(workbook.worksheets.map((w) => w.name), ['Injectors', 'Test Steps', 'Summary']);
+  assert.deepStrictEqual(workbook.worksheets.map((w) => w.name),
+    ['Comparison', 'Injectors', 'Test Steps', 'Summary']);
 
   const sheet = workbook.getWorksheet('Injectors');
   assert.strictEqual(sheet.rowCount, 5, 'a header row plus four injectors');
@@ -151,6 +149,75 @@ test('the workbook holds the injectors, their steps and a summary', async () => 
   assert.match(text, /Part Numbers\s+6513589PX/);
 });
 
+// ── The report grid ─────────────────────────────────────────────────────────
+/** The Comparison sheet as a plain array-of-arrays, for readable assertions. */
+async function comparisonGrid(injectors) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await buildInjectorWorkbook(buildExportModel(injectors)));
+  const sheet = workbook.getWorksheet('Comparison');
+  return sheet.getRows(1, sheet.rowCount).map((row) => row.values.slice(1));
+}
+
+test('the Comparison sheet is the report: steps down, injectors across', async () => {
+  const grid = await comparisonGrid(seed());
+
+  assert.deepStrictEqual(grid[0].slice(0, 3), ['Test Step', 'Specification', 'Unit']);
+  assert.deepStrictEqual(grid[0].slice(3), [
+    '6513589PX\nSN SN001', '6513589PX\nSN SN002', '6513589PX\nSN SN003', '6513589PX\nSN SN004',
+  ], 'one column per injector, headed by part number and serial');
+
+  assert.deepStrictEqual(grid.slice(1, -1).map((row) => row[0]),
+    ['Peak HP', 'Peak Torque - Delivery', 'Peak Torque - Return']);
+  assert.deepStrictEqual(grid[1].slice(0, 3), ['Peak HP', '220.0 - 240.0', 'mm3/STRK']);
+
+  const overall = grid[grid.length - 1];
+  assert.strictEqual(overall[0], 'Overall Result');
+  assert.deepStrictEqual(overall.slice(3), ['PASS', 'FAIL', 'PASS', 'DNF']);
+});
+
+test('a plain reading is written as a number so the sheet can be charted', async () => {
+  const grid = await comparisonGrid(seed());
+  const peakHp = grid[1];
+
+  assert.strictEqual(peakHp[3], 230, 'a lone numeric reading is a number, not text');
+  assert.strictEqual(typeof peakHp[3], 'number');
+
+  // The interrupted injector's Peak Torque reads as text, not a coerced zero.
+  const peakTorque = grid[2];
+  assert.strictEqual(typeof peakTorque[6], 'string');
+  assert.match(String(peakTorque[6]), /No Test|Error/i);
+});
+
+test('the Comparison sheet columns follow the order the injectors were given', async () => {
+  const injectors = seed();
+  const reordered = [injectors[2], injectors[0], injectors[3], injectors[1]];
+  const grid = await comparisonGrid(reordered);
+
+  assert.deepStrictEqual(
+    grid[0].slice(3).map((h) => String(h).split('SN ')[1]),
+    ['SN003', 'SN001', 'SN004', 'SN002'],
+    'the arranged order is the column order'
+  );
+  assert.deepStrictEqual(grid[grid.length - 1].slice(3), ['PASS', 'PASS', 'DNF', 'FAIL']);
+});
+
+test('the workbook grid, the preview and the printed report show the same rows', async () => {
+  const injectors = seed();
+  const model = buildExportModel(injectors);
+  const grid = await comparisonGrid(injectors);
+
+  // The Comparison sheet is built from the preview model, so the step rows and
+  // the per-injector results must line up exactly.
+  assert.deepStrictEqual(
+    grid.slice(1, -1).map((row) => row[0]),
+    model.comparison.rows.map((row) => row.label)
+  );
+  assert.deepStrictEqual(
+    grid[grid.length - 1].slice(3),
+    model.comparison.injectors.map((injector) => injector.result)
+  );
+});
+
 test('no sheet mentions the filters that found the injectors', async () => {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await buildInjectorWorkbook(buildExportModel(seed())));
@@ -160,70 +227,9 @@ test('no sheet mentions the filters that found the injectors', async () => {
   }
 });
 
-// ── PDF ─────────────────────────────────────────────────────────────────────
-test('the PDF listing prints the totals and every injector, and no filter', async () => {
-  const buffer = await buildInjectorListPdf(buildExportModel(seed()));
-  assert.strictEqual(buffer.subarray(0, 4).toString(), '%PDF');
-
-  const text = extractPdfText(buffer).join(' ');
-  assert.match(text, /Injector Test Results/);
-  assert.match(text, /INJECTORS EXPORTED 4/, 'the headline totals are printed');
-  for (const serial of ['SN001', 'SN002', 'SN003', 'SN004']) {
-    assert.ok(text.includes(serial), `${serial} is listed`);
-  }
-  assert.match(text, /Page 1 of 1/);
-  assert.ok(!/filter/i.test(text), 'nothing on the page mentions a filter');
-  assert.ok(!/SELECTION/.test(text), 'no applied-selection block is printed');
-});
-
-test('handing the exporter filter criteria cannot change what it writes', async () => {
-  // A guard against filter provenance creeping back in: even when a caller
-  // passes the criteria that found these records, the file is unchanged.
-  const at = '2026-06-30T12:00:00.000Z';
-  const injectors = seed();
-  const plain = buildExportModel(injectors, { generatedAt: at });
-  const withCriteria = buildExportModel(injectors, {
-    generatedAt: at,
-    criteria: { part_number: '6513589PX', steps: 'IVM06-R', step_status: 'fail' },
-  });
-
-  assert.deepStrictEqual(withCriteria, plain, 'the model ignores criteria entirely');
-
-  const pdfOf = async (model) => extractPdfText(await buildInjectorListPdf(model)).join(' ');
-  assert.strictEqual(await pdfOf(withCriteria), await pdfOf(plain));
-
-  const sheetsOf = async (model) => {
-    const wb = new ExcelJS.Workbook();
-    await wb.xlsx.load(await buildInjectorWorkbook(model));
-    return wb.worksheets
-      .map((w) => `${w.name}\n${w.getRows(1, w.rowCount).map((r) => r.values.join('|')).join('\n')}`)
-      .join('\n--\n');
-  };
-  assert.strictEqual(await sheetsOf(withCriteria), await sheetsOf(plain));
-});
-
-test('a long selection paginates with its header and page numbers intact', async () => {
-  resetInjectorData();
-  carbonzapp.upsertReports(benchBatch(60, { job: 'Production', prefix: 'LG', idPrefix: 'rep-LG' }));
-  const ids = db.all('SELECT id FROM injector_test_reports', []).map((r) => r.id);
-  const model = buildExportModel(loadSelectedInjectors(ids));
-
-  const pages = extractPdfText(await buildInjectorListPdf(model)).join(' ');
-  assert.match(pages, /Page 1 of [2-9]/, 'the listing runs past one page');
-  assert.match(pages, /Continued · injector/, 'continuation pages say where they resume');
-  assert.strictEqual((pages.match(/SERIAL NUMBER/g) || []).length >= 2, true, 'the column header repeats');
-});
-
-test('an empty selection produces a valid, explicit PDF rather than failing', async () => {
-  const model = buildExportModel([]);
-  const text = extractPdfText(await buildInjectorListPdf(model)).join(' ');
-  assert.match(text, /No injectors to list/);
-});
-
 // ── Filenames ───────────────────────────────────────────────────────────────
-test('export filenames carry the part number and the record count', () => {
+test('the workbook filename matches the Custom Report PDF it accompanies', () => {
   const model = buildExportModel(seed());
-  assert.strictEqual(exportFilename(model, 'xlsx'), 'InjectorTestResults_6513589_4.xlsx');
-  assert.strictEqual(exportFilename(model, 'pdf'), 'InjectorTestResults_6513589_4.pdf');
-  assert.strictEqual(exportFilename(buildExportModel([]), 'xlsx'), 'InjectorTestResults_Injectors_0.xlsx');
+  assert.strictEqual(exportFilename(model), 'CustomReport_6513589_4.xlsx');
+  assert.strictEqual(exportFilename(buildExportModel([])), 'CustomReport_Injectors_0.xlsx');
 });
