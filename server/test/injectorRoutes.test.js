@@ -386,10 +386,40 @@ test('an export can be driven by the filters instead of by a list of ids', async
     assert.match(res.headers.get('x-report-filename'), /_2\.pdf$/, 'only the two failing injectors are exported');
 
     const text = extractPdfText(Buffer.from(await res.arrayBuffer())).join(' ');
-    assert.match(text, /failed Peak Torque - Return/, 'the export records the filter that produced it');
     assert.match(text, /SN002/);
     assert.match(text, /SN004/);
     assert.ok(!text.includes('SN001'), 'a passing injector is not in a failures export');
+  });
+});
+
+test('a filter only chooses the records — it never shows up in the export', async () => {
+  await seedForFiltering();
+  await withUser(ADMIN, async (url) => {
+    const post = (path, body) => fetch(url + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    // The two injectors that failed Peak Torque - Return, found by filtering…
+    const filtered = await post('/api/injector-tests/export/pdf', {
+      filters: { steps: 'IVM06-R', step_status: 'fail' },
+    });
+    // …and the same two, picked by id.
+    const list = await (await fetch(`${url}/api/injector-tests?steps=IVM06-R&step_status=fail`)).json();
+    const byId = await post('/api/injector-tests/export/pdf', {
+      injector_ids: list.injectors.map((row) => row.id),
+    });
+
+    const textOf = async (res) => extractPdfText(Buffer.from(await res.arrayBuffer()))
+      .join(' ')
+      // The generation timestamp is the one thing that legitimately differs.
+      .replace(/Generated \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/, 'Generated —');
+
+    const filteredText = await textOf(filtered);
+    assert.strictEqual(filteredText, await textOf(byId), 'the two exports are identical');
+    assert.ok(!/filter/i.test(filteredText), 'the exported PDF never mentions a filter');
+    assert.ok(!/Peak Torque - Return[^,]*failed/i.test(filteredText), 'no filter phrase is printed');
   });
 });
 

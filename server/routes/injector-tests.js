@@ -40,7 +40,7 @@ const {
 } = require('../services/injectorReports');
 const {
   normaliseCriteria,
-  describeCriteria,
+  hasCriteria,
   needsStepData,
   matchesStepCriteria,
   matchedStepLabels,
@@ -188,7 +188,6 @@ router.get('/', requireAdmin, (req, res, next) => {
       injectors,
       total,
       filtered: injectors.length,
-      criteria,
       lastSync,
       hasApiKey: !!carbonzapp.getApiKey(),
     });
@@ -361,7 +360,9 @@ function reportFailure(err, { type, count, user, noun = 'report' }, next) {
 // ── Export the selected injectors ──────────────────────────────────────────
 // An export is a RECORD LIST, not an engineering report: it says which
 // injectors were selected, how each scored and which test steps it failed.
-// Two consequences follow, and both differ from the report routes above:
+// The page's filters only decide which records get here — they never appear in
+// or change the exported file.
+// Two further consequences follow, and both differ from the report routes above:
 //   • a record with no bench results is still exportable — it simply lists as
 //     "No result" — so the report-blocking validation is not applied here
 //   • the row-per-injector layout scales far better than a column-per-injector
@@ -389,7 +390,7 @@ function resolveExportSelection(req) {
 
   // `use_filters` lets the client ask for the whole filtered set explicitly,
   // rather than it being inferred from an empty selection.
-  const fromFilters = ids.length === 0 && (body.use_filters === true || describeCriteria(criteria).length > 0);
+  const fromFilters = ids.length === 0 && (body.use_filters === true || hasCriteria(criteria));
   const injectors = fromFilters ? loadFilteredInjectors(criteria) : loadSelectedInjectors(ids);
 
   if (!fromFilters && ids.length === 0) {
@@ -411,14 +412,19 @@ function resolveExportSelection(req) {
   // Missing serial/part numbers do not block an export; they are surfaced as
   // the same non-blocking warnings the reports use.
   const { warnings } = validateSelection(injectors);
-  return { injectors, criteria, warnings, fromFilters };
+  return { injectors, warnings, fromFilters };
 }
 
-/** Build the shared export model for one request. */
+/**
+ * Build the shared export model for one request.
+ *
+ * The filters chose WHICH injectors are here and play no further part: they are
+ * deliberately not passed to the exporter, so the file that comes out is the
+ * same whether the records were filtered or ticked by hand.
+ */
 function exportModelFor(req) {
-  const { injectors, criteria, warnings, fromFilters } = resolveExportSelection(req);
+  const { injectors, warnings, fromFilters } = resolveExportSelection(req);
   const model = buildExportModel(injectors, {
-    criteria,
     title: String((req.body && req.body.title) || 'Injector Test Results').slice(0, 120),
     vendorName: String((req.body && req.body.vendor_name) || '').slice(0, 120),
   });

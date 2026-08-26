@@ -21,8 +21,7 @@ const {
   matchedStepLabels,
   filterInjectors,
   needsStepData,
-  describeCriteria,
-  summariseCriteria,
+  hasCriteria,
 } = require('../services/injectorFilters');
 
 /** A hydrated injector, exactly as the routes and exporters see one. */
@@ -189,30 +188,15 @@ test('several result statuses can be selected at once', () => {
   assert.deepStrictEqual(serials(filterInjectors(ALL, { status: 'fail,dnf' })), ['SN002', 'SN003', 'SN004']);
 });
 
-// ── Describing a filter ─────────────────────────────────────────────────────
-test('applied filters are described in the words the export prints', () => {
-  const criteria = normaliseCriteria({
-    part_number: '6513589PX',
-    serial_number: 'SN002',
-    status: 'fail',
-    date_from: '2026-06-01',
-    date_to: '2026-06-30',
-    steps: 'IVM06-R',
-    step_status: 'fail',
-  });
-  const labels = new Map([['IVM06-R', 'Peak Torque - Return']]);
-  assert.deepStrictEqual(describeCriteria(criteria, { stepLabels: labels }), [
-    { label: 'Part Number', value: '6513589PX' },
-    { label: 'Serial Number', value: 'SN002' },
-    { label: 'Result', value: 'Failed' },
-    { label: 'Test Date', value: '2026-06-01 to 2026-06-30' },
-    { label: 'Test Steps', value: 'failed Peak Torque - Return' },
-  ]);
-
-  const twoSteps = normaliseCriteria({ steps: 'IVM01,IVM06-R', step_status: 'pass', step_match: 'all' });
-  assert.strictEqual(
-    summariseCriteria(twoSteps, { stepLabels: labels }),
-    'Test Steps: passed all of IVM01, Peak Torque - Return'
-  );
-  assert.deepStrictEqual(describeCriteria({}), [], 'an unfiltered selection describes nothing');
+// ── Detecting a filter ──────────────────────────────────────────────────────
+test('criteria that narrow nothing are detectable as an empty filter', () => {
+  assert.strictEqual(hasCriteria({}), false);
+  assert.strictEqual(hasCriteria({ part_number: '   ' }), false, 'whitespace is not a filter');
+  assert.strictEqual(hasCriteria({ step_status: 'fail' }), false, 'an outcome with no step selects nothing');
+  assert.strictEqual(hasCriteria({ part_number: '6513589PX' }), true);
+  assert.strictEqual(hasCriteria({ serial_number: 'SN002' }), true);
+  assert.strictEqual(hasCriteria({ status: 'fail' }), true);
+  assert.strictEqual(hasCriteria({ date_from: '2026-06-01' }), true);
+  assert.strictEqual(hasCriteria({ steps: 'IVM06-R' }), true);
+  assert.strictEqual(hasCriteria(normaliseCriteria({ steps: 'IVM06-R' })), true, 'already-normalised criteria work too');
 });

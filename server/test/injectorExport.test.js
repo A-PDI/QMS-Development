@@ -15,6 +15,7 @@ const { benchBatch } = require('./helpers/benchData');
 const carbonzapp = require('../services/carbonzapp');
 const { loadSelectedInjectors } = require('../services/injectorReports');
 const {
+  SUMMARY_COLUMNS,
   buildExportModel,
   buildInjectorWorkbook,
   buildInjectorListPdf,
@@ -94,20 +95,15 @@ test('a bench error is reported as a note, not as a step name', () => {
   assert.ok(interrupted.every((r) => !/error/i.test(r.stepName)), 'no step name carries bench error text');
 });
 
-test('the applied filters are recorded on the model, with real step names', () => {
-  const model = buildExportModel(seed(), {
-    criteria: { part_number: '6513589PX', steps: 'IVM06-R', step_status: 'fail' },
-  });
-  assert.deepStrictEqual(model.filters, [
-    { label: 'Part Number', value: '6513589PX' },
-    { label: 'Test Steps', value: 'failed Peak Torque - Return' },
-  ]);
-  assert.strictEqual(rowFor(model, 'SN002').matchedSteps, 'Peak Torque - Return');
-  assert.strictEqual(rowFor(model, 'SN001').matchedSteps, '');
-
-  const unfiltered = buildExportModel(seed());
-  assert.deepStrictEqual(unfiltered.filters, []);
-  assert.strictEqual(unfiltered.rows[0].matchedSteps, '', 'no step filter, nothing to explain');
+test('how the injectors were selected leaves no trace on the model', () => {
+  const model = buildExportModel(seed());
+  assert.ok(!('filters' in model), 'no filter description is carried');
+  assert.ok(!('criteria' in model), 'no filter criteria are carried');
+  assert.ok(model.rows.every((row) => !('matchedSteps' in row)), 'no row records why it was picked');
+  assert.ok(
+    !SUMMARY_COLUMNS.some((column) => /filter/i.test(column.header)),
+    'no exported column is about the filter'
+  );
 });
 
 test('a green band with no numeric range falls back to the bench spec text', () => {
@@ -124,14 +120,12 @@ test('failed step labels list every point an injector actually failed', () => {
 });
 
 // ── Excel ───────────────────────────────────────────────────────────────────
-test('the workbook holds the injectors, their steps and the filters used', async () => {
-  const model = buildExportModel(seed(), {
-    criteria: { steps: 'IVM06-R', step_status: 'fail' },
-  });
+test('the workbook holds the injectors, their steps and a summary', async () => {
+  const model = buildExportModel(seed());
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await buildInjectorWorkbook(model));
 
-  assert.deepStrictEqual(workbook.worksheets.map((w) => w.name), ['Injectors', 'Test Steps', 'Filters']);
+  assert.deepStrictEqual(workbook.worksheets.map((w) => w.name), ['Injectors', 'Test Steps', 'Summary']);
 
   const sheet = workbook.getWorksheet('Injectors');
   assert.strictEqual(sheet.rowCount, 5, 'a header row plus four injectors');
@@ -142,7 +136,6 @@ test('the workbook holds the injectors, their steps and the filters used', async
   assert.strictEqual(cell(3, 'Serial Number'), 'SN002');
   assert.strictEqual(cell(3, 'Result'), 'FAIL');
   assert.strictEqual(cell(3, 'Failed Test Steps'), 'Peak Torque - Return');
-  assert.strictEqual(cell(3, 'Matched Filter Steps'), 'Peak Torque - Return');
   assert.ok(sheet.autoFilter, 'the sheet is filterable as delivered');
   assert.strictEqual(sheet.views[0].state, 'frozen', 'the header row stays visible');
   assert.strictEqual(sheet.views[0].ySplit, 1);
@@ -152,37 +145,61 @@ test('the workbook holds the injectors, their steps and the filters used', async
   const stepHeaders = steps.getRow(1).values.slice(1);
   assert.strictEqual(steps.getRow(2).values[stepHeaders.indexOf('Test Step') + 1], 'Peak HP');
 
-  const filters = workbook.getWorksheet('Filters');
-  const text = filters.getRows(1, filters.rowCount).map((r) => r.values.join(' ')).join('\n');
+  const summary = workbook.getWorksheet('Summary');
+  const text = summary.getRows(1, summary.rowCount).map((r) => r.values.join(' ')).join('\n');
   assert.match(text, /Injectors Exported\s+4/);
-  assert.match(text, /failed Peak Torque - Return/);
+  assert.match(text, /Part Numbers\s+6513589PX/);
 });
 
-test('an unfiltered workbook says so rather than leaving the reader guessing', async () => {
+test('no sheet mentions the filters that found the injectors', async () => {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await buildInjectorWorkbook(buildExportModel(seed())));
-  const filters = workbook.getWorksheet('Filters');
-  const text = filters.getRows(1, filters.rowCount).map((r) => r.values.join(' ')).join('\n');
-  assert.match(text, /None — all synced injectors/);
+  for (const sheet of workbook.worksheets) {
+    const text = sheet.getRows(1, sheet.rowCount).map((r) => r.values.join(' ')).join('\n');
+    assert.ok(!/filter/i.test(text), `the ${sheet.name} sheet mentions a filter`);
+  }
 });
 
 // ── PDF ─────────────────────────────────────────────────────────────────────
-test('the PDF listing prints the totals, the filters and every injector', async () => {
-  const model = buildExportModel(seed(), {
-    criteria: { part_number: '6513589PX', steps: 'IVM06-R', step_status: 'fail' },
-  });
-  const buffer = await buildInjectorListPdf(model);
+test('the PDF listing prints the totals and every injector, and no filter', async () => {
+  const buffer = await buildInjectorListPdf(buildExportModel(seed()));
   assert.strictEqual(buffer.subarray(0, 4).toString(), '%PDF');
 
   const text = extractPdfText(buffer).join(' ');
   assert.match(text, /Injector Test Results/);
-  assert.match(text, /SELECTION/, 'the applied filters are printed on the report');
-  assert.match(text, /failed Peak Torque - Return/);
   assert.match(text, /INJECTORS EXPORTED 4/, 'the headline totals are printed');
   for (const serial of ['SN001', 'SN002', 'SN003', 'SN004']) {
     assert.ok(text.includes(serial), `${serial} is listed`);
   }
   assert.match(text, /Page 1 of 1/);
+  assert.ok(!/filter/i.test(text), 'nothing on the page mentions a filter');
+  assert.ok(!/SELECTION/.test(text), 'no applied-selection block is printed');
+});
+
+test('handing the exporter filter criteria cannot change what it writes', async () => {
+  // A guard against filter provenance creeping back in: even when a caller
+  // passes the criteria that found these records, the file is unchanged.
+  const at = '2026-06-30T12:00:00.000Z';
+  const injectors = seed();
+  const plain = buildExportModel(injectors, { generatedAt: at });
+  const withCriteria = buildExportModel(injectors, {
+    generatedAt: at,
+    criteria: { part_number: '6513589PX', steps: 'IVM06-R', step_status: 'fail' },
+  });
+
+  assert.deepStrictEqual(withCriteria, plain, 'the model ignores criteria entirely');
+
+  const pdfOf = async (model) => extractPdfText(await buildInjectorListPdf(model)).join(' ');
+  assert.strictEqual(await pdfOf(withCriteria), await pdfOf(plain));
+
+  const sheetsOf = async (model) => {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(await buildInjectorWorkbook(model));
+    return wb.worksheets
+      .map((w) => `${w.name}\n${w.getRows(1, w.rowCount).map((r) => r.values.join('|')).join('\n')}`)
+      .join('\n--\n');
+  };
+  assert.strictEqual(await sheetsOf(withCriteria), await sheetsOf(plain));
 });
 
 test('a long selection paginates with its header and page numbers intact', async () => {
@@ -200,7 +217,7 @@ test('a long selection paginates with its header and page numbers intact', async
 test('an empty selection produces a valid, explicit PDF rather than failing', async () => {
   const model = buildExportModel([]);
   const text = extractPdfText(await buildInjectorListPdf(model)).join(' ');
-  assert.match(text, /No injectors matched this selection/);
+  assert.match(text, /No injectors to list/);
 });
 
 // ── Filenames ───────────────────────────────────────────────────────────────

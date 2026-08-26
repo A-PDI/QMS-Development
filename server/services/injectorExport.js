@@ -14,6 +14,11 @@
  *
  * Both formats are generated from the SAME model, so a saved sheet and a saved
  * PDF of one selection can never disagree.
+ *
+ * The page's filters decide WHICH injectors reach this module and nothing else.
+ * They never appear in, or alter, what is written out: two exports of the same
+ * injectors are identical whether they were found by a part-number filter, by a
+ * failed-test-step filter, or by ticking the rows by hand.
  */
 
 const ExcelJS = require('exceljs');
@@ -32,13 +37,7 @@ const {
   measurementOutcome,
   injectorOutcome,
 } = require('./injectorResult');
-const {
-  measurementPoints,
-  describeCriteria,
-  normaliseCriteria,
-  matchedStepLabels,
-  stepCatalog,
-} = require('./injectorFilters');
+const { measurementPoints } = require('./injectorFilters');
 const {
   drawInjectorBanner,
   numericPartNumbers,
@@ -72,7 +71,6 @@ const SUMMARY_COLUMNS = [
   { key: 'stepsFailed', header: 'Steps Failed', pdfHeader: 'Failed', width: 13, pdfWidth: 7, align: 'right' },
   { key: 'stepsTotal', header: 'Steps Total', pdfHeader: 'Total', width: 12, pdfWidth: 7, align: 'right' },
   { key: 'failedSteps', header: 'Failed Test Steps', width: 40, pdfWidth: 28 },
-  { key: 'matchedSteps', header: 'Matched Filter Steps', width: 30, pdfWidth: 0 },
   { key: 'testDate', header: 'Test Date', width: 12, pdfWidth: 10 },
   { key: 'testTime', header: 'Test Time', width: 10, pdfWidth: 0 },
   { key: 'brand', header: 'Brand', width: 16, pdfWidth: 0 },
@@ -145,7 +143,7 @@ function failedStepLabels(injector) {
  * One flat row per injector — the summary sheet and the PDF table both read
  * from this, so they can never drift apart.
  */
-function summaryRow(injector, index, criteria) {
+function summaryRow(injector, index) {
   const outcome = injectorOutcome(injector);
   const failed = failedStepLabels(injector);
   return {
@@ -159,9 +157,6 @@ function summaryRow(injector, index, criteria) {
     stepsFailed: Number(injector.steps_failed || 0),
     stepsTotal: Number(injector.steps_total || 0),
     failedSteps: failed.join(', '),
-    matchedSteps: criteria && criteria.steps && criteria.steps.length
-      ? matchedStepLabels(injector, criteria).join(', ')
-      : '',
     testDate: dateOf(injector.test_datetime),
     testTime: timeOf(injector.test_datetime),
     brand: injector.brand || '',
@@ -228,27 +223,24 @@ function summarise(injectors = []) {
 /**
  * Everything both exporters need, in one pure call.
  *
+ * The model is built from the injectors alone. How they were chosen — a
+ * filter, or hand-picked rows — is deliberately not an input, so it cannot
+ * show up in or change the exported file.
+ *
  * @param injectors  hydrated injector rows (with their `tests` array)
- * @param opts.criteria  the filter criteria that produced the selection; shown
- *                       on the export so a saved file records how it was made
  * @param opts.title     document title
  * @param opts.vendorName  optional vendor for the PDF banner
  */
 function buildExportModel(injectors = [], opts = {}) {
   const list = Array.isArray(injectors) ? injectors : [];
-  const criteria = normaliseCriteria(opts.criteria || {});
-  // The catalog gives the filter description real step names instead of codes.
-  const stepLabels = new Map(stepCatalog(list).map((s) => [s.code, s.label]));
 
   return {
     title: String(opts.title || 'Injector Test Results').trim(),
     vendorName: String(opts.vendorName || '').trim(),
     generatedAt: opts.generatedAt || new Date().toISOString(),
-    criteria,
-    filters: describeCriteria(criteria, { stepLabels }),
     summary: summarise(list),
     columns: SUMMARY_COLUMNS,
-    rows: list.map((injector, index) => summaryRow(injector, index, criteria)),
+    rows: list.map(summaryRow),
     stepColumns: STEP_COLUMNS,
     stepRows: list.flatMap(stepRowsFor),
   };
@@ -329,8 +321,9 @@ async function buildInjectorWorkbook(model) {
     };
   }
 
-  // ── Filters ────────────────────────────────────────────────────────────
-  const meta = workbook.addWorksheet('Filters');
+  // ── Summary ────────────────────────────────────────────────────────────
+  // Describes the injectors in the file — never how they were selected.
+  const meta = workbook.addWorksheet('Summary');
   meta.columns = [
     { header: 'Field', key: 'label', width: 24 },
     { header: 'Value', key: 'value', width: 70 },
@@ -351,9 +344,6 @@ async function buildInjectorWorkbook(model) {
         : `${model.summary.dateFrom} to ${model.summary.dateTo}`)
       : '—',
   });
-  meta.addRow({ label: '', value: '' });
-  meta.addRow({ label: 'Applied Filters', value: model.filters.length ? '' : 'None — all synced injectors' });
-  for (const filter of model.filters) meta.addRow({ label: filter.label, value: filter.value });
   styleHeader(meta);
 
   const buffer = await workbook.xlsx.writeBuffer();
@@ -429,36 +419,10 @@ function drawFooter(doc, model, pageNumber, pageCount) {
   );
 }
 
-/** The applied-filter block printed under the KPI cards on page 1. */
-function drawFilterBlock(doc, model, y) {
-  const lineH = 12;
-  const entries = model.filters.length
-    ? model.filters
-    : [{ label: 'Filters', value: 'None — every synced injector was eligible' }];
-  const boxH = 16 + entries.length * lineH;
-
-  doc.rect(INJ_LM, y, INJ_USABLE_W, boxH).fillColor(WHITE).fill();
-  doc.strokeColor(BORDER).lineWidth(0.6).rect(INJ_LM, y, INJ_USABLE_W, boxH).stroke();
-  doc.fontSize(8).font('Helvetica-Bold').fillColor(NAVY);
-  doc.text('SELECTION', INJ_LM + 10, y + 6, { width: INJ_USABLE_W - 20, lineBreak: false });
-
-  let cursor = y + 18;
-  for (const entry of entries) {
-    doc.fontSize(7.5).font('Helvetica-Bold').fillColor(MGRAY);
-    doc.text(`${entry.label}:`, INJ_LM + 10, cursor, { width: 90, lineBreak: false, ellipsis: true });
-    doc.fontSize(7.5).font('Helvetica').fillColor(DGRAY);
-    doc.text(String(entry.value), INJ_LM + 104, cursor, {
-      width: INJ_USABLE_W - 118, lineBreak: false, ellipsis: true,
-    });
-    cursor += lineH;
-  }
-  return y + boxH;
-}
-
 /**
- * The selection as a printable listing: a summary page (result counts and the
- * filters that produced the selection) followed by the injector table, which
- * continues across as many pages as it needs with its header repeated.
+ * The selection as a printable listing: the result counts for the exported
+ * injectors, then the injector table, which continues across as many pages as
+ * it needs with its header repeated.
  */
 function buildInjectorListPdf(model) {
   return new Promise((resolve, reject) => {
@@ -495,12 +459,11 @@ function buildInjectorListPdf(model) {
             : []),
         ],
       });
-      y += 52 + 10;
-      y = drawFilterBlock(doc, model, y) + 10;
+      y += 52 + 12;
 
       if (!model.rows.length) {
         doc.fontSize(9).font('Helvetica').fillColor(MGRAY);
-        doc.text('No injectors matched this selection.', INJ_LM, y + 6, { width: INJ_USABLE_W, align: 'center' });
+        doc.text('No injectors to list.', INJ_LM, y + 6, { width: INJ_USABLE_W, align: 'center' });
       } else {
         y = drawTableHeader(doc, columns, y);
         model.rows.forEach((row, index) => {

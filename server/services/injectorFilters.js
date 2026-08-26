@@ -305,60 +305,19 @@ function needsStepData(criteria = {}) {
   return c.steps.length > 0;
 }
 
-// Labels used when describing an applied filter.
-const STEP_STATUS_LABELS = {
-  [PASS]: 'passed',
-  [FAIL]: 'failed',
-  [DNF]: 'did not finish',
-  any: 'were tested at',
-};
-const RESULT_STATUS_LABELS = {
-  [PASS]: 'Passed',
-  [FAIL]: 'Failed',
-  [DNF]: 'DNF',
-  [UNKNOWN]: 'No result',
-};
-
 /**
- * The applied filters as [{ label, value }] pairs — printed on the export so a
- * saved sheet or PDF says exactly which selection produced it.
+ * True when the criteria narrow anything at all.
  *
- * `stepLabels` maps a step code to its display name (from stepCatalog); codes
- * with no entry fall back to the raw code.
+ * Used to tell "export what the filters match" apart from "export nothing was
+ * asked for" — never to describe a filter on an exported file, which carries no
+ * record of how its injectors were chosen.
  */
-function describeCriteria(criteria = {}, { stepLabels = new Map() } = {}) {
+function hasCriteria(criteria = {}) {
   const c = criteria.__normalised ? criteria : normaliseCriteria(criteria);
-  const rows = [];
-  const label = (code) => (stepLabels.get ? stepLabels.get(code) : stepLabels[code]) || code;
-
-  if (c.search) rows.push({ label: 'Search', value: c.search });
-  if (c.partNumbers.length) rows.push({ label: 'Part Number', value: c.partNumbers.join(', ') });
-  if (c.serialNumbers.length) rows.push({ label: 'Serial Number', value: c.serialNumbers.join(', ') });
-  if (c.statuses.length) {
-    rows.push({ label: 'Result', value: c.statuses.map((s) => RESULT_STATUS_LABELS[s] || s).join(', ') });
-  }
-  if (c.dateFrom || c.dateTo) {
-    rows.push({
-      label: 'Test Date',
-      value: c.dateFrom && c.dateTo
-        ? (c.dateFrom === c.dateTo ? c.dateFrom : `${c.dateFrom} to ${c.dateTo}`)
-        : (c.dateFrom ? `from ${c.dateFrom}` : `through ${c.dateTo}`),
-    });
-  }
-  if (c.steps.length) {
-    const verb = STEP_STATUS_LABELS[c.stepStatus] || c.stepStatus;
-    const scope = c.steps.length > 1 ? (c.stepMatch === 'all' ? 'all of' : 'any of') : '';
-    rows.push({
-      label: 'Test Steps',
-      value: `${verb} ${scope ? `${scope} ` : ''}${c.steps.map(label).join(', ')}`.replace(/\s+/g, ' ').trim(),
-    });
-  }
-  return rows;
-}
-
-/** One-line form of describeCriteria, or '' when nothing is filtered. */
-function summariseCriteria(criteria = {}, opts = {}) {
-  return describeCriteria(criteria, opts).map((r) => `${r.label}: ${r.value}`).join(' · ');
+  return Boolean(
+    c.search || c.partNumbers.length || c.serialNumbers.length || c.statuses.length ||
+    c.dateFrom || c.dateTo || c.steps.length
+  );
 }
 
 module.exports = {
@@ -370,7 +329,6 @@ module.exports = {
   STEP_STATUSES,
   STEP_MATCH_MODES,
   RESULT_STATUSES,
-  RESULT_STATUS_LABELS,
   SPLIT_TANK_CODE,
   parseList,
   normaliseResultStatus,
@@ -387,7 +345,6 @@ module.exports = {
   matchesInjector,
   filterInjectors,
   needsStepData,
-  describeCriteria,
-  summariseCriteria,
+  hasCriteria,
   injectorOutcome,
 };
