@@ -1,9 +1,9 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Gauge, RefreshCw, Settings, Trash2, Search, Printer, X,
-  AlertTriangle, CheckCircle2, Loader2, XCircle, Save, FileText, Files, BarChart3, Info, ShieldAlert, Eye,
-  ListFilter, FileSpreadsheet, FileDown, ChevronDown,
+  Gauge, RefreshCw, Settings, Trash2, Search, X,
+  AlertTriangle, CheckCircle2, Loader2, XCircle, Save, FileText, BarChart3, Info, ShieldAlert, Eye,
+  ListFilter, FileSpreadsheet, FileDown, ChevronDown, ChevronUp, ArrowDownAZ, GripVertical, Play,
 } from 'lucide-react'
 import api from '../lib/api'
 import { useToast } from '../hooks/useToast'
@@ -16,6 +16,9 @@ import {
   toggleAll,
   areAllSelected,
   orderedSelection,
+  moveSelected,
+  moveSelectedTo,
+  sortSelectionBySerial,
   validateSelectionForReport,
   describeSelection,
   vendorPromptReport,
@@ -27,41 +30,34 @@ import {
   hasActiveFilters,
   toggleStepFilter,
   STEP_STATUS_OPTIONS,
+  OUTPUTS,
+  FORMATS,
+  emptyOutputs,
+  toggleOutput,
+  toggleFormat,
+  formatsApply,
+  reportFormats,
+  validateOutputs,
+  producesFiles,
+  describeOutputs,
 } from '../lib/injectorSelection'
-
-// ── Export kinds ──────────────────────────────────────────────────────────────
-// The two "give me the list" outputs. Reports (below) are about the injectors'
-// measured values; an export is the record list itself.
-const EXPORT_KINDS = {
-  xlsx: {
-    label: 'Excel workbook',
-    short: 'Excel',
-    path: '/injector-tests/export/xlsx',
-    extension: '.xlsx',
-    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    description: 'Excel workbook',
-  },
-  pdf: {
-    label: 'PDF listing',
-    short: 'PDF',
-    path: '/injector-tests/export/pdf',
-    extension: '.pdf',
-    mimeType: 'application/pdf',
-    description: 'PDF document',
-  },
-}
 
 // How long typing in a filter box settles before the server is queried again.
 const FILTER_DEBOUNCE_MS = 300
 
-// ── Report kinds ──────────────────────────────────────────────────────────────
-// `internal` matches the server's report type ids; `label` is what the user sees.
-const REPORT_KINDS = {
-  customer:   { label: 'Custom Report',        short: 'Custom',     prefix: 'CustomReport',       internal: 'customer' },
-  inspection: { label: 'Inspection Report',    short: 'Inspection', prefix: 'InspectionReport',   internal: 'inspection' },
-  both:       { label: 'Both Reports',         short: 'Both',       prefix: 'CustomReports',      internal: 'customer+inspection' },
-  evaluation: { label: 'Shipment Evaluation',  short: 'Evaluation', prefix: 'ShipmentEvaluation', internal: 'supplier_evaluation' },
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+// ── Custom Report formats ─────────────────────────────────────────────────────
+// One report, two files. Both endpoints take the same selection in the same
+// order, so the workbook's columns and the PDF's columns always match.
+const REPORT_FORMATS = {
+  xlsx: { path: '/injector-tests/reports/custom.xlsx', extension: '.xlsx', mimeType: XLSX_MIME },
+  pdf: { path: '/injector-tests/reports/custom', extension: '.pdf', mimeType: 'application/pdf' },
 }
+
+// The icon shown on each output toggle.
+const OUTPUT_ICONS = { preview: Eye, report: FileText, inspection: FileText, evaluation: BarChart3 }
+const FORMAT_ICONS = { xlsx: FileSpreadsheet, pdf: FileDown }
 
 /** Axios error → a message safe to show the user (blob bodies included). */
 async function errorMessageFrom(err, fallback) {
@@ -93,18 +89,19 @@ export default function InjectorTests() {
   // Typing narrows the visible list at once; the server is only re-queried once
   // the box settles, so a step filter does not fire on every keystroke.
   const [settledFilters, setSettledFilters] = useState(filters)
-  // Selected rows are presented and reported in natural serial-number order.
+  // The order of `selectedIds` is the report's column order — the selection
+  // panel below lets the user rearrange it.
   const [selectedIds, setSelectedIds] = useState(() => [])
   const selected = useMemo(() => new Set(selectedIds), [selectedIds])
-  const [showOrder, setShowOrder] = useState(false)
+  const [showOrder, setShowOrder] = useState(true)   // the report order matters, so show it
   const [preview, setPreview] = useState(null)
-  const [previewing, setPreviewing] = useState(false)
+
+  // What to produce, and in which file formats. Several outputs at once.
+  const [outputSelection, setOutputSelection] = useState(emptyOutputs)
 
   const [syncing, setSyncing] = useState(false)
-  const [exporting, setExporting] = useState(null)     // export format currently running
-  const exportingRef = useRef(false)                   // blocks repeated clicks
-  const [generating, setGenerating] = useState(null)   // report kind currently running
-  const generatingRef = useRef(false)                  // blocks repeated clicks
+  const [generating, setGenerating] = useState(false)   // a run is in progress
+  const generatingRef = useRef(false)                   // blocks repeated clicks
   const [vendorName, setVendorName] = useState('')     // remembered between customer/evaluation reports
   const [showSettings, setShowSettings] = useState(false)
   const [apiKeyInput, setApiKeyInput] = useState('')
@@ -187,11 +184,8 @@ export default function InjectorTests() {
     () => (selectedCount ? validateSelectionForReport(orderedSelected) : null),
     [orderedSelected, selectedCount]
   )
-  const busy = Boolean(generating || previewing || exporting)
-  const canGenerate = selectedCount > 0 && !busy
-  // An export can also cover the whole filtered set, so it does not need a
-  // selection — only something to export.
-  const canExport = (selectedCount > 0 || filtered.length > 0) && !busy
+  const outputIssue = validateOutputs(outputSelection)
+  const canGenerate = selectedCount > 0 && outputIssue.ok && !generating
 
   useEffect(() => {
     if (!preview) return undefined
@@ -212,6 +206,13 @@ export default function InjectorTests() {
   const toggleAllVisible = () => setSelectedIds(prev => toggleAll(prev, filtered))
   const clearSelection = () => setSelectedIds([])
   const removeSelected = (id) => setSelectedIds(prev => prev.filter(x => x !== id))
+  // Reordering: the panel's order is the report's column order.
+  const moveInSelection = (id, delta) => setSelectedIds(prev => moveSelected(prev, id, delta))
+  const dropInSelection = (from, to) => setSelectedIds(prev => moveSelectedTo(prev, from, to))
+  const sortSelection = () => setSelectedIds(prev => sortSelectionBySerial(prev, orderedSelected))
+
+  const pickOutput = (value) => setOutputSelection(prev => ({ ...prev, outputs: toggleOutput(prev.outputs, value) }))
+  const pickFormat = (value) => setOutputSelection(prev => ({ ...prev, formats: toggleFormat(prev.formats, value) }))
 
   // ── Sync / settings ────────────────────────────────────────────────────────
   const handleSync = async (fullResync = false, { allowLargePrune = false } = {}) => {
@@ -298,210 +299,165 @@ export default function InjectorTests() {
     } finally { setSavingKey(false) }
   }
 
-  const handlePreview = async () => {
-    const validation = validateSelectionForReport(orderedSelected)
-    if (!validation.ok) {
-      setStatusMsg({ type: 'error', text: validation.message })
-      showToast(validation.message, 'error')
-      return
-    }
-
-    setPreviewing(true)
-    try {
-      const { data: res } = await api.post('/injector-tests/reports/preview', {
-        injector_ids: orderedSelected.map((injector) => injector.id),
-      })
-      setPreview(res.preview)
-    } catch (err) {
-      const msg = await errorMessageFrom(err, 'The report preview could not be loaded. Please try again.')
-      setStatusMsg({ type: 'error', text: msg })
-      showToast(`Preview failed: ${msg}`, 'error')
-    } finally {
-      setPreviewing(false)
-    }
-  }
-
-  // ── Export the injector list ───────────────────────────────────────────────
+  // ── Generate the chosen outputs ────────────────────────────────────────────
   /**
-   * Export what the user is currently looking at.
+   * Produce everything that is ticked, in one run.
    *
-   * With rows selected, the export is that selection. With none selected it is
-   * the whole filtered set — so "every injector of these part numbers whose
-   * Peak Torque - Return failed" is a filter followed by one click, not three
-   * hundred checkboxes. The same ask-then-generate rule as reports applies:
-   * cancelling the save dialog means no request is made.
+   * Ask for everything FIRST (while the click gesture is still active, which
+   * the browser's save dialog requires), then generate. Cancelling any prompt
+   * means no request and no download at all.
+   *
+   * Preview and Report are the same document in two forms, so a format ticked
+   * against either produces exactly one file — never a duplicate.
    */
-  const runExport = async (format) => {
-    if (exportingRef.current) return                   // repeated clicks are ignored
-    const kind = EXPORT_KINDS[format]
-    const useSelection = selectedCount > 0
-    const scopeCount = useSelection ? selectedCount : filtered.length
-
-    if (scopeCount === 0) {
-      const msg = 'Nothing to export — no injector matches the current filters.'
-      setStatusMsg({ type: 'error', text: msg })
-      showToast(msg, 'error')
-      return
-    }
-
-    const suggestion = suggestReportName(
-      'InjectorTestResults',
-      useSelection ? orderedSelected : filtered
-    )
-    const target = await chooseSaveTarget(suggestion, {
-      extension: kind.extension,
-      mimeType: kind.mimeType,
-      description: kind.description,
-      promptMessage: `File name for the ${kind.label.toLowerCase()}`,
-    })
-    if (target.cancelled) {
-      showToast('Cancelled — nothing was exported', 'info')
-      return
-    }
-
-    exportingRef.current = true
-    setExporting(format)
-    const scopeText = useSelection
-      ? `${describeSelection(orderedSelected)} selected`
-      : `${scopeCount} filtered injector${scopeCount === 1 ? '' : 's'}`
-    setStatusMsg({ type: 'info', text: `Exporting ${scopeText} to ${kind.short}…` })
-
-    try {
-      const body = useSelection
-        ? { injector_ids: orderedSelected.map((injector) => injector.id) }
-        // The server re-runs the filters, so a large filtered set does not have
-        // to be sent back to it one id at a time.
-        : { use_filters: true, filters: buildInjectorQuery(filters) }
-      const res = await api.post(kind.path, body, { responseType: 'blob' })
-      await writeBlobToTarget(target, new Blob([res.data], { type: kind.mimeType }))
-
-      const warning = warningsFrom(res)
-      const text = `Exported ${scopeText} to ${target.filename}.`
-      setStatusMsg({ type: warning ? 'warning' : 'success', text: warning ? `${text} ${warning}` : text })
-      showToast(`${kind.short} export saved`, 'success')
-    } catch (err) {
-      const msg = await errorMessageFrom(err, 'The export could not be generated. Please try again.')
-      setStatusMsg({ type: 'error', text: msg })
-      showToast(`Export failed: ${msg}`, 'error')
-    } finally {
-      exportingRef.current = false
-      setExporting(null)
-    }
-  }
-
-  // ── Report generation ──────────────────────────────────────────────────────
-  /**
-   * Ask for everything the report needs FIRST (while the click gesture is still
-   * active, which the browser's save dialog requires), then generate.
-   * Cancelling any prompt means no request and no download at all.
-   */
-  const runGeneration = async (kind) => {
+  const runOutputs = async () => {
     if (generatingRef.current) return          // repeated clicks are ignored
-    const kindInfo = REPORT_KINDS[kind]
+
     const selection = orderedSelected
+    const outcome = validateOutputs(outputSelection)
+    if (!outcome.ok) {
+      setStatusMsg({ type: 'error', text: outcome.message })
+      showToast(outcome.message, 'error')
+      return
+    }
     const validation = validateSelectionForReport(selection)
     if (!validation.ok) {
       setStatusMsg({ type: 'error', text: validation.message })
       showToast(validation.message, 'error')
       return
     }
-    const ids = selection.map(i => i.id)
 
-    // Custom and Shipment Evaluation reports share the same Part / Vendor /
-    // Report Date header. Ask once while the click gesture is still active;
-    // "Both" uses the value for its Custom Report.
+    // The ids go out in the order the panel shows them: that IS the column
+    // order of every report, preview and workbook this run produces.
+    const ids = selection.map((injector) => injector.id)
+    const { outputs } = outputSelection
+    const formats = reportFormats(outputSelection)
+
+    // Both the Custom Report and the Shipment Evaluation carry a Part / Vendor
+    // / Report Date header, so one prompt covers whichever is selected.
     let vendor = vendorName
-    const vendorReport = vendorPromptReport(kind)
+    const vendorReport = vendorPromptReport(outputs)
     if (vendorReport) {
       const answer = window.prompt(`Vendor name for the ${vendorReport}`, vendorName)
       if (answer === null) {
-        showToast('Cancelled — no report was generated', 'info')
+        showToast('Cancelled — nothing was generated', 'info')
         return
       }
       vendor = String(answer).trim()
-      if (!vendor) {
-        const msg = `A vendor name is required for the ${vendorReport}.`
+      if (!vendor && outputs.includes('evaluation')) {
+        const msg = 'A vendor name is required for the Shipment Evaluation Report.'
         setStatusMsg({ type: 'error', text: msg })
         showToast(msg, 'error')
         return
       }
-      setVendorName(vendor)   // remembered as the default for the next report
+      setVendorName(vendor)   // remembered as the default for the next run
     }
 
-    const suggestion = kind === 'evaluation'
-      ? suggestReportName(kindInfo.prefix, selection, { vendor })
-      : suggestReportName(kindInfo.prefix, selection)
-    const target = await chooseSaveTarget(suggestion, {
-      promptMessage: `File name for the ${kindInfo.label.toLowerCase()}`,
-    })
-    if (target.cancelled) {
-      showToast('Cancelled — no report was downloaded', 'info')
-      return
+    // Only ask where to save when something is actually written to disk.
+    let target = { cancelled: false, filename: '', handle: null }
+    if (producesFiles(outputSelection)) {
+      const suggestion = suggestReportName('InjectorReport', selection, { vendor })
+      target = await chooseSaveTarget(suggestion, {
+        extension: formats.includes('xlsx') && !formats.includes('pdf') ? '.xlsx' : '.pdf',
+        mimeType: formats.includes('xlsx') && !formats.includes('pdf') ? XLSX_MIME : 'application/pdf',
+        promptMessage: 'Base file name for this run',
+      })
+      if (target.cancelled) {
+        showToast('Cancelled — nothing was generated', 'info')
+        return
+      }
     }
 
     generatingRef.current = true
-    setGenerating(kind)
-    setStatusMsg({ type: 'info', text: `Generating ${kindInfo.label.toLowerCase()} for ${describeSelection(selection)}…` })
+    setGenerating(true)
+    setStatusMsg({
+      type: 'info',
+      text: `Generating ${describeOutputs(outputSelection).toLowerCase()} for ${describeSelection(selection)}…`,
+    })
 
     const savedFiles = []
     const warnings = []
+    // The handle the user picked was created for ONE extension, so it may only
+    // receive a file of that type — writing a workbook into a handle the OS
+    // believes is a PDF would produce an unopenable file. Everything else
+    // downloads alongside it under its own name.
+    const targetExtension = (target.filename.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase()
+    let handleUsed = false
+    const saveBlob = async (blob, filename) => {
+      const fitsHandle = !handleUsed && !!target.handle && filename.toLowerCase().endsWith(targetExtension)
+      if (fitsHandle) handleUsed = true
+      const writeTarget = fitsHandle ? { ...target, filename } : { cancelled: false, filename, handle: null }
+      await writeBlobToTarget(writeTarget, blob)
+      savedFiles.push(filename)
+    }
+    // One DOCUMENT kind means the user's chosen name is used as-is — Excel and
+    // PDF of the same report are already told apart by their extension. Several
+    // kinds each get a suffix so the set stays together in the folder.
+    const documentKinds = (formats.length ? 1 : 0)
+      + (outputs.includes('inspection') ? 1 : 0)
+      + (outputs.includes('evaluation') ? 1 : 0)
+    // `part` distinguishes several files of ONE kind (inspection 1, 2, 3…) and
+    // is always applied; `kind` only appears when the run produces more than
+    // one kind of document.
+    const nameFor = (kind, extension, part = '') => deriveFilename(
+      target.filename,
+      [documentKinds > 1 ? kind : '', part].filter(Boolean).join('-'),
+      extension
+    )
+
     try {
-      if (kind === 'customer' || kind === 'both') {
-        const res = await api.post(
-          '/injector-tests/reports/custom',
-          { injector_ids: ids, vendor_name: vendor },
-          { responseType: 'blob' }
-        )
-        const name = kind === 'both' ? deriveFilename(target.filename, 'Custom') : target.filename
-        await writeBlobToTarget({ ...target, filename: name }, new Blob([res.data], { type: 'application/pdf' }))
-        savedFiles.push(name)
+      if (outputs.includes('preview')) {
+        const { data: res } = await api.post('/injector-tests/reports/preview', { injector_ids: ids })
+        setPreview(res.preview)
+      }
+
+      for (const format of formats) {
+        const spec = REPORT_FORMATS[format]
+        const res = await api.post(spec.path, { injector_ids: ids, vendor_name: vendor }, { responseType: 'blob' })
+        await saveBlob(new Blob([res.data], { type: spec.mimeType }), nameFor('Report', spec.extension))
         const w = warningsFrom(res); if (w) warnings.push(w)
       }
 
-      if (kind === 'evaluation') {
+      if (outputs.includes('inspection')) {
+        const { data: res } = await api.post('/injector-tests/reports/inspection', { injector_ids: ids })
+        const created = res.inspections || []
+        if (res.warnings?.length) warnings.push(res.warnings.join(' '))
+        for (let i = 0; i < created.length; i += 1) {
+          const insp = created[i]
+          if (!insp.inspection_id) continue
+          const pdf = await api.get(`/inspections/${insp.inspection_id}/pdf`, { responseType: 'blob' })
+          // Several inspections always need telling apart, even when the
+          // inspection is the only kind of document this run produces.
+          const part = created.length > 1 ? String(i + 1) : ''
+          await saveBlob(new Blob([pdf.data], { type: 'application/pdf' }), nameFor('Inspection', '.pdf', part))
+        }
+        qc.invalidateQueries({ queryKey: ['injector-tests'] })
+      }
+
+      if (outputs.includes('evaluation')) {
         const res = await api.post(
           '/injector-tests/reports/shipment-evaluation',
           { injector_ids: ids, vendor_name: vendor },
           { responseType: 'blob' }
         )
-        await writeBlobToTarget(target, new Blob([res.data], { type: 'application/pdf' }))
-        savedFiles.push(target.filename)
+        await saveBlob(new Blob([res.data], { type: 'application/pdf' }), nameFor('Evaluation', '.pdf'))
         const w = warningsFrom(res); if (w) warnings.push(w)
       }
 
-      if (kind === 'inspection' || kind === 'both') {
-        const { data: res } = await api.post('/injector-tests/reports/inspection', { injector_ids: ids })
-        const created = res.inspections || []
-        if (res.warnings?.length) warnings.push(res.warnings.join(' '))
-        // Base name: on "Both" the inspection file is derived from the chosen
-        // name so the pair stays together in the folder.
-        const baseName = kind === 'both' ? deriveFilename(target.filename, 'Inspection') : target.filename
-        for (let i = 0; i < created.length; i++) {
-          const insp = created[i]
-          if (!insp.inspection_id) continue
-          const pdf = await api.get(`/inspections/${insp.inspection_id}/pdf`, { responseType: 'blob' })
-          const name = created.length > 1 ? deriveFilename(baseName, String(i + 1)) : baseName
-          // Only the first file can be written to the handle the user picked;
-          // any additional inspection reports download alongside it.
-          const writeTarget = (i === 0 && kind === 'inspection')
-            ? { ...target, filename: name }
-            : { cancelled: false, filename: name, handle: null }
-          await writeBlobToTarget(writeTarget, new Blob([pdf.data], { type: 'application/pdf' }))
-          savedFiles.push(name)
-        }
-        qc.invalidateQueries({ queryKey: ['injector-tests'] })
-      }
-
-      const text = `${kindInfo.label} generated for ${describeSelection(selection)} — saved ${savedFiles.join(', ')}.`
-      setStatusMsg({ type: warnings.length ? 'warning' : 'success', text: warnings.length ? `${text} ${warnings.join(' ')}` : text })
-      showToast(`${kindInfo.label} generated`, 'success')
+      const saved = savedFiles.length ? ` — saved ${savedFiles.join(', ')}` : ''
+      const text = `${describeOutputs(outputSelection)} generated for ${describeSelection(selection)}${saved}.`
+      setStatusMsg({
+        type: warnings.length ? 'warning' : 'success',
+        text: warnings.length ? `${text} ${warnings.join(' ')}` : text,
+      })
+      showToast(`${describeOutputs(outputSelection)} generated`, 'success')
     } catch (err) {
       const msg = await errorMessageFrom(err, 'The report could not be generated. Please try again.')
       setStatusMsg({ type: 'error', text: msg })
-      showToast(`Report failed: ${msg}`, 'error')
+      showToast(`Generate failed: ${msg}`, 'error')
     } finally {
       generatingRef.current = false
-      setGenerating(null)
+      setGenerating(false)
     }
   }
 
@@ -761,62 +717,86 @@ export default function InjectorTests() {
             </span>
           </div>
 
-          {/* Export the list itself — the selection when there is one, the whole
-              filtered set otherwise. */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-2 border-t border-gray-100">
-            <div className="text-sm text-gray-600 flex-1 min-w-0">
-              <span className="font-medium text-pdi-navy">Export list</span>
-              <span className="text-gray-400">
-                {' · '}
-                {selectedCount > 0
-                  ? `${describeSelection(orderedSelected)} selected`
-                  : `${filtered.length} filtered injector${filtered.length === 1 ? '' : 's'}`}
-              </span>
+          {/* What to produce. Several outputs at once; Preview and Report share
+              the Excel / PDF choice, Inspection and Evaluation are always PDF. */}
+          <div className="space-y-2 pt-2 border-t border-gray-100">
+            <div className="flex flex-col 2xl:flex-row 2xl:items-center gap-2">
+              <div className="2xl:w-48 shrink-0">
+                <div className="text-sm font-medium text-pdi-navy">Generate</div>
+                <div className="text-xs text-gray-400">
+                  {selectedCount === 0
+                    ? 'select injectors first'
+                    : `${describeSelection(orderedSelected)} selected`}
+                  {selectedCount > 0 && (
+                    <button type="button" onClick={() => setShowOrder(o => !o)}
+                      className="ml-1.5 text-pdi-teal hover:underline">
+                      {showOrder ? 'hide order' : 'arrange order'}
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {OUTPUTS.map((output) => (
+                  <OutputToggle
+                    key={output.value}
+                    output={output}
+                    icon={OUTPUT_ICONS[output.value]}
+                    active={outputSelection.outputs.includes(output.value)}
+                    disabled={generating}
+                    onClick={pickOutput}
+                  />
+                ))}
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <ExportButton format="xlsx" icon={FileSpreadsheet} exporting={exporting} disabled={!canExport} onClick={runExport}>
-                Export to Excel
-              </ExportButton>
-              <ExportButton format="pdf" icon={FileDown} exporting={exporting} disabled={!canExport} onClick={runExport}>
-                Export to PDF
-              </ExportButton>
-            </div>
-          </div>
 
-          {/* Report actions */}
-          <div className="flex flex-col 2xl:flex-row 2xl:items-center gap-2 pt-2 border-t border-gray-100">
-            <div className="text-sm text-gray-600 flex-1 min-w-0">
-              {selectedCount === 0
-                ? <span className="text-gray-400">Select one or more injectors to generate reports.</span>
-                : <span><strong className="text-pdi-navy">{describeSelection(orderedSelected)}</strong> selected</span>}
-              {selectedCount > 0 && (
-                <button onClick={() => setShowOrder(s => !s)}
-                  className="ml-2 text-xs text-pdi-teal hover:underline">
-                  {showOrder ? 'hide selected list' : 'view selected list'}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+              <div className="2xl:w-48 shrink-0">
+                <div className={`text-sm font-medium ${formatsApply(outputSelection.outputs) ? 'text-pdi-navy' : 'text-gray-300'}`}>
+                  Report format
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {FORMATS.map((format) => (
+                  <FormatToggle
+                    key={format.value}
+                    format={format}
+                    icon={FORMAT_ICONS[format.value]}
+                    active={outputSelection.formats.includes(format.value)}
+                    disabled={generating || !formatsApply(outputSelection.outputs)}
+                    onClick={pickFormat}
+                  />
+                ))}
+                <span className="text-xs text-gray-400">
+                  {formatsApply(outputSelection.outputs)
+                    ? 'Applies to Preview and Report. Inspection and Evaluation are always PDF.'
+                    : 'Pick Preview or Report to choose a file format.'}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button type="button" onClick={runOutputs} disabled={!canGenerate}
+                className="flex items-center justify-center gap-1.5 rounded-lg bg-pdi-navy px-4 py-2 text-sm font-medium text-white min-h-[40px] hover:bg-pdi-navy-light disabled:opacity-40">
+                {generating ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}
+                {generating ? 'Generating…' : 'Generate'}
+              </button>
+              {outputSelection.outputs.length > 0 && (
+                <span className="text-xs text-gray-500">{describeOutputs(outputSelection)}</span>
+              )}
+              {outputSelection.outputs.length > 0 && (
+                <button type="button" onClick={() => setOutputSelection(emptyOutputs())} disabled={generating}
+                  className="text-xs text-gray-400 underline hover:text-red-600 disabled:opacity-40">
+                  Clear
                 </button>
               )}
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button type="button" onClick={handlePreview} disabled={!canGenerate}
-                className="flex items-center justify-center gap-1.5 px-3 py-2 text-sm rounded-lg min-h-[40px] font-medium whitespace-nowrap border border-pdi-navy text-pdi-navy hover:bg-pdi-navy/5 disabled:opacity-40">
-                {previewing ? <Loader2 size={15} className="animate-spin" /> : <Eye size={15} />}
-                {previewing ? 'Loading Preview…' : 'Preview Report'}
-              </button>
-              <ReportButton kind="customer" icon={Printer} generating={generating} disabled={!canGenerate} onClick={runGeneration}>
-                Generate Custom Report
-              </ReportButton>
-              <ReportButton kind="inspection" icon={FileText} generating={generating} disabled={!canGenerate} onClick={runGeneration}>
-                Generate Inspection Report
-              </ReportButton>
-              <ReportButton kind="both" icon={Files} generating={generating} disabled={!canGenerate} onClick={runGeneration}>
-                Generate Both
-              </ReportButton>
-              <ReportButton kind="evaluation" icon={BarChart3} generating={generating} disabled={!canGenerate} onClick={runGeneration} accent>
-                Generate Shipment Evaluation
-              </ReportButton>
-            </div>
           </div>
 
+          {selectedCount > 0 && !outputIssue.ok && (
+            <p className="flex items-start gap-1.5 text-xs text-amber-600">
+              <Info size={13} className="mt-0.5 flex-shrink-0" /> {outputIssue.message}
+            </p>
+          )}
           {selectionIssue && !selectionIssue.ok && (
             <p className="flex items-start gap-1.5 text-xs text-red-600">
               <AlertTriangle size={13} className="mt-0.5 flex-shrink-0" /> {selectionIssue.message}
@@ -829,41 +809,17 @@ export default function InjectorTests() {
           )}
         </div>
 
-        {/* Automatically ordered active selection */}
+        {/* The report's column order, arranged by the user */}
         {showOrder && orderedSelected.length > 0 && (
-          <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
-            <div className="flex items-center justify-between">
-              <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Selected Injectors · Serial Number Order</h4>
-              <button onClick={clearSelection} className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-600">
-                <Trash2 size={13} /> Clear
-              </button>
-            </div>
-            <p className="text-xs text-gray-400">
-              This list re-sorts automatically in ascending serial-number order whenever injectors are added or removed.
-            </p>
-            <ol className="space-y-1.5">
-              {orderedSelected.map((inj, idx) => (
-                <li key={inj.id} className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-2">
-                  <span className="flex items-center justify-center w-6 h-6 rounded-full bg-pdi-navy text-white text-xs font-semibold shrink-0">
-                    {idx + 1}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-gray-900 truncate">
-                      {inj.part_number || '—'}
-                      <span className="text-gray-400 font-normal"> · SN {inj.serial_number || '—'}</span>
-                    </div>
-                    <div className="text-xs text-gray-400 truncate">Tested {formatInjectorTestDateTime(inj.test_datetime)}</div>
-                  </div>
-                  <div className="flex items-center gap-0.5 shrink-0">
-                    <button onClick={() => removeSelected(inj.id)} title="Remove" aria-label="Remove"
-                      className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-white rounded">
-                      <X size={16} />
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          </div>
+          <ReportOrderPanel
+            injectors={orderedSelected}
+            disabled={generating}
+            onMove={moveInSelection}
+            onDrop={dropInSelection}
+            onRemove={removeSelected}
+            onSortBySerial={sortSelection}
+            onClear={clearSelection}
+          />
         )}
 
         {/* Continuous injector list, newest test first */}
@@ -1003,38 +959,133 @@ function StepFilterMenu({
   )
 }
 
-// ── Export action button ──────────────────────────────────────────────────────
-function ExportButton({ format, icon: Icon, exporting, disabled, onClick, children }) {
-  const busy = exporting === format
+// ── Report column order ───────────────────────────────────────────────────────
+/**
+ * The selected injectors in the order they will appear in the report.
+ *
+ * This list used to re-sort itself by serial number on every change. It no
+ * longer does: position 1 is the report's first column, and the user arranges
+ * it — with the arrows, by dragging a row, or by pressing "Sort by serial" to
+ * get the old ascending order back in one click.
+ */
+function ReportOrderPanel({ injectors, disabled, onMove, onDrop, onRemove, onSortBySerial, onClear }) {
+  const [draggingIndex, setDraggingIndex] = useState(null)
+  const [overIndex, setOverIndex] = useState(null)
+
+  const endDrag = () => { setDraggingIndex(null); setOverIndex(null) }
+  const handleDrop = (toIndex) => {
+    if (draggingIndex !== null && draggingIndex !== toIndex) onDrop(draggingIndex, toIndex)
+    endDrag()
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+          Selected Injectors · Report Order
+        </h4>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={onSortBySerial} disabled={disabled}
+            className="flex items-center gap-1 rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40">
+            <ArrowDownAZ size={13} /> Sort by serial
+          </button>
+          <button type="button" onClick={onClear} disabled={disabled}
+            className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-600 disabled:opacity-40">
+            <Trash2 size={13} /> Clear
+          </button>
+        </div>
+      </div>
+      <p className="text-xs text-gray-400">
+        Position 1 is the report's first column. Drag a row, or use the arrows, to rearrange.
+      </p>
+      <ol className="space-y-1.5">
+        {injectors.map((inj, idx) => (
+          <li
+            key={inj.id}
+            draggable={!disabled}
+            onDragStart={() => setDraggingIndex(idx)}
+            onDragOver={(event) => { event.preventDefault(); setOverIndex(idx) }}
+            onDrop={(event) => { event.preventDefault(); handleDrop(idx) }}
+            onDragEnd={endDrag}
+            className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 transition-colors
+              ${overIndex === idx && draggingIndex !== null && draggingIndex !== idx
+                ? 'border-pdi-teal bg-pdi-teal/5'
+                : 'border-gray-200 bg-gray-50'}
+              ${draggingIndex === idx ? 'opacity-50' : ''}`}
+          >
+            <GripVertical size={14} className={`shrink-0 ${disabled ? 'text-gray-200' : 'text-gray-300'}`} aria-hidden="true" />
+            <span className="flex items-center justify-center w-6 h-6 rounded-full bg-pdi-navy text-white text-xs font-semibold shrink-0">
+              {idx + 1}
+            </span>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-gray-900 truncate">
+                {inj.part_number || '—'}
+                <span className="text-gray-400 font-normal"> · SN {inj.serial_number || '—'}</span>
+              </div>
+              <div className="text-xs text-gray-400 truncate">Tested {formatInjectorTestDateTime(inj.test_datetime)}</div>
+            </div>
+            <div className="flex items-center gap-0.5 shrink-0">
+              <button type="button" onClick={() => onMove(inj.id, -1)} disabled={disabled || idx === 0}
+                title="Move earlier" aria-label={`Move ${inj.serial_number || 'injector'} earlier`}
+                className="p-1.5 text-gray-400 hover:text-pdi-navy hover:bg-white rounded disabled:opacity-30 disabled:hover:bg-transparent">
+                <ChevronUp size={16} />
+              </button>
+              <button type="button" onClick={() => onMove(inj.id, 1)} disabled={disabled || idx === injectors.length - 1}
+                title="Move later" aria-label={`Move ${inj.serial_number || 'injector'} later`}
+                className="p-1.5 text-gray-400 hover:text-pdi-navy hover:bg-white rounded disabled:opacity-30 disabled:hover:bg-transparent">
+                <ChevronDown size={16} />
+              </button>
+              <button type="button" onClick={() => onRemove(inj.id)} disabled={disabled}
+                title="Remove" aria-label={`Remove ${inj.serial_number || 'injector'}`}
+                className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-white rounded disabled:opacity-30">
+                <X size={16} />
+              </button>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
+// ── Output toggle ─────────────────────────────────────────────────────────────
+// Each of Preview / Report / Inspection / Evaluation toggles independently, so
+// one Generate can produce several of them.
+function OutputToggle({ output, icon: Icon, active, disabled, onClick }) {
   return (
     <button
       type="button"
-      onClick={() => onClick(format)}
-      disabled={disabled || !!exporting}
-      aria-busy={busy}
-      className="flex items-center justify-center gap-1.5 rounded-lg border border-pdi-navy px-3 py-2 text-sm font-medium text-pdi-navy whitespace-nowrap min-h-[40px] hover:bg-pdi-navy/5 disabled:opacity-40"
+      onClick={() => onClick(output.value)}
+      disabled={disabled}
+      aria-pressed={active}
+      title={output.hint}
+      className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium whitespace-nowrap min-h-[40px] disabled:opacity-40
+        ${active
+          ? 'border-pdi-navy bg-pdi-navy text-white hover:bg-pdi-navy-light'
+          : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
     >
-      {busy ? <Loader2 size={15} className="animate-spin" /> : <Icon size={15} />}
-      {busy ? 'Exporting…' : children}
+      {Icon ? <Icon size={15} /> : null}
+      {output.label}
     </button>
   )
 }
 
-// ── Report action button ──────────────────────────────────────────────────────
-function ReportButton({ kind, icon: Icon, generating, disabled, onClick, accent, children }) {
-  const busy = generating === kind
-  const blocked = disabled || !!generating
+// ── File format toggle ────────────────────────────────────────────────────────
+// Excel / PDF for the Custom Report. Disabled until Preview or Report is on.
+function FormatToggle({ format, icon: Icon, active, disabled, onClick }) {
   return (
     <button
       type="button"
-      onClick={() => onClick(kind)}
-      disabled={blocked}
-      aria-busy={busy}
-      className={`flex items-center justify-center gap-1.5 px-3 py-2 text-sm rounded-lg min-h-[40px] font-medium whitespace-nowrap disabled:opacity-40
-        ${accent ? 'bg-pdi-navy text-white hover:bg-pdi-navy-light' : 'bg-pdi-teal text-white hover:opacity-90'}`}
+      onClick={() => onClick(format.value)}
+      disabled={disabled}
+      aria-pressed={active}
+      className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium whitespace-nowrap min-h-[40px] disabled:opacity-40
+        ${active
+          ? 'border-pdi-teal bg-pdi-teal text-white hover:opacity-90'
+          : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
     >
-      {busy ? <Loader2 size={15} className="animate-spin" /> : <Icon size={15} />}
-      {busy ? 'Generating…' : children}
+      {Icon ? <Icon size={15} /> : null}
+      {format.label}
     </button>
   )
 }

@@ -2,27 +2,28 @@
 /**
  * Excel and PDF export of a selected set of injector test records.
  *
- * This is the "give me the list" counterpart to services/injectorReports.js:
- * the reports there are engineering documents about the injectors' MEASURED
- * VALUES; the export here is the RECORD LIST — which injectors were selected,
- * how each one scored, and which test steps it failed — in a format the quality
- * department can sort, pivot, file or email.
+ * The Excel form of the Custom Report. Choosing PDF gives the printed report
+ * (services/pdf.js); choosing Excel gives this workbook, which carries the same
+ * report plus the flat data behind it:
  *
- *   buildExportModel()      pure data model (no pdfkit, no exceljs)
- *   buildInjectorWorkbook() → .xlsx Buffer: Injectors + Test Steps + Filters
- *   buildInjectorListPdf()  → .pdf Buffer: the same summary as a printed table
+ *   Comparison  the report itself — test steps down, injectors across, in the
+ *               order the user arranged them. Identical to what the preview
+ *               shows and the PDF prints, because it is built from the same
+ *               model (injectorReports.buildReportPreview).
+ *   Injectors   one row per injector: its result and the steps it failed
+ *   Test Steps  one row per injector and measurement point, for pivoting
+ *   Summary     the totals for the injectors in the file
  *
- * Both formats are generated from the SAME model, so a saved sheet and a saved
- * PDF of one selection can never disagree.
+ *   buildExportModel()      pure data model (no exceljs)
+ *   buildInjectorWorkbook() → .xlsx Buffer
  *
  * The page's filters decide WHICH injectors reach this module and nothing else.
- * They never appear in, or alter, what is written out: two exports of the same
- * injectors are identical whether they were found by a part-number filter, by a
- * failed-test-step filter, or by ticking the rows by hand.
+ * They never appear in, or alter, what is written out: two workbooks of the
+ * same injectors are identical whether they were found by a part-number filter,
+ * by a failed-test-step filter, or by ticking the rows by hand.
  */
 
 const ExcelJS = require('exceljs');
-const PDFDocument = require('pdfkit');
 
 const {
   isFlushStep,
@@ -38,16 +39,10 @@ const {
   injectorOutcome,
 } = require('./injectorResult');
 const { measurementPoints } = require('./injectorFilters');
-const {
-  drawInjectorBanner,
-  numericPartNumbers,
-  INJ_LM,
-  INJ_PAGE_H,
-  INJ_USABLE_W,
-} = require('./pdf');
-const { drawStatCards, COLORS } = require('./pdfCharts');
-
-const { NAVY, RED, GREEN, AMBER, DGRAY, MGRAY, LGRAY, BORDER, PANEL, WHITE } = COLORS;
+const { numericPartNumbers } = require('./pdf');
+// The report grid comes from the same builder the on-screen preview uses, so
+// the Comparison sheet cannot drift from the preview or the printed report.
+const { buildReportPreview } = require('./injectorReports');
 
 // Displayed name for each overall result.
 const RESULT_LABELS = {
@@ -239,6 +234,7 @@ function buildExportModel(injectors = [], opts = {}) {
     vendorName: String(opts.vendorName || '').trim(),
     generatedAt: opts.generatedAt || new Date().toISOString(),
     summary: summarise(list),
+    comparison: buildReportPreview(list),
     columns: SUMMARY_COLUMNS,
     rows: list.map(summaryRow),
     stepColumns: STEP_COLUMNS,
@@ -273,15 +269,86 @@ function styleHeader(sheet) {
 }
 
 /**
- * The selection as an Excel workbook:
- *   Injectors  — one row per selected injector (the summary)
- *   Test Steps — one row per injector × measurement point
- *   Filters    — the criteria and totals behind the export
+ * The report grid: test steps down the page, one column per injector in the
+ * order the user arranged them, exactly as the preview and the printed report
+ * lay it out.
+ *
+ * A reading that is a plain number is written as a NUMBER, not text, so the
+ * sheet can be charted and compared — the one thing a spreadsheet gives the
+ * quality department that the PDF cannot.
+ */
+function addComparisonSheet(workbook, model) {
+  const grid = model.comparison || { injectors: [], rows: [] };
+  const sheet = workbook.addWorksheet('Comparison');
+
+  sheet.columns = [
+    { header: 'Test Step', key: 'step', width: 26 },
+    { header: 'Specification', key: 'spec', width: 18 },
+    { header: 'Unit', key: 'unit', width: 12 },
+    ...grid.injectors.map((injector, index) => ({
+      // Two lines per column head, the same identity the PDF prints.
+      header: `${injector.partNumber || '—'}\nSN ${injector.serialNumber || '—'}`,
+      key: `inj${index}`,
+      width: 16,
+    })),
+  ];
+
+  for (const row of grid.rows) {
+    const added = sheet.addRow({
+      step: row.label,
+      spec: row.specification || '—',
+      unit: row.unit || '',
+      ...Object.fromEntries(row.values.map((cell, index) => {
+        const text = (cell.lines || []).filter(Boolean).join(' / ') || '—';
+        const numeric = Number(text);
+        // Only a lone, plain reading becomes a number; "No Test / Excess
+        // Return" and other multi-line cells stay as the text they read as.
+        const value = text !== '—' && text !== '' && Number.isFinite(numeric) ? numeric : text;
+        return [`inj${index}`, value];
+      })),
+    });
+    added.getCell('step').font = { bold: true };
+    row.values.forEach((cell, index) => {
+      const argb = resultFontColor(cell.status);
+      if (argb) added.getCell(`inj${index}`).font = { color: { argb }, bold: cell.status === FAIL };
+      added.getCell(`inj${index}`).alignment = { horizontal: 'right' };
+    });
+  }
+
+  // Closing roll-up row, as on the report.
+  const result = sheet.addRow({
+    step: 'Overall Result',
+    spec: '',
+    unit: '',
+    ...Object.fromEntries(grid.injectors.map((injector, index) => [`inj${index}`, injector.result || '—'])),
+  });
+  result.font = { bold: true };
+  grid.injectors.forEach((injector, index) => {
+    const argb = resultFontColor(injector.result);
+    if (argb) result.getCell(`inj${index}`).font = { bold: true, color: { argb } };
+    result.getCell(`inj${index}`).alignment = { horizontal: 'right' };
+  });
+
+  const header = sheet.getRow(1);
+  header.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
+  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XLSX_HEADER_FILL } };
+  header.alignment = { vertical: 'middle', wrapText: true };
+  header.height = 30;
+  // Keep the step names and the header in view while scrolling a wide batch.
+  sheet.views = [{ state: 'frozen', xSplit: 3, ySplit: 1 }];
+  return sheet;
+}
+
+/**
+ * The Custom Report as an Excel workbook: the report grid first, then the flat
+ * data behind it (see the module header for what each sheet holds).
  */
 async function buildInjectorWorkbook(model) {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'PDI Quality Management System';
   workbook.created = new Date(model.generatedAt);
+
+  addComparisonSheet(workbook, model);
 
   // ── Injectors ──────────────────────────────────────────────────────────
   const sheet = workbook.addWorksheet('Injectors');
@@ -350,151 +417,14 @@ async function buildInjectorWorkbook(model) {
   return Buffer.from(buffer);
 }
 
-// ── PDF ──────────────────────────────────────────────────────────────────────
-
-const PDF_HEADER_H = 18;
-const PDF_ROW_H = 16;
-const PDF_FOOTER_H = 22;
-const PDF_FONT = 8;
-const PDF_CELL_PAD = 6;   // gutter either side of a cell's text
-
-/** PDF columns are the summary columns that declared a width. */
-function pdfColumns(model) {
-  const shown = model.columns.filter((c) => c.pdfWidth > 0);
-  const total = shown.reduce((a, c) => a + c.pdfWidth, 0) || 1;
-  return shown.map((c) => ({ ...c, width: (c.pdfWidth / total) * INJ_USABLE_W }));
-}
-
-function outcomeColor(outcome) {
-  if (outcome === PASS) return GREEN;
-  if (outcome === FAIL) return RED;
-  if (outcome === DNF) return AMBER;
-  return DGRAY;
-}
-
-/** Table column headers, repeated at the top of every page. */
-function drawTableHeader(doc, columns, y) {
-  doc.rect(INJ_LM, y, INJ_USABLE_W, PDF_HEADER_H).fillColor(NAVY).fill();
-  doc.fontSize(7.5).font('Helvetica-Bold').fillColor(WHITE);
-  let x = INJ_LM;
-  for (const column of columns) {
-    doc.text((column.pdfHeader || column.header).toUpperCase(), x + PDF_CELL_PAD, y + 5.5, {
-      width: column.width - PDF_CELL_PAD * 2, align: column.align || 'left', lineBreak: false, ellipsis: true,
-    });
-    x += column.width;
-  }
-  return y + PDF_HEADER_H;
-}
-
-/** One injector row. */
-function drawTableRow(doc, columns, row, y, striped) {
-  if (striped) doc.rect(INJ_LM, y, INJ_USABLE_W, PDF_ROW_H).fillColor(PANEL).fill();
-  let x = INJ_LM;
-  for (const column of columns) {
-    const value = row[column.key];
-    const colored = column.colored;
-    doc.fontSize(PDF_FONT).font(colored ? 'Helvetica-Bold' : 'Helvetica')
-      .fillColor(colored ? outcomeColor(row.outcome) : DGRAY);
-    doc.text(value == null || value === '' ? '—' : String(value), x + PDF_CELL_PAD, y + (PDF_ROW_H - PDF_FONT) / 2, {
-      width: column.width - PDF_CELL_PAD * 2, align: column.align || 'left', lineBreak: false, ellipsis: true,
-    });
-    x += column.width;
-  }
-  doc.strokeColor(BORDER).lineWidth(0.25)
-    .moveTo(INJ_LM, y + PDF_ROW_H).lineTo(INJ_LM + INJ_USABLE_W, y + PDF_ROW_H).stroke();
-  return y + PDF_ROW_H;
-}
-
-/** Page footer: what produced this list, and where the reader is in it. */
-function drawFooter(doc, model, pageNumber, pageCount) {
-  const y = INJ_PAGE_H - INJ_LM - 8;
-  doc.fontSize(6.5).font('Helvetica').fillColor(LGRAY);
-  doc.text(
-    `Injector Test Results · ${model.summary.total} injector(s) · Generated ${String(model.generatedAt).slice(0, 19).replace('T', ' ')}`,
-    INJ_LM, y, { width: INJ_USABLE_W / 2, align: 'left', lineBreak: false, height: 8 }
-  );
-  doc.text(
-    `Page ${pageNumber} of ${pageCount}`,
-    INJ_LM + INJ_USABLE_W / 2, y, { width: INJ_USABLE_W / 2, align: 'right', lineBreak: false, height: 8 }
-  );
-}
-
 /**
- * The selection as a printable listing: the result counts for the exported
- * injectors, then the injector table, which continues across as many pages as
- * it needs with its header repeated.
+ * Filesystem-safe filename stem for the workbook. Mirrors the Custom Report
+ * PDF's name so the two formats of one report sit side by side in a folder.
  */
-function buildInjectorListPdf(model) {
-  return new Promise((resolve, reject) => {
-    try {
-      const doc = new PDFDocument({ bufferPages: true, margin: INJ_LM, size: 'Letter', layout: 'landscape' });
-      const chunks = [];
-      doc.on('data', (c) => chunks.push(c));
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
-      doc.on('error', reject);
-
-      const columns = pdfColumns(model);
-      const bottomLimit = INJ_PAGE_H - INJ_LM - PDF_FOOTER_H;
-
-      const banner = (pageText) => drawInjectorBanner(doc, {
-        title: model.title,
-        partNumbers: model.summary.partNumbers,
-        vendorName: model.vendorName || model.summary.brands.join(', '),
-        reportDate: model.generatedAt.slice(0, 10),
-        pageText,
-      }) + 10;
-
-      // ── Page 1: totals, filters, then as much of the table as fits ──────
-      let y = banner('');
-      const pct = (part) => (model.summary.total ? `${((part / model.summary.total) * 100).toFixed(1)}%` : '—');
-      drawStatCards(doc, {
-        x: INJ_LM, y, width: INJ_USABLE_W, height: 52,
-        cards: [
-          { label: 'Injectors Exported', value: model.summary.total, color: NAVY },
-          { label: 'Passed', value: model.summary.passed, sub: pct(model.summary.passed), color: GREEN },
-          { label: 'Failed', value: model.summary.failed, sub: pct(model.summary.failed), color: RED },
-          { label: 'DNF', value: model.summary.dnf, sub: pct(model.summary.dnf), color: AMBER },
-          ...(model.summary.untested
-            ? [{ label: 'No Result', value: model.summary.untested, sub: 'not scored', color: DGRAY }]
-            : []),
-        ],
-      });
-      y += 52 + 12;
-
-      if (!model.rows.length) {
-        doc.fontSize(9).font('Helvetica').fillColor(MGRAY);
-        doc.text('No injectors to list.', INJ_LM, y + 6, { width: INJ_USABLE_W, align: 'center' });
-      } else {
-        y = drawTableHeader(doc, columns, y);
-        model.rows.forEach((row, index) => {
-          if (y + PDF_ROW_H > bottomLimit) {
-            doc.addPage();
-            y = banner(`Continued · injector ${index + 1} of ${model.rows.length}`);
-            y = drawTableHeader(doc, columns, y);
-          }
-          y = drawTableRow(doc, columns, row, y, index % 2 === 1);
-        });
-      }
-
-      // Footers last: only now is the real page count known.
-      const range = doc.bufferedPageRange();
-      for (let i = 0; i < range.count; i += 1) {
-        doc.switchToPage(range.start + i);
-        drawFooter(doc, model, i + 1, range.count);
-      }
-
-      doc.end();
-    } catch (err) {
-      reject(err);
-    }
-  });
-}
-
-/** Filesystem-safe filename stem for an export of this selection. */
-function exportFilename(model, extension) {
+function exportFilename(model, extension = 'xlsx') {
   const part = numericPartNumbers(model.summary.partNumbers)[0] || 'Injectors';
   const safe = String(part).replace(/[^a-zA-Z0-9._-]/g, '_') || 'Injectors';
-  return `InjectorTestResults_${safe}_${model.summary.total}.${extension}`;
+  return `CustomReport_${safe}_${model.summary.total}.${extension}`;
 }
 
 module.exports = {
@@ -503,7 +433,6 @@ module.exports = {
   RESULT_LABELS,
   buildExportModel,
   buildInjectorWorkbook,
-  buildInjectorListPdf,
   exportFilename,
   summaryRow,
   stepRowsFor,

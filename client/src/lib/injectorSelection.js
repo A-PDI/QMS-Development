@@ -4,8 +4,10 @@
  * Pure functions with no React/DOM dependencies so the selection rules can be
  * unit-tested and reused (the page only wires them to state).
  *
- * The active selection is always presented in natural ascending serial-number
- * order, regardless of the order in which injectors were added or removed.
+ * The active selection carries its own ORDER: the order of `selectedIds` is the
+ * column order of the report, the preview and the workbook. Injectors are added
+ * at the end and the user rearranges them (see moveSelected), with
+ * sortSelectionBySerial available as a one-click reset.
  */
 
 /** Newest test first, with stable identifiers breaking timestamp ties. */
@@ -219,7 +221,7 @@ export function sortBySerialNumber(injectors = []) {
   })
 }
 
-/** Toggle one injector. Display/report order is applied by orderedSelection. */
+/** Toggle one injector. A newly ticked injector goes to the end of the order. */
 export function toggleSelected(selectedIds = [], id) {
   return selectedIds.includes(id) ? selectedIds.filter((x) => x !== id) : [...selectedIds, id]
 }
@@ -253,7 +255,38 @@ export function toggleAll(selectedIds = [], injectors = []) {
 /** Selected injector records, dynamically sorted by serial number. */
 export function orderedSelection(selectedIds = [], available = []) {
   const byId = new Map(available.map((i) => [i.id, i]))
-  return sortBySerialNumber(selectedIds.map((id) => byId.get(id)).filter(Boolean))
+  return selectedIds.map((id) => byId.get(id)).filter(Boolean)
+}
+
+// ── Report order ─────────────────────────────────────────────────────────────
+// `selectedIds` IS the report order — the order of its entries is the order of
+// the columns in the report, the preview and the workbook. These helpers are
+// the only things that change it.
+
+/** Move one injector one place towards the front (-1) or the back (+1). */
+export function moveSelected(selectedIds = [], id, delta) {
+  const from = selectedIds.indexOf(id)
+  if (from === -1) return selectedIds
+  return moveSelectedTo(selectedIds, from, from + delta)
+}
+
+/** Move the injector at `from` to `to`, clamped to the ends of the list. */
+export function moveSelectedTo(selectedIds = [], from, to) {
+  if (!Number.isInteger(from) || from < 0 || from >= selectedIds.length) return selectedIds
+  const target = Math.max(0, Math.min(selectedIds.length - 1, to))
+  if (target === from) return selectedIds
+  const next = [...selectedIds]
+  next.splice(target, 0, ...next.splice(from, 1))
+  return next
+}
+
+/**
+ * Reset the order to ascending serial number (SN-2 before SN-10, blanks last).
+ * This used to be applied automatically on every change; it is now the one-click
+ * shortcut behind the "Sort by serial" action.
+ */
+export function sortSelectionBySerial(selectedIds = [], available = []) {
+  return sortBySerialNumber(orderedSelection(selectedIds, available)).map((injector) => injector.id)
 }
 
 /** True when an injector row carries usable test-bench results. */
@@ -297,13 +330,116 @@ export function describeSelection(selected = []) {
   return `${selected.length} injector${selected.length === 1 ? '' : 's'}`
 }
 
+// ── Outputs ──────────────────────────────────────────────────────────────────
+// What the page can produce from a selection. Several can be produced at once.
+//
+//   preview     shown on screen; produces no file of its own
+//   report      the Custom Report — Excel or PDF (see FORMATS)
+//   inspection  the Fuel Injector inspection record(s), always PDF
+//   evaluation  the Shipment Evaluation, PDF only
+//
+// Preview and Report are two views of ONE document, so a format ticked
+// alongside either produces exactly one file, never two copies.
+
+export const OUTPUTS = [
+  { value: 'preview', label: 'Preview', hint: 'Show the report on screen' },
+  { value: 'report', label: 'Report', hint: 'Custom Report — Excel or PDF' },
+  { value: 'inspection', label: 'Inspection', hint: 'Fuel Injector inspection record (PDF)' },
+  { value: 'evaluation', label: 'Evaluation', hint: 'Shipment Evaluation (PDF)' },
+]
+
+export const FORMATS = [
+  { value: 'xlsx', label: 'Excel', extension: '.xlsx' },
+  { value: 'pdf', label: 'PDF', extension: '.pdf' },
+]
+
+/** The outputs a format choice applies to. */
+const FORMATTED_OUTPUTS = ['preview', 'report']
+
+/** Nothing selected: the user picks outputs deliberately. */
+export function emptyOutputs() {
+  return { outputs: [], formats: [] }
+}
+
+/** Add/remove one output, keeping OUTPUTS' running order. */
+export function toggleOutput(outputs = [], value) {
+  const next = outputs.includes(value) ? outputs.filter((o) => o !== value) : [...outputs, value]
+  return OUTPUTS.map((o) => o.value).filter((o) => next.includes(o))
+}
+
+/** Add/remove one file format, keeping FORMATS' order. */
+export function toggleFormat(formats = [], value) {
+  const next = formats.includes(value) ? formats.filter((f) => f !== value) : [...formats, value]
+  return FORMATS.map((f) => f.value).filter((f) => next.includes(f))
+}
+
+/** True when the Excel/PDF choice applies — i.e. Preview or Report is picked. */
+export function formatsApply(outputs = []) {
+  return outputs.some((o) => FORMATTED_OUTPUTS.includes(o))
+}
+
 /**
- * Report name used by the vendor prompt, or an empty string when that report
- * does not need vendor header information.
+ * The formats to actually produce the Custom Report in.
+ *
+ * Preview and Report describe the same document, so ticking both with one
+ * format still yields one file. With neither picked, a stray format choice
+ * produces nothing.
  */
-export function vendorPromptReport(kind) {
-  if (kind === 'evaluation') return 'Shipment Evaluation Report'
-  if (kind === 'customer' || kind === 'both') return 'Custom Report'
+export function reportFormats({ outputs = [], formats = [] } = {}) {
+  return formatsApply(outputs) ? formats.filter(Boolean) : []
+}
+
+/**
+ * Check an output selection before doing anything. Returns { ok, message }.
+ * Report needs a format; Preview on its own is fine (it opens the modal).
+ */
+export function validateOutputs({ outputs = [], formats = [] } = {}) {
+  if (!outputs.length) {
+    return { ok: false, message: 'Choose at least one of Preview, Report, Inspection or Evaluation.' }
+  }
+  if (outputs.includes('report') && !formats.length) {
+    return { ok: false, message: 'Choose Excel or PDF for the report.' }
+  }
+  return { ok: true, message: '' }
+}
+
+/** True when the run will write at least one file (so a save dialog is due). */
+export function producesFiles(selection = {}) {
+  const outputs = selection.outputs || []
+  return reportFormats(selection).length > 0
+    || outputs.includes('inspection')
+    || outputs.includes('evaluation')
+}
+
+/** Short description of what a Generate click will produce. */
+export function describeOutputs({ outputs = [], formats = [] } = {}) {
+  if (!outputs.length) return ''
+  const formatNames = reportFormats({ outputs, formats })
+    .map((value) => (FORMATS.find((f) => f.value === value) || {}).label)
+    .filter(Boolean)
+  return outputs
+    .map((value) => {
+      const label = (OUTPUTS.find((o) => o.value === value) || {}).label || value
+      if (value === 'report' && formatNames.length) return `${label} (${formatNames.join(' + ')})`
+      return label
+    })
+    .join(', ')
+}
+
+/**
+ * Report name used by the vendor prompt, or an empty string when the chosen
+ * outputs need no vendor header information.
+ *
+ * Both the Custom Report and the Shipment Evaluation carry a Part / Vendor /
+ * Report Date header, so one prompt covers whichever of them is selected.
+ */
+export function vendorPromptReport(outputs = []) {
+  const list = Array.isArray(outputs) ? outputs : [outputs]
+  const wantsReport = list.includes('report') || list.includes('preview') || list.includes('customer')
+  const wantsEvaluation = list.includes('evaluation')
+  if (wantsReport && wantsEvaluation) return 'Custom Report and Shipment Evaluation'
+  if (wantsEvaluation) return 'Shipment Evaluation Report'
+  if (wantsReport) return 'Custom Report'
   return ''
 }
 

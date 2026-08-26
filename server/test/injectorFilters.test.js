@@ -21,7 +21,6 @@ const {
   matchedStepLabels,
   filterInjectors,
   needsStepData,
-  hasCriteria,
 } = require('../services/injectorFilters');
 
 /** A hydrated injector, exactly as the routes and exporters see one. */
@@ -186,17 +185,4 @@ test('result, date-range and step criteria combine into one selection', () => {
 
 test('several result statuses can be selected at once', () => {
   assert.deepStrictEqual(serials(filterInjectors(ALL, { status: 'fail,dnf' })), ['SN002', 'SN003', 'SN004']);
-});
-
-// ── Detecting a filter ──────────────────────────────────────────────────────
-test('criteria that narrow nothing are detectable as an empty filter', () => {
-  assert.strictEqual(hasCriteria({}), false);
-  assert.strictEqual(hasCriteria({ part_number: '   ' }), false, 'whitespace is not a filter');
-  assert.strictEqual(hasCriteria({ step_status: 'fail' }), false, 'an outcome with no step selects nothing');
-  assert.strictEqual(hasCriteria({ part_number: '6513589PX' }), true);
-  assert.strictEqual(hasCriteria({ serial_number: 'SN002' }), true);
-  assert.strictEqual(hasCriteria({ status: 'fail' }), true);
-  assert.strictEqual(hasCriteria({ date_from: '2026-06-01' }), true);
-  assert.strictEqual(hasCriteria({ steps: 'IVM06-R' }), true);
-  assert.strictEqual(hasCriteria(normaliseCriteria({ steps: 'IVM06-R' })), true, 'already-normalised criteria work too');
 });

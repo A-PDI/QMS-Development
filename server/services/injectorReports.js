@@ -11,8 +11,8 @@
  *                         whose PDF is served by /api/inspections/:id/pdf
  *   supplier_evaluation → "Shipment Evaluation Report" (summary + detail PDF)
  *
- * Selected injectors are ordered by serial number so every report and preview
- * matches the automatically ordered selection shown in the UI.
+ * Selected injectors keep the order the user arranged them in, so every report
+ * and preview lays its columns out exactly like the selection panel.
  */
 
 const db = require('../db/adapter');
@@ -52,7 +52,12 @@ function sanitiseFilePart(value, fallback) {
 
 /**
  * Load the selected injector rows, hydrated with their normalised test steps,
- * in ascending serial-number order (which drives report column order).
+ * IN THE ORDER THE IDS WERE GIVEN.
+ *
+ * That order is the report's column order, and it is the user's to arrange:
+ * the selection panel lets them move injectors up and down (and offers a
+ * sort-by-serial shortcut), so this must not impose an order of its own.
+ * Ids that no longer exist are dropped without disturbing the rest.
  */
 function loadSelectedInjectors(injectorIds = []) {
   const ids = (Array.isArray(injectorIds) ? injectorIds : []).map(String).filter(Boolean);
@@ -66,19 +71,10 @@ function loadSelectedInjectors(injectorIds = []) {
     ids
   );
   const byId = new Map(rows.map((r) => [String(r.id), r]));
-  // Drop ids that no longer exist, then maintain the same natural serial order
-  // as the active selection panel (SN-2 before SN-10; blanks last).
   return ids
     .map((id) => byId.get(id))
     .filter(Boolean)
-    .map(hydrateInjectorRow)
-    .sort((a, b) => {
-      const as = String(a.serial_number || '').trim();
-      const bs = String(b.serial_number || '').trim();
-      if (!as && bs) return 1;
-      if (as && !bs) return -1;
-      return as.localeCompare(bs, undefined, { numeric: true, sensitivity: 'base' });
-    });
+    .map(hydrateInjectorRow);
 }
 
 /** Customer-facing steps of one injector (excludes the internal flush step). */

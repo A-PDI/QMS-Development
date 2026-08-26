@@ -305,21 +305,6 @@ function needsStepData(criteria = {}) {
   return c.steps.length > 0;
 }
 
-/**
- * True when the criteria narrow anything at all.
- *
- * Used to tell "export what the filters match" apart from "export nothing was
- * asked for" — never to describe a filter on an exported file, which carries no
- * record of how its injectors were chosen.
- */
-function hasCriteria(criteria = {}) {
-  const c = criteria.__normalised ? criteria : normaliseCriteria(criteria);
-  return Boolean(
-    c.search || c.partNumbers.length || c.serialNumbers.length || c.statuses.length ||
-    c.dateFrom || c.dateTo || c.steps.length
-  );
-}
-
 module.exports = {
   PASS,
   FAIL,
@@ -345,6 +330,5 @@ module.exports = {
   matchesInjector,
   filterInjectors,
   needsStepData,
-  hasCriteria,
   injectorOutcome,
 };
