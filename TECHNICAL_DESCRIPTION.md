@@ -287,10 +287,13 @@ CREATE TABLE inspection_templates (
 ```
 
 **Section Types:**
-- `pfn_checklist` — Each item has a Pass / Fail / N (Not Inspected) toggle and a remarks field.
+- `pfn_checklist` — Each item has a Pass / Fail / Accepted toggle and a findings field. On Section A (Receiving) the toggle also offers **N/A** (stored as `"N"`); items marked N/A are left out of the generated PDF, and a Section A where every item is N/A is dropped from the report entirely.
 - `pass_fail_checklist` — Simpler yes/no checklist.
 - `dimensional` — Table of measurement name, location, specification, and actual measurement input.
+- `groove_specs` — Fire Ring (cylinder head). Each spec flagged `entry: true` gets its own per-cylinder measurement chart; any spec left `entry: false` is listed in a reference-only header instead.
 - `checklist` — Generic checklist items.
+
+Section B (Visual) carries a **Pass All** button in its section header that marks every item in the section Pass in one click.
 
 ---
 

@@ -34,11 +34,13 @@ export function initSectionData(templateSections) {
   const data = {}
   for (const [key, section] of Object.entries(templateSections)) {
     switch (section.section_type) {
+      // 'N' is the inspector-selected "not applicable" code, so a fresh row
+      // starts with no status at all (as every other section type does).
       case 'pfn_checklist':
-        data[key] = section.items.map(item => ({ id: item.id, finding: '', status: 'N' }))
+        data[key] = section.items.map(item => ({ id: item.id, finding: '', status: '' }))
         break
       case 'pfn_visual':
-        data[key] = section.items.map(item => ({ id: item.id, result: 'N', remarks: '' }))
+        data[key] = section.items.map(item => ({ id: item.id, result: '', remarks: '' }))
         break
       case 'dimensional':
         data[key] = section.items.map(item => ({ id: item.id, spec: item.spec || '', actual1: '', actual2: '', actual3: '', status: '' }))

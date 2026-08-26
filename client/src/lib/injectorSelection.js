@@ -430,17 +430,13 @@ export function describeOutputs({ outputs = [], formats = [] } = {}) {
  * Report name used by the vendor prompt, or an empty string when the chosen
  * outputs need no vendor header information.
  *
- * Both the Custom Report and the Shipment Evaluation carry a Part / Vendor /
- * Report Date header, so one prompt covers whichever of them is selected.
+ * Only the Shipment Evaluation Report identifies a shipment by vendor, so it
+ * is the one output that asks. The Custom Report falls back to the test
+ * bench's brand for its header instead of prompting.
  */
 export function vendorPromptReport(outputs = []) {
   const list = Array.isArray(outputs) ? outputs : [outputs]
-  const wantsReport = list.includes('report') || list.includes('preview') || list.includes('customer')
-  const wantsEvaluation = list.includes('evaluation')
-  if (wantsReport && wantsEvaluation) return 'Custom Report and Shipment Evaluation'
-  if (wantsEvaluation) return 'Shipment Evaluation Report'
-  if (wantsReport) return 'Custom Report'
-  return ''
+  return list.includes('evaluation') ? 'Shipment Evaluation Report' : ''
 }
 
 /**

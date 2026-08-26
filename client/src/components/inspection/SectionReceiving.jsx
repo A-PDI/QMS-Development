@@ -2,6 +2,9 @@ import { useState } from 'react'
 import PFNToggle from './PFNToggle'
 import ItemAttachment from './ItemAttachment'
 import { Pencil, Trash2, Check, X } from 'lucide-react'
+import { NA_STATUS, PFN_OPTIONS_WITH_NA } from '../../lib/sections'
+
+const PFN_OPTIONS = ['P', 'F', 'A']
 
 export default function SectionReceiving({
   section,
@@ -14,6 +17,7 @@ export default function SectionReceiving({
   onDeleteItem,
   uploadingKey,
   adminItemTools, // { onDelete(itemId), onEdit(itemId, name, requirement) }
+  allowNA = false, // offer an "N/A" result (Section A only)
 }) {
   const [editingId, setEditingId] = useState(null)
   const [editName, setEditName] = useState('')
@@ -40,6 +44,12 @@ export default function SectionReceiving({
   const showImages = !!sectionKey && (!!onUploadItem || readOnly)
   const showTools = !!adminItemTools
 
+  // The N/A button is offered on Section A only, but a row already marked N/A
+  // always keeps its option so the selection stays visible everywhere.
+  function optionsFor(row) {
+    return allowNA || row.status === NA_STATUS ? PFN_OPTIONS_WITH_NA : PFN_OPTIONS
+  }
+
   function rowClass() {
     // Pass/Fail is signified by the check/X status control, not a row fill.
     return 'bg-white border-gray-200'
@@ -56,7 +66,7 @@ export default function SectionReceiving({
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-36">Inspection Item</th>
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-56">Description</th>
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Finding / Observation</th>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-28">Status</th>
+              <th className={`px-3 py-2 text-left text-xs font-semibold text-gray-600 ${allowNA ? 'w-40' : 'w-28'}`}>Status</th>
               {showImages && (
                 <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 w-20">Image</th>
               )}
@@ -70,11 +80,12 @@ export default function SectionReceiving({
               const row = data.find(r => r.id === item.id) || { id: item.id, finding: '', status: '' }
               const isFail = row.status === 'F'
               const isAccepted = row.status === 'A'
+              const isNA = row.status === NA_STATUS
               const needsFinding = (isFail || isAccepted) && !row.finding?.trim()
               const needsImage = showImages && isAccepted && !attachments.some(a => a.section_key === sectionKey && String(a.item_id) === String(item.id))
               const isEditing = editingId === item.id
               return (
-                <tr key={item.id} className="border-b hover:bg-gray-50">
+                <tr key={item.id} className={`border-b hover:bg-gray-50 ${isNA ? 'opacity-60' : ''}`}>
                   <td className="px-3 py-2 text-gray-500 align-top pt-3">{item.id}</td>
                   <td className="px-3 py-2 font-medium text-gray-700 align-top pt-2">
                     {isEditing ? (
@@ -114,7 +125,7 @@ export default function SectionReceiving({
                           rows={2}
                           value={row.finding}
                           onChange={e => update(item.id, 'finding', e.target.value)}
-                          placeholder={isFail ? 'Description required…' : isAccepted ? 'Description required for Accepted item…' : 'Observation…'}
+                          placeholder={isFail ? 'Description required…' : isAccepted ? 'Description required for Accepted item…' : isNA ? 'Not applicable — omitted from the report' : 'Observation…'}
                         />
                         {needsFinding && <span className="text-xs text-red-500">Description required</span>}
                         {isAccepted && needsImage && <span className="text-xs text-amber-600">Image required for Accepted item</span>}
@@ -122,7 +133,7 @@ export default function SectionReceiving({
                     )}
                   </td>
                   <td className="px-3 py-2 align-top pt-3">
-                    <PFNToggle value={row.status} onChange={v => update(item.id, 'status', v)} readOnly={readOnly} />
+                    <PFNToggle value={row.status} onChange={v => update(item.id, 'status', v)} readOnly={readOnly} options={optionsFor(row)} />
                   </td>
                   {showImages && (
                     <td className="px-3 py-2 align-top pt-2 text-center">
@@ -169,9 +180,10 @@ export default function SectionReceiving({
           const row = data.find(r => r.id === item.id) || { id: item.id, finding: '', status: '' }
           const isFail = row.status === 'F'
           const isAccepted = row.status === 'A'
+          const isNA = row.status === NA_STATUS
           const needsFinding = (isFail || isAccepted) && !row.finding?.trim()
           return (
-            <div key={item.id} className={`border rounded-lg p-3 ${rowClass(row)}`}>
+            <div key={item.id} className={`border rounded-lg p-3 ${rowClass(row)} ${isNA ? 'opacity-60' : ''}`}>
               <div className="flex items-start justify-between gap-2 mb-2">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline gap-1.5">
@@ -189,7 +201,7 @@ export default function SectionReceiving({
               </div>
               <div className="flex items-center gap-2 mt-2 flex-wrap">
                 <span className="text-xs text-gray-500">Status:</span>
-                <PFNToggle value={row.status} onChange={v => update(item.id, 'status', v)} readOnly={readOnly} />
+                <PFNToggle value={row.status} onChange={v => update(item.id, 'status', v)} readOnly={readOnly} options={optionsFor(row)} />
                 {showImages && (
                   <div className="ml-auto">
                     <ItemAttachment sectionKey={sectionKey} itemId={item.id} isFail={isFail || isAccepted}
@@ -210,7 +222,7 @@ export default function SectionReceiving({
                       rows={2}
                       value={row.finding}
                       onChange={e => update(item.id, 'finding', e.target.value)}
-                      placeholder={isFail ? 'Description required…' : isAccepted ? 'Description required for Accepted item…' : 'Observation…'}
+                      placeholder={isFail ? 'Description required…' : isAccepted ? 'Description required for Accepted item…' : isNA ? 'Not applicable — omitted from the report' : 'Observation…'}
                     />
                     {needsFinding && <span className="text-xs text-red-500">Description required</span>}
                   </div>
