@@ -41,7 +41,48 @@ function testDate(value) {
   return Number.isNaN(parsed) ? '' : new Date(parsed).toISOString().slice(0, 10)
 }
 
-/** Independent Part Number, Serial Number, date-range and result filters. */
+/**
+ * Split a filter box into individual values. Commas, semicolons, pipes and any
+ * whitespace separate entries, so a column of serial numbers pasted straight
+ * from a spreadsheet filters as a list. Neither part numbers nor bench serial
+ * numbers contain spaces.
+ */
+export function parseTokens(value) {
+  const raw = Array.isArray(value) ? value : [value]
+  const out = []
+  const seen = new Set()
+  for (const entry of raw) {
+    if (entry == null) continue
+    for (const token of String(entry).split(/[\s,;|]+/)) {
+      const trimmed = token.trim()
+      if (!trimmed) continue
+      const key = trimmed.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(trimmed)
+    }
+  }
+  return out
+}
+
+/** True when any token appears in `value` (an empty token list matches all). */
+function matchesAnyToken(value, tokens) {
+  if (!tokens.length) return true
+  const haystack = String(value ?? '').toLowerCase()
+  return tokens.some((token) => haystack.includes(token.toLowerCase()))
+}
+
+/**
+ * Independent Part Number, Serial Number, date-range and result filters.
+ *
+ * The part and serial boxes each accept SEVERAL values (see parseTokens) and a
+ * record matches when ANY of them is contained in the field, so "all injectors
+ * of part number(s) A, B" is one filter rather than three passes.
+ *
+ * TEST-STEP criteria are deliberately not evaluated here: individual steps are
+ * not part of a list row, so the server resolves them (see buildInjectorQuery)
+ * and returns rows that already satisfy them.
+ */
 export function filterInjectors(injectors = [], {
   partNumber = '',
   serialNumber = '',
@@ -49,15 +90,15 @@ export function filterInjectors(injectors = [], {
   dateFrom = '',
   dateTo = '',
 } = {}) {
-  const part = String(partNumber ?? '').trim().toLowerCase()
-  const serial = String(serialNumber ?? '').trim().toLowerCase()
+  const parts = parseTokens(partNumber)
+  const serials = parseTokens(serialNumber)
   const wantedStatus = String(status ?? '').trim().toLowerCase()
   const from = String(dateFrom ?? '').trim()
   const to = String(dateTo ?? '').trim()
 
   return sortByTestDate(injectors).filter((injector) => {
-    if (part && !String(injector?.part_number ?? '').toLowerCase().includes(part)) return false
-    if (serial && !String(injector?.serial_number ?? '').toLowerCase().includes(serial)) return false
+    if (!matchesAnyToken(injector?.part_number, parts)) return false
+    if (!matchesAnyToken(injector?.serial_number, serials)) return false
     const date = testDate(injector?.test_datetime)
     if (from && (!date || date < from)) return false
     if (to && (!date || date > to)) return false
@@ -68,6 +109,103 @@ export function filterInjectors(injectors = [], {
     if ((wantedStatus === 'unscored' || wantedStatus === 'unknown') && actualStatus !== 'unknown') return false
     return true
   })
+}
+
+// ── Filter state ─────────────────────────────────────────────────────────────
+// One object holds every filter on the page. Keeping it in one place is what
+// lets the same value drive the visible list, the server query, the "what am I
+// looking at" summary and the export request.
+
+/** How a selected test step must have scored for a record to match. */
+export const STEP_STATUS_OPTIONS = [
+  { value: 'fail', label: 'Failed' },
+  { value: 'pass', label: 'Passed' },
+  { value: 'dnf', label: 'Did not finish' },
+  { value: 'any', label: 'Was tested' },
+]
+
+/** The starting (unfiltered) state. */
+export function emptyFilters() {
+  return {
+    partNumber: '',
+    serialNumber: '',
+    status: '',
+    dateFrom: '',
+    dateTo: '',
+    steps: [],
+    stepStatus: 'fail',
+    stepMatch: 'any',
+  }
+}
+
+/** Add/remove one test-step code from the step filter. */
+export function toggleStepFilter(steps = [], code) {
+  return steps.includes(code) ? steps.filter((c) => c !== code) : [...steps, code]
+}
+
+/** True when anything at all is filtered. */
+export function hasActiveFilters(filters = {}) {
+  return Boolean(
+    parseTokens(filters.partNumber).length ||
+    parseTokens(filters.serialNumber).length ||
+    String(filters.status ?? '').trim() ||
+    String(filters.dateFrom ?? '').trim() ||
+    String(filters.dateTo ?? '').trim() ||
+    (filters.steps || []).length
+  )
+}
+
+/**
+ * Filter state → query parameters for GET /api/injector-tests. Empty values
+ * are omitted so the query key (and therefore the cache entry) only changes
+ * when a real filter changes.
+ */
+export function buildInjectorQuery(filters = {}) {
+  const query = {}
+  const parts = parseTokens(filters.partNumber)
+  const serials = parseTokens(filters.serialNumber)
+  const steps = (filters.steps || []).filter(Boolean)
+
+  if (parts.length) query.part_number = parts.join(',')
+  if (serials.length) query.serial_number = serials.join(',')
+  if (String(filters.status ?? '').trim()) query.status = String(filters.status).trim()
+  if (String(filters.dateFrom ?? '').trim()) query.date_from = String(filters.dateFrom).trim()
+  if (String(filters.dateTo ?? '').trim()) query.date_to = String(filters.dateTo).trim()
+  if (steps.length) {
+    query.steps = steps.join(',')
+    query.step_status = filters.stepStatus || 'fail'
+    query.step_match = filters.stepMatch || 'any'
+  }
+  return query
+}
+
+/**
+ * The active filters as short readable phrases, for the summary line above the
+ * list and for the export request. `stepLabels` maps a step code to its display
+ * name; codes with no entry fall back to the raw code.
+ */
+export function describeActiveFilters(filters = {}, stepLabels = {}) {
+  const out = []
+  const parts = parseTokens(filters.partNumber)
+  const serials = parseTokens(filters.serialNumber)
+  const steps = (filters.steps || []).filter(Boolean)
+  const statusLabel = { pass: 'Passed', fail: 'Failed', dnf: 'DNF', unscored: 'No result', unknown: 'No result' }
+
+  if (parts.length) out.push(`Part ${parts.join(', ')}`)
+  if (serials.length) out.push(`Serial ${serials.join(', ')}`)
+  const status = String(filters.status ?? '').trim().toLowerCase()
+  if (status) out.push(`Result ${statusLabel[status] || status}`)
+  if (filters.dateFrom && filters.dateTo) {
+    out.push(filters.dateFrom === filters.dateTo ? `Tested ${filters.dateFrom}` : `Tested ${filters.dateFrom} – ${filters.dateTo}`)
+  } else if (filters.dateFrom) out.push(`Tested from ${filters.dateFrom}`)
+  else if (filters.dateTo) out.push(`Tested through ${filters.dateTo}`)
+
+  if (steps.length) {
+    const verb = (STEP_STATUS_OPTIONS.find((o) => o.value === (filters.stepStatus || 'fail')) || {}).label || 'Failed'
+    const scope = steps.length > 1 ? (filters.stepMatch === 'all' ? ' all of' : ' any of') : ''
+    out.push(`${verb}${scope} ${steps.map((code) => stepLabels[code] || code).join(', ')}`)
+  }
+  return out
 }
 
 /** Natural serial ordering (SN-2 before SN-10), with blank serials last. */

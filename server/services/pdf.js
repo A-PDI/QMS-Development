@@ -113,6 +113,49 @@ function drawReportHeaderInfo(doc, {
   }
 }
 
+/**
+ * The navy title banner shared by every injector report: PDI logo and title on
+ * the left, the Part / Vendor / Report Date block on the right. Returns the Y
+ * coordinate immediately below the banner.
+ *
+ * Geometry defaults to the landscape injector-report page; callers on other
+ * page sizes pass `left`, `width` and `top` explicitly.
+ */
+function drawInjectorBanner(doc, {
+  title = '',
+  partNumbers = [],
+  vendorName = '',
+  reportDate = '',
+  pageText = '',
+  top = INJ_LM,
+  left = INJ_LM,
+  width = INJ_USABLE_W,
+  height = INJ_BANNER_H,
+} = {}) {
+  doc.rect(left, top, width, height).fillColor(NAVY).fill();
+
+  let logoW = 0;
+  if (fs.existsSync(LOGO_PATH)) {
+    try {
+      const logoH = 34;
+      doc.image(LOGO_PATH, left + 14, top + (height - logoH) / 2, { height: logoH, fit: [110, logoH] });
+      logoW = 110;
+    } catch (_) { /* a missing/unreadable logo must never fail a report */ }
+  }
+
+  const rightW = Math.min(260, Math.max(150, width * 0.36));
+  const rightX = left + width - rightW - 14;
+  drawReportHeaderInfo(doc, { top, rightX, rightW, partNumbers, vendorName, reportDate, pageText });
+
+  const titleX = left + logoW + 24;
+  doc.fontSize(16).font('Helvetica-Bold').fillColor(WHITE);
+  doc.text(title, titleX, top + (height - 16) / 2 - 2, {
+    width: Math.max(40, rightX - titleX - 14), height: 20, align: 'left', lineBreak: false, ellipsis: true,
+  });
+
+  return top + height;
+}
+
 // Test-step unit label styling: always small (6pt) and gray. Volume-flow
 // units sometimes arrive from the bench as a compound value (e.g.
 // "mm3/STRK") — the report always shows just "mm3", with the "3" drawn as a
@@ -1603,43 +1646,18 @@ function drawInjectorComparisonTable(doc, injectors = [], opts = {}) {
     // ── Header banner — logo + title left-aligned, shared Part/Vendor/Date
     // information right-aligned on the opposite edge. Repeated in full on
     // every continuation page. ───────────────────────────────────────────
-    const top = LM;
-    const bannerH = INJ_BANNER_H;
-    doc.rect(LM, top, usableW, bannerH).fillColor(NAVY).fill();
-    let logoW = 0;
-    if (fs.existsSync(LOGO_PATH)) {
-      try {
-        const logoH = 34;
-        doc.image(LOGO_PATH, LM + 14, top + (bannerH - logoH) / 2, { height: logoH, fit: [110, logoH] });
-        logoW = 110;
-      } catch (_) {}
-    }
-
-    // Right-aligned block shared with Shipment Evaluation: Part, Vendor and
-    // Report Date. A supplied vendor wins; legacy callers that omit it fall
-    // back to the distinct synced bench brand(s).
-    const rightW = 260;
-    const rightX = LM + usableW - rightW - 14;
+    // A supplied vendor wins; legacy callers that omit it fall back to the
+    // distinct synced bench brand(s).
     const brands = [...new Set(headerList.map((i) => String(i.brand || '').trim()).filter(Boolean))];
-    drawReportHeaderInfo(doc, {
-      top,
-      rightX,
-      rightW,
+    tableTop = drawInjectorBanner(doc, {
+      title: opts.title || 'Custom Report',
       partNumbers: headerList.map((i) => i.part_number),
       vendorName: opts.vendorName || brands.join(', '),
       reportDate: opts.reportDate,
       pageText: multiPage
         ? `Page ${displayPage} of ${displayPageCount} · Injectors ${opts.firstItemNumber}–${opts.lastItemNumber} of ${headerList.length}`
         : '',
-    });
-
-    // Title — left-aligned, vertically centered, immediately right of the logo.
-    const titleX = LM + logoW + 24;
-    const titleW = rightX - titleX - 14;
-    doc.fontSize(16).font('Helvetica-Bold').fillColor(WHITE);
-    doc.text(opts.title || 'Custom Report', titleX, top + (bannerH - 16) / 2 - 2, { width: titleW, height: 20, align: 'left', lineBreak: false, ellipsis: true });
-
-    tableTop = top + bannerH + 10;
+    }) + 10;
   }
 
   const { rowH, nameFont, stepNameFont, specValFont, stepW, specW, injColW, valFont, headerRowH, resultRowH } = layout;
@@ -1897,39 +1915,12 @@ function generateShipmentEvaluationPdf(injectors = [], opts = {}) {
  * vendor's batch, so the job number is deliberately not shown here.
  */
 function drawEvaluationBanner(doc, title, summary, opts = {}) {
-  const LM = INJ_LM;
-  const usableW = INJ_USABLE_W;
-  const top = LM;
-  const bannerH = INJ_BANNER_H;
-
-  doc.rect(LM, top, usableW, bannerH).fillColor(NAVY).fill();
-  let logoW = 0;
-  if (fs.existsSync(LOGO_PATH)) {
-    try {
-      const logoH = 34;
-      doc.image(LOGO_PATH, LM + 14, top + (bannerH - logoH) / 2, { height: logoH, fit: [110, logoH] });
-      logoW = 110;
-    } catch (_) {}
-  }
-
-  const rightW = 260;
-  const rightX = LM + usableW - rightW - 14;
-  drawReportHeaderInfo(doc, {
-    top,
-    rightX,
-    rightW,
+  return drawInjectorBanner(doc, {
+    title,
     partNumbers: summary.partNumbers,
     vendorName: opts.vendorName || (summary.brands || []).join(', '),
     reportDate: opts.reportDate,
   });
-
-  const titleX = LM + logoW + 24;
-  doc.fontSize(16).font('Helvetica-Bold').fillColor(WHITE);
-  doc.text(title, titleX, top + (bannerH - 16) / 2 - 2, {
-    width: rightX - titleX - 14, height: 20, align: 'left', lineBreak: false, ellipsis: true,
-  });
-
-  return top + bannerH;
 }
 
 /** Page 1 of the Shipment Evaluation Report. */
@@ -2039,6 +2030,7 @@ module.exports = {
   generateShipmentEvaluationPdf,
   drawInjectorComparisonPages,
   drawInjectorComparisonTable,
+  drawInjectorBanner,
   buildInjectorComparisonModel,
   computeComparisonLayout,
   numericPartNumber,

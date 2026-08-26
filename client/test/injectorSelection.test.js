@@ -20,6 +20,12 @@ import {
   describeSelection,
   vendorPromptReport,
   suggestReportName,
+  parseTokens,
+  emptyFilters,
+  buildInjectorQuery,
+  describeActiveFilters,
+  hasActiveFilters,
+  toggleStepFilter,
 } from '../src/lib/injectorSelection.js'
 
 const inj = (id, extra = {}) => ({
@@ -135,4 +141,111 @@ test('suggested filenames contain part, optional vendor and count but no job num
   )
   assert.strictEqual(suggestReportName('ShipmentEvaluation', [list[0]], { vendor: '' }), 'ShipmentEvaluation_6513589PX_1')
   assert.strictEqual(suggestReportName('ShipmentEvaluation', []), 'ShipmentEvaluation_0')
+})
+
+// ── Multi-value filters and the server query ────────────────────────────────
+test('a filter box splits on commas, spaces, newlines and pipes', () => {
+  assert.deepStrictEqual(parseTokens('6513589PX, 0445120067'), ['6513589PX', '0445120067'])
+  assert.deepStrictEqual(parseTokens('SN1 SN2\nSN3|SN4;SN5'), ['SN1', 'SN2', 'SN3', 'SN4', 'SN5'])
+  assert.deepStrictEqual(parseTokens('SN1, sn1'), ['SN1'], 'duplicates are dropped case-insensitively')
+  assert.deepStrictEqual(parseTokens(''), [])
+  assert.deepStrictEqual(parseTokens(null), [])
+})
+
+test('part and serial filters accept several values and match any of them', () => {
+  assert.deepStrictEqual(
+    filterInjectors(list, { partNumber: '0445120231, 6513589PX' }).map((i) => i.id),
+    ['2', '3', '1', '5', '4']
+  )
+  assert.deepStrictEqual(filterInjectors(list, { serialNumber: 'ABC-222 ZX-400' }).map((i) => i.id), ['2', '4'])
+  assert.deepStrictEqual(
+    filterInjectors(list, { partNumber: '6513589PX', serialNumber: 'ABC-222, ABC-333' }).map((i) => i.id),
+    ['3'],
+    'part and serial filters intersect'
+  )
+})
+
+test('a single value still filters exactly as it always did', () => {
+  assert.deepStrictEqual(filterInjectors(list, { partNumber: '0445' }).map((i) => i.id), ['2'])
+  assert.deepStrictEqual(filterInjectors(list, { serialNumber: 'abc' }).map((i) => i.id), ['2', '3'])
+})
+
+test('the server query carries only the filters that are actually set', () => {
+  assert.deepStrictEqual(buildInjectorQuery(emptyFilters()), {})
+  assert.deepStrictEqual(
+    buildInjectorQuery({
+      ...emptyFilters(),
+      partNumber: '6513589PX 0445120067',
+      serialNumber: 'SN1',
+      status: 'fail',
+      dateFrom: '2026-06-01',
+      dateTo: '2026-06-30',
+    }),
+    {
+      part_number: '6513589PX,0445120067',
+      serial_number: 'SN1',
+      status: 'fail',
+      date_from: '2026-06-01',
+      date_to: '2026-06-30',
+    }
+  )
+})
+
+test('a step filter sends its outcome and match mode alongside the codes', () => {
+  assert.deepStrictEqual(
+    buildInjectorQuery({ ...emptyFilters(), steps: ['IVM06-R'] }),
+    { steps: 'IVM06-R', step_status: 'fail', step_match: 'any' },
+    'the step filter defaults to failures on any of the chosen steps'
+  )
+  assert.deepStrictEqual(
+    buildInjectorQuery({ ...emptyFilters(), steps: ['IVM01', 'IVM06-R'], stepStatus: 'pass', stepMatch: 'all' }),
+    { steps: 'IVM01,IVM06-R', step_status: 'pass', step_match: 'all' }
+  )
+})
+
+test('step codes toggle in and out of the filter', () => {
+  assert.deepStrictEqual(toggleStepFilter([], 'IVM01'), ['IVM01'])
+  assert.deepStrictEqual(toggleStepFilter(['IVM01'], 'IVM06-R'), ['IVM01', 'IVM06-R'])
+  assert.deepStrictEqual(toggleStepFilter(['IVM01', 'IVM06-R'], 'IVM01'), ['IVM06-R'])
+})
+
+test('an active filter is detectable so the page can offer to clear it', () => {
+  assert.strictEqual(hasActiveFilters(emptyFilters()), false)
+  assert.strictEqual(hasActiveFilters({ ...emptyFilters(), partNumber: '  ' }), false, 'whitespace is not a filter')
+  assert.strictEqual(hasActiveFilters({ ...emptyFilters(), partNumber: '6513589PX' }), true)
+  assert.strictEqual(hasActiveFilters({ ...emptyFilters(), steps: ['IVM01'] }), true)
+  assert.strictEqual(hasActiveFilters({ ...emptyFilters(), status: 'fail' }), true)
+})
+
+test('active filters are described in the words shown above the list', () => {
+  const labels = { 'IVM06-R': 'Peak Torque - Return', IVM01: 'Peak HP' }
+  assert.deepStrictEqual(
+    describeActiveFilters({
+      ...emptyFilters(),
+      partNumber: '6513589PX,0445120067',
+      serialNumber: 'SN1',
+      status: 'fail',
+      dateFrom: '2026-06-01',
+      dateTo: '2026-06-30',
+      steps: ['IVM06-R'],
+    }, labels),
+    [
+      'Part 6513589PX, 0445120067',
+      'Serial SN1',
+      'Result Failed',
+      'Tested 2026-06-01 – 2026-06-30',
+      'Failed Peak Torque - Return',
+    ]
+  )
+
+  assert.deepStrictEqual(
+    describeActiveFilters({ ...emptyFilters(), steps: ['IVM01', 'IVM06-R'], stepStatus: 'pass', stepMatch: 'all' }, labels),
+    ['Passed all of Peak HP, Peak Torque - Return']
+  )
+  assert.deepStrictEqual(describeActiveFilters(emptyFilters()), [], 'nothing filtered, nothing described')
+  assert.deepStrictEqual(
+    describeActiveFilters({ ...emptyFilters(), steps: ['NEW-CODE'] }),
+    ['Failed NEW-CODE'],
+    'an unmapped step code falls back to the code itself'
+  )
 })

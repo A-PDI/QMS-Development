@@ -241,3 +241,216 @@ test('a custom report carries the requested vendor in the shared header', async 
     assert.ok(/Report Date: \d{2}\/\d{2}\/\d{4}/.test(text));
   });
 });
+
+// ── Granular filtering ───────────────────────────────────────────────────────
+/**
+ * Six injectors of two part numbers: SN002 and SN004 fail Peak Torque -
+ * Return, SN005 fails Peak HP, the rest pass.
+ */
+async function seedForFiltering() {
+  resetInjectorData();
+  carbonzapp.upsertReports(benchBatch(4, {
+    job: 'Production', prefix: 'SN', part: '6513589PX',
+    customise: (i) => (i === 1 || i === 3 ? { flow: { IVM06_RETURN: 120 } } : {}),
+  }));
+  carbonzapp.upsertReports(benchBatch(2, {
+    job: 'Production', prefix: 'ZZ', part: '0445120067', idPrefix: 'rep-ZZ',
+    customise: (i) => (i === 0 ? { flow: { IVM01: 40 } } : {}),
+  }));
+}
+
+const serialsOf = (body) => body.injectors.map((row) => row.serial_number).sort();
+
+test('the list filters on several part numbers and several serial numbers', async () => {
+  await seedForFiltering();
+  await withUser(ADMIN, async (url) => {
+    const get = async (query) => (await fetch(`${url}/api/injector-tests${query}`)).json();
+
+    const all = await get('');
+    assert.strictEqual(all.injectors.length, 6);
+    assert.strictEqual(all.total, 6);
+
+    const onePart = await get('?part_number=0445120067');
+    assert.deepStrictEqual(serialsOf(onePart), ['ZZ001', 'ZZ002']);
+
+    const twoParts = await get('?part_number=6513589PX,0445120067');
+    assert.strictEqual(twoParts.injectors.length, 6);
+    assert.strictEqual(twoParts.total, 6, 'the unfiltered total is reported alongside the matches');
+
+    const twoSerials = await get('?serial_number=SN002%20ZZ001');
+    assert.deepStrictEqual(serialsOf(twoSerials), ['SN002', 'ZZ001']);
+
+    const combined = await get('?part_number=6513589PX&serial_number=SN002,ZZ001');
+    assert.deepStrictEqual(serialsOf(combined), ['SN002'], 'part and serial filters intersect');
+  });
+});
+
+test('the list filters on which test step an injector failed or passed', async () => {
+  await seedForFiltering();
+  await withUser(ADMIN, async (url) => {
+    const get = async (query) => (await fetch(`${url}/api/injector-tests${query}`)).json();
+
+    const failedReturn = await get('?steps=IVM06-R&step_status=fail');
+    assert.deepStrictEqual(serialsOf(failedReturn), ['SN002', 'SN004']);
+    assert.deepStrictEqual(
+      failedReturn.injectors[0].matched_steps, ['Peak Torque - Return'],
+      'each row says which step put it in the list'
+    );
+
+    const failedPeakHp = await get('?steps=IVM01&step_status=fail');
+    assert.deepStrictEqual(serialsOf(failedPeakHp), ['ZZ001']);
+
+    const eitherStep = await get('?steps=IVM01,IVM06-R&step_status=fail');
+    assert.deepStrictEqual(serialsOf(eitherStep), ['SN002', 'SN004', 'ZZ001']);
+
+    const bothSteps = await get('?steps=IVM01,IVM06-R&step_status=fail&step_match=all');
+    assert.deepStrictEqual(serialsOf(bothSteps), [], 'no injector failed both points');
+
+    const passedReturn = await get('?steps=IVM06-R&step_status=pass');
+    assert.deepStrictEqual(serialsOf(passedReturn), ['SN001', 'SN003', 'ZZ001', 'ZZ002']);
+
+    const scoped = await get('?part_number=6513589PX&steps=IVM06-R&step_status=fail');
+    assert.deepStrictEqual(serialsOf(scoped), ['SN002', 'SN004']);
+  });
+});
+
+test('rows carry no step filter noise when no step filter was asked for', async () => {
+  await seedForFiltering();
+  await withUser(ADMIN, async (url) => {
+    const body = await (await fetch(`${url}/api/injector-tests`)).json();
+    assert.ok(body.injectors.every((row) => !Object.hasOwn(row, 'matched_steps')));
+    assert.ok(body.injectors.every((row) => !Object.hasOwn(row, 'report_json')), 'the raw bench JSON never leaves the server');
+    assert.ok(body.injectors.every((row) => !Object.hasOwn(row, 'tests')));
+  });
+});
+
+test('the step catalog lists the points in the synced data with their counts', async () => {
+  await seedForFiltering();
+  await withUser(ADMIN, async (url) => {
+    const body = await (await fetch(`${url}/api/injector-tests/steps`)).json();
+    assert.deepStrictEqual(body.steps.map((s) => s.code), ['IVM01', 'IVM06-D', 'IVM06-R']);
+    assert.deepStrictEqual(body.steps.map((s) => s.label),
+      ['Peak HP', 'Peak Torque - Delivery', 'Peak Torque - Return']);
+
+    const byCode = Object.fromEntries(body.steps.map((s) => [s.code, s]));
+    assert.strictEqual(byCode['IVM06-R'].fail, 2);
+    assert.strictEqual(byCode.IVM01.fail, 1);
+    assert.strictEqual(byCode.IVM01.total, 6);
+    assert.strictEqual(body.injectorCount, 6);
+  });
+});
+
+// ── Export ───────────────────────────────────────────────────────────────────
+test('the selected injectors export as an Excel workbook', async () => {
+  const ids = await seedInjectors(3);
+  await withUser(ADMIN, async (url) => {
+    const res = await fetch(`${url}/api/injector-tests/export/xlsx`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ injector_ids: ids }),
+    });
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers.get('content-type'), /spreadsheetml\.sheet/);
+    assert.match(res.headers.get('content-disposition'), /attachment; filename="InjectorTestResults_.*_3\.xlsx"/);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    assert.strictEqual(buffer.subarray(0, 2).toString(), 'PK', 'an xlsx file is a zip archive');
+  });
+});
+
+test('the selected injectors export as a PDF listing', async () => {
+  const ids = await seedInjectors(3);
+  await withUser(ADMIN, async (url) => {
+    const res = await fetch(`${url}/api/injector-tests/export/pdf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ injector_ids: ids }),
+    });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.headers.get('content-type'), 'application/pdf');
+    assert.match(res.headers.get('x-report-filename'), /^InjectorTestResults_.*_3\.pdf$/);
+    const text = extractPdfText(Buffer.from(await res.arrayBuffer())).join(' ');
+    assert.match(text, /Injector Test Results/);
+    assert.match(text, /XT001/, 'every selected serial is listed');
+  });
+});
+
+test('an export can be driven by the filters instead of by a list of ids', async () => {
+  await seedForFiltering();
+  await withUser(ADMIN, async (url) => {
+    const res = await fetch(`${url}/api/injector-tests/export/pdf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filters: { steps: 'IVM06-R', step_status: 'fail' } }),
+    });
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers.get('x-report-filename'), /_2\.pdf$/, 'only the two failing injectors are exported');
+
+    const text = extractPdfText(Buffer.from(await res.arrayBuffer())).join(' ');
+    assert.match(text, /failed Peak Torque - Return/, 'the export records the filter that produced it');
+    assert.match(text, /SN002/);
+    assert.match(text, /SN004/);
+    assert.ok(!text.includes('SN001'), 'a passing injector is not in a failures export');
+  });
+});
+
+test('an export with neither a selection nor a filter is refused', async () => {
+  await seedInjectors(2);
+  await withUser(ADMIN, async (url) => {
+    for (const path of ['/api/injector-tests/export/xlsx', '/api/injector-tests/export/pdf']) {
+      const res = await fetch(url + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      assert.strictEqual(res.status, 400);
+      const err = await res.json();
+      assert.match(err.error, /at least one injector, or apply a filter/i);
+      assert.strictEqual(err.code, 'VALIDATION_ERROR');
+    }
+  });
+});
+
+test('an export includes a record with no bench results instead of refusing it', async () => {
+  const ids = await seedInjectors(2);
+  // A record the bench never scored — blocked for reports, listable in an export.
+  db.run(
+    "UPDATE injector_test_reports SET report_json = '{}', steps_total = 0, steps_passed = 0, " +
+    "steps_failed = 0, result_status = 'unknown', overall_pass = NULL WHERE id = ?",
+    [ids[1]]
+  );
+  await withUser(ADMIN, async (url) => {
+    const report = await fetch(`${url}/api/injector-tests/reports/custom`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ injector_ids: ids }),
+    });
+    assert.strictEqual(report.status, 400, 'a report still refuses an unscored record');
+
+    const res = await fetch(`${url}/api/injector-tests/export/pdf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ injector_ids: ids }),
+    });
+    assert.strictEqual(res.status, 200);
+    const text = extractPdfText(Buffer.from(await res.arrayBuffer())).join(' ');
+    assert.match(text, /No result/, 'the unscored record is listed as having no result');
+  });
+});
+
+test('the export routes are admin-only like every other injector route', async () => {
+  const ids = await seedInjectors(2);
+  for (const user of [QC_MANAGER, INSPECTOR]) {
+    await withUser(user, async (url) => {
+      for (const path of ['/api/injector-tests/export/xlsx', '/api/injector-tests/export/pdf']) {
+        const res = await fetch(url + path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ injector_ids: ids }),
+        });
+        assert.strictEqual(res.status, 403, `${user.role} POST ${path} should be 403`);
+      }
+      const steps = await fetch(`${url}/api/injector-tests/steps`);
+      assert.strictEqual(steps.status, 403, `${user.role} GET /steps should be 403`);
+    });
+  }
+});
