@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Gauge, RefreshCw, Settings, Trash2, Search, Printer, X,
   AlertTriangle, CheckCircle2, Loader2, XCircle, Save, FileText, Files, BarChart3, Info, ShieldAlert, Eye,
+  ListFilter, FileSpreadsheet, FileDown, ChevronDown,
 } from 'lucide-react'
 import api from '../lib/api'
 import { useToast } from '../hooks/useToast'
@@ -20,7 +21,38 @@ import {
   vendorPromptReport,
   suggestReportName,
   hasTestResults,
+  emptyFilters,
+  buildInjectorQuery,
+  describeActiveFilters,
+  hasActiveFilters,
+  toggleStepFilter,
+  STEP_STATUS_OPTIONS,
 } from '../lib/injectorSelection'
+
+// ── Export kinds ──────────────────────────────────────────────────────────────
+// The two "give me the list" outputs. Reports (below) are about the injectors'
+// measured values; an export is the record list itself.
+const EXPORT_KINDS = {
+  xlsx: {
+    label: 'Excel workbook',
+    short: 'Excel',
+    path: '/injector-tests/export/xlsx',
+    extension: '.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    description: 'Excel workbook',
+  },
+  pdf: {
+    label: 'PDF listing',
+    short: 'PDF',
+    path: '/injector-tests/export/pdf',
+    extension: '.pdf',
+    mimeType: 'application/pdf',
+    description: 'PDF document',
+  },
+}
+
+// How long typing in a filter box settles before the server is queried again.
+const FILTER_DEBOUNCE_MS = 300
 
 // ── Report kinds ──────────────────────────────────────────────────────────────
 // `internal` matches the server's report type ids; `label` is what the user sees.
@@ -55,11 +87,12 @@ export default function InjectorTests() {
   const qc = useQueryClient()
   const { showToast } = useToast()
 
-  const [partFilter, setPartFilter] = useState('')
-  const [serialFilter, setSerialFilter] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
-  const [dateFromFilter, setDateFromFilter] = useState('')
-  const [dateToFilter, setDateToFilter] = useState('')
+  // Every filter on the page lives in one object: part/serial accept several
+  // values each, and `steps` filters on how individual test steps scored.
+  const [filters, setFilters] = useState(emptyFilters)
+  // Typing narrows the visible list at once; the server is only re-queried once
+  // the box settles, so a step filter does not fire on every keystroke.
+  const [settledFilters, setSettledFilters] = useState(filters)
   // Selected rows are presented and reported in natural serial-number order.
   const [selectedIds, setSelectedIds] = useState(() => [])
   const selected = useMemo(() => new Set(selectedIds), [selectedIds])
@@ -68,6 +101,8 @@ export default function InjectorTests() {
   const [previewing, setPreviewing] = useState(false)
 
   const [syncing, setSyncing] = useState(false)
+  const [exporting, setExporting] = useState(null)     // export format currently running
+  const exportingRef = useRef(false)                   // blocks repeated clicks
   const [generating, setGenerating] = useState(null)   // report kind currently running
   const generatingRef = useRef(false)                  // blocks repeated clicks
   const [vendorName, setVendorName] = useState('')     // remembered between customer/evaluation reports
@@ -80,37 +115,83 @@ export default function InjectorTests() {
   const [pendingPrune, setPendingPrune] = useState(null)   // large prune awaiting confirmation
   const [statusMsg, setStatusMsg] = useState(null)     // { type:'error'|'success'|'info'|'warning', text }
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['injector-tests'],
-    queryFn: async () => { const { data } = await api.get('/injector-tests'); return data },
+  useEffect(() => {
+    const timer = setTimeout(() => setSettledFilters(filters), FILTER_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [filters])
+
+  // Test-step criteria are resolved by the server — individual steps are not
+  // part of a list row — so the query key carries the whole filter set.
+  const listQuery = useMemo(() => buildInjectorQuery(settledFilters), [settledFilters])
+  const { data, isLoading, isFetching } = useQuery({
+    queryKey: ['injector-tests', listQuery],
+    queryFn: async () => { const { data } = await api.get('/injector-tests', { params: listQuery }); return data },
+    // Keep the previous rows on screen while a changed filter is in flight.
+    placeholderData: (previous) => previous,
   })
   const { data: settings } = useQuery({
     queryKey: ['injector-tests-settings'],
     queryFn: async () => { const { data } = await api.get('/injector-tests/settings'); return data },
   })
+  // The test steps present in the synced data — the step filter only ever
+  // offers points that actually exist.
+  const { data: stepData } = useQuery({
+    queryKey: ['injector-tests-steps'],
+    queryFn: async () => { const { data } = await api.get('/injector-tests/steps'); return data },
+  })
 
   const injectors = data?.injectors || []
-  const filtered = useMemo(
-    () => filterInjectors(injectors, {
-      partNumber: partFilter,
-      serialNumber: serialFilter,
-      status: statusFilter,
-      dateFrom: dateFromFilter,
-      dateTo: dateToFilter,
-    }),
-    [injectors, partFilter, serialFilter, statusFilter, dateFromFilter, dateToFilter]
+  const stepCatalog = stepData?.steps || []
+  const stepLabels = useMemo(
+    () => Object.fromEntries(stepCatalog.map((s) => [s.code, s.label])),
+    [stepCatalog]
   )
+  // The server already applied every filter; re-applying the row-level ones
+  // client-side is what makes typing feel instant while the refetch is in
+  // flight. Step criteria are left to the server (see filterInjectors).
+  const filtered = useMemo(() => filterInjectors(injectors, filters), [injectors, filters])
   const allVisibleSelected = areAllSelected(selectedIds, filtered)
+  const activeFilters = useMemo(() => describeActiveFilters(filters, stepLabels), [filters, stepLabels])
+  const filtersActive = hasActiveFilters(filters)
+  const totalInjectors = data?.total ?? injectors.length
+
+  const setFilter = (patch) => setFilters((prev) => ({ ...prev, ...patch }))
+  const resetFilters = () => setFilters(emptyFilters())
 
   // Filters only change the visible list; selections persist until explicitly
   // cleared and are re-sorted by serial whenever the set changes.
-  const orderedSelected = useMemo(() => orderedSelection(selectedIds, injectors), [selectedIds, injectors])
+  //
+  // The server now returns only the rows that match the filters, so a selected
+  // injector can stop being in `injectors` the moment the filter changes. Its
+  // full record is kept here for exactly that reason — otherwise narrowing a
+  // filter would silently shrink the selection the user had already built.
+  const [selectedRecords, setSelectedRecords] = useState([])
+  useEffect(() => {
+    setSelectedRecords((previous) => {
+      const known = new Map(previous.map((record) => [record.id, record]))
+      for (const injector of injectors) {
+        if (selected.has(injector.id)) known.set(injector.id, injector)
+      }
+      const next = selectedIds.map((id) => known.get(id)).filter(Boolean)
+      const unchanged = next.length === previous.length && next.every((record, i) => record === previous[i])
+      return unchanged ? previous : next
+    })
+  }, [injectors, selectedIds, selected])
+
+  const orderedSelected = useMemo(
+    () => orderedSelection(selectedIds, selectedRecords),
+    [selectedIds, selectedRecords]
+  )
   const selectedCount = orderedSelected.length
   const selectionIssue = useMemo(
     () => (selectedCount ? validateSelectionForReport(orderedSelected) : null),
     [orderedSelected, selectedCount]
   )
-  const canGenerate = selectedCount > 0 && !generating && !previewing
+  const busy = Boolean(generating || previewing || exporting)
+  const canGenerate = selectedCount > 0 && !busy
+  // An export can also cover the whole filtered set, so it does not need a
+  // selection — only something to export.
+  const canExport = (selectedCount > 0 || filtered.length > 0) && !busy
 
   useEffect(() => {
     if (!preview) return undefined
@@ -151,6 +232,7 @@ export default function InjectorTests() {
       setPendingPrune(res.pruneSkipped?.reason === 'large_prune' ? res.pruneSkipped : null)
       showToast(outcome.toast, outcome.type === 'success' ? 'success' : 'info')
       qc.invalidateQueries({ queryKey: ['injector-tests'] })
+      qc.invalidateQueries({ queryKey: ['injector-tests-steps'] })
       qc.invalidateQueries({ queryKey: ['injector-tests-settings'] })
     } catch (err) {
       const msg = await errorMessageFrom(err, 'Sync failed.')
@@ -178,6 +260,7 @@ export default function InjectorTests() {
       showToast('Synced reports cleared', 'success')
       setSelectedIds([])
       qc.invalidateQueries({ queryKey: ['injector-tests'] })
+      qc.invalidateQueries({ queryKey: ['injector-tests-steps'] })
       qc.invalidateQueries({ queryKey: ['injector-tests-settings'] })
     } catch (err) {
       const msg = await errorMessageFrom(err, 'Clear failed.')
@@ -235,6 +318,74 @@ export default function InjectorTests() {
       showToast(`Preview failed: ${msg}`, 'error')
     } finally {
       setPreviewing(false)
+    }
+  }
+
+  // ── Export the injector list ───────────────────────────────────────────────
+  /**
+   * Export what the user is currently looking at.
+   *
+   * With rows selected, the export is that selection. With none selected it is
+   * the whole filtered set — so "every injector of these part numbers whose
+   * Peak Torque - Return failed" is a filter followed by one click, not three
+   * hundred checkboxes. The same ask-then-generate rule as reports applies:
+   * cancelling the save dialog means no request is made.
+   */
+  const runExport = async (format) => {
+    if (exportingRef.current) return                   // repeated clicks are ignored
+    const kind = EXPORT_KINDS[format]
+    const useSelection = selectedCount > 0
+    const scopeCount = useSelection ? selectedCount : filtered.length
+
+    if (scopeCount === 0) {
+      const msg = 'Nothing to export — no injector matches the current filters.'
+      setStatusMsg({ type: 'error', text: msg })
+      showToast(msg, 'error')
+      return
+    }
+
+    const suggestion = suggestReportName(
+      'InjectorTestResults',
+      useSelection ? orderedSelected : filtered
+    )
+    const target = await chooseSaveTarget(suggestion, {
+      extension: kind.extension,
+      mimeType: kind.mimeType,
+      description: kind.description,
+      promptMessage: `File name for the ${kind.label.toLowerCase()}`,
+    })
+    if (target.cancelled) {
+      showToast('Cancelled — nothing was exported', 'info')
+      return
+    }
+
+    exportingRef.current = true
+    setExporting(format)
+    const scopeText = useSelection
+      ? `${describeSelection(orderedSelected)} selected`
+      : `${scopeCount} filtered injector${scopeCount === 1 ? '' : 's'}`
+    setStatusMsg({ type: 'info', text: `Exporting ${scopeText} to ${kind.short}…` })
+
+    try {
+      const body = useSelection
+        ? { injector_ids: orderedSelected.map((injector) => injector.id) }
+        // The server re-runs the filters, so a large filtered set does not have
+        // to be sent back to it one id at a time.
+        : { use_filters: true, filters: buildInjectorQuery(filters) }
+      const res = await api.post(kind.path, body, { responseType: 'blob' })
+      await writeBlobToTarget(target, new Blob([res.data], { type: kind.mimeType }))
+
+      const warning = warningsFrom(res)
+      const text = `Exported ${scopeText} to ${target.filename}.`
+      setStatusMsg({ type: warning ? 'warning' : 'success', text: warning ? `${text} ${warning}` : text })
+      showToast(`${kind.short} export saved`, 'success')
+    } catch (err) {
+      const msg = await errorMessageFrom(err, 'The export could not be generated. Please try again.')
+      setStatusMsg({ type: 'error', text: msg })
+      showToast(`Export failed: ${msg}`, 'error')
+    } finally {
+      exportingRef.current = false
+      setExporting(null)
     }
   }
 
@@ -529,52 +680,106 @@ export default function InjectorTests() {
 
         {/* Report filters + selection controls */}
         <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_160px_160px_170px_auto] gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_160px_160px_150px_auto] gap-2">
             <div className="relative">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input value={partFilter} onChange={e => setPartFilter(e.target.value)}
+              <input value={filters.partNumber} onChange={e => setFilter({ partNumber: e.target.value })}
                 aria-label="Filter by part number"
-                placeholder="Filter by part number…"
+                title="One or more part numbers, separated by commas or spaces"
+                placeholder="Part number(s)…"
                 className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
             </div>
             <div className="relative">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input value={serialFilter} onChange={e => setSerialFilter(e.target.value)}
+              <input value={filters.serialNumber} onChange={e => setFilter({ serialNumber: e.target.value })}
                 aria-label="Filter by serial number"
-                placeholder="Filter by serial number…"
+                title="One or more serial numbers, separated by commas or spaces — a column pasted from a spreadsheet works too"
+                placeholder="Serial number(s)…"
                 className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
             </div>
             <label className="flex min-h-[40px] items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm text-gray-600 focus-within:ring-1 focus-within:ring-pdi-navy">
               <span className="text-xs font-medium whitespace-nowrap">From</span>
-              <input type="date" value={dateFromFilter} onChange={e => setDateFromFilter(e.target.value)}
+              <input type="date" value={filters.dateFrom} onChange={e => setFilter({ dateFrom: e.target.value })}
                 aria-label="Filter from test date"
-                max={dateToFilter || undefined}
+                max={filters.dateTo || undefined}
                 className="min-w-0 flex-1 bg-transparent text-sm text-gray-800 focus:outline-none" />
             </label>
             <label className="flex min-h-[40px] items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm text-gray-600 focus-within:ring-1 focus-within:ring-pdi-navy">
               <span className="text-xs font-medium whitespace-nowrap">To</span>
-              <input type="date" value={dateToFilter} onChange={e => setDateToFilter(e.target.value)}
+              <input type="date" value={filters.dateTo} onChange={e => setFilter({ dateTo: e.target.value })}
                 aria-label="Filter through test date"
-                min={dateFromFilter || undefined}
+                min={filters.dateFrom || undefined}
                 className="min-w-0 flex-1 bg-transparent text-sm text-gray-800 focus:outline-none" />
             </label>
-            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+            <select value={filters.status} onChange={e => setFilter({ status: e.target.value })}
               aria-label="Filter by result status"
               className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]">
               <option value="">All statuses</option>
               <option value="pass">Passed</option>
               <option value="fail">Failed</option>
               <option value="dnf">DNF</option>
+              <option value="unscored">No result</option>
             </select>
-            <div className="flex items-center gap-2 sm:col-span-2 lg:col-span-3 2xl:col-span-1">
+            <StepFilterMenu
+              steps={stepCatalog}
+              selected={filters.steps}
+              stepStatus={filters.stepStatus}
+              stepMatch={filters.stepMatch}
+              onToggleStep={(code) => setFilter({ steps: toggleStepFilter(filters.steps, code) })}
+              onStatusChange={(stepStatus) => setFilter({ stepStatus })}
+              onMatchChange={(stepMatch) => setFilter({ stepMatch })}
+              onClear={() => setFilter({ steps: [] })}
+            />
+          </div>
+
+          {/* What the list is currently showing, and how to undo it */}
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="text-gray-500">
+              Showing <strong className="text-pdi-navy">{filtered.length}</strong>
+              {totalInjectors > filtered.length ? ` of ${totalInjectors}` : ''} injector{filtered.length === 1 ? '' : 's'}
+              {isFetching && !isLoading ? ' · filtering…' : ''}
+            </span>
+            {activeFilters.map((text) => (
+              <span key={text} className="inline-flex items-center gap-1 rounded-full bg-pdi-navy/5 px-2 py-0.5 text-pdi-navy">
+                <ListFilter size={11} /> {text}
+              </span>
+            ))}
+            {filtersActive && (
+              <button onClick={resetFilters} className="text-gray-400 hover:text-red-600 underline">
+                Clear filters
+              </button>
+            )}
+            <span className="ml-auto flex items-center gap-2">
               <button onClick={toggleAllVisible} disabled={filtered.length === 0}
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 min-h-[40px] whitespace-nowrap">
+                className="px-2.5 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 whitespace-nowrap">
                 {allVisibleSelected ? 'Deselect visible' : 'Select all visible'}
               </button>
               <button onClick={clearSelection} disabled={selectedIds.length === 0}
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 min-h-[40px] whitespace-nowrap">
+                className="px-2.5 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 whitespace-nowrap">
                 Clear selection
               </button>
+            </span>
+          </div>
+
+          {/* Export the list itself — the selection when there is one, the whole
+              filtered set otherwise. */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-2 border-t border-gray-100">
+            <div className="text-sm text-gray-600 flex-1 min-w-0">
+              <span className="font-medium text-pdi-navy">Export list</span>
+              <span className="text-gray-400">
+                {' · '}
+                {selectedCount > 0
+                  ? `${describeSelection(orderedSelected)} selected`
+                  : `${filtered.length} filtered injector${filtered.length === 1 ? '' : 's'}`}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <ExportButton format="xlsx" icon={FileSpreadsheet} exporting={exporting} disabled={!canExport} onClick={runExport}>
+                Export to Excel
+              </ExportButton>
+              <ExportButton format="pdf" icon={FileDown} exporting={exporting} disabled={!canExport} onClick={runExport}>
+                Export to PDF
+              </ExportButton>
             </div>
           </div>
 
@@ -667,9 +872,11 @@ export default function InjectorTests() {
             <div className="bg-white rounded-xl border border-gray-200 text-center text-gray-400 py-10">Loading…</div>
           ) : filtered.length === 0 ? (
             <div className="bg-white rounded-xl border border-gray-200 text-center text-gray-400 py-10 text-sm">
-              {injectors.length === 0
+              {totalInjectors === 0
                 ? 'No injector tests synced yet. Click "Sync Now" to pull results from the test bench.'
-                : 'No injectors match the current filters.'}
+                : filtersActive
+                  ? 'No injectors match the current filters.'
+                  : 'No injectors to show.'}
             </div>
           ) : (
             <InjectorList injectors={filtered} selected={selected} onToggle={toggle} />
@@ -681,6 +888,135 @@ export default function InjectorTests() {
         )}
       </div>
     </div>
+  )
+}
+
+// ── Test-step filter ─────────────────────────────────────────────────────────
+/**
+ * Picks the test steps a record must have passed / failed / not finished.
+ *
+ * The list comes from the synced data (GET /injector-tests/steps), so only
+ * steps that actually exist are offered, each with how many injectors scored
+ * that way. Peak Torque appears as two points — Delivery and Return — because
+ * the bench judges those two measurements independently.
+ */
+function StepFilterMenu({
+  steps = [], selected = [], stepStatus, stepMatch,
+  onToggleStep, onStatusChange, onMatchChange, onClear,
+}) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    const closeOnOutside = (event) => {
+      if (containerRef.current && !containerRef.current.contains(event.target)) setOpen(false)
+    }
+    const closeOnEscape = (event) => { if (event.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', closeOnOutside)
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutside)
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  const statusLabel = (STEP_STATUS_OPTIONS.find((o) => o.value === stepStatus) || STEP_STATUS_OPTIONS[0]).label
+  const summary = selected.length === 0
+    ? 'Test steps'
+    : `${statusLabel} · ${selected.length} step${selected.length === 1 ? '' : 's'}`
+  // How many injectors scored the wanted way, per step — the number next to
+  // each checkbox, so the user can see where the failures are before filtering.
+  const countFor = (step) => {
+    if (stepStatus === 'pass') return step.pass
+    if (stepStatus === 'dnf') return step.dnf
+    if (stepStatus === 'any') return step.total
+    return step.fail
+  }
+
+  return (
+    <div className="relative" ref={containerRef}>
+      <button type="button" onClick={() => setOpen((o) => !o)}
+        aria-haspopup="true" aria-expanded={open}
+        aria-label="Filter by test step outcome"
+        className={`flex w-full min-h-[40px] items-center justify-between gap-1.5 rounded-lg border px-3 py-2 text-sm whitespace-nowrap
+          ${selected.length ? 'border-pdi-navy bg-pdi-navy/5 text-pdi-navy font-medium' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+        <span className="flex items-center gap-1.5 truncate"><ListFilter size={14} /> {summary}</span>
+        <ChevronDown size={14} className={open ? 'rotate-180 transition-transform' : 'transition-transform'} />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 z-30 mt-1 w-80 max-w-[92vw] rounded-xl border border-gray-200 bg-white p-3 shadow-xl">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-600">Filter by test step</h4>
+            <button type="button" onClick={() => setOpen(false)} aria-label="Close test step filter"
+              className="text-gray-400 hover:text-gray-600"><X size={14} /></button>
+          </div>
+
+          <label className="mt-2 block text-xs text-gray-500">
+            Show injectors that
+            <select value={stepStatus} onChange={(e) => onStatusChange(e.target.value)}
+              aria-label="Test step outcome"
+              className="mt-1 w-full rounded-lg border border-gray-200 px-2 py-1.5 text-sm text-gray-800 focus:outline-none focus:ring-1 focus:ring-pdi-navy">
+              {STEP_STATUS_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+
+          {selected.length > 1 && (
+            <div className="mt-2 flex items-center gap-1 rounded-lg bg-gray-50 p-1 text-xs">
+              {[['any', 'any of these steps'], ['all', 'all of these steps']].map(([value, label]) => (
+                <button key={value} type="button" onClick={() => onMatchChange(value)}
+                  className={`flex-1 rounded-md px-2 py-1 ${stepMatch === value ? 'bg-white font-medium text-pdi-navy shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-2 max-h-64 space-y-0.5 overflow-y-auto">
+            {steps.length === 0 ? (
+              <p className="px-1 py-3 text-xs text-gray-400">No test steps yet — sync the test bench first.</p>
+            ) : steps.map((step) => (
+              <label key={step.code}
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1.5 text-sm hover:bg-gray-50">
+                <input type="checkbox" checked={selected.includes(step.code)}
+                  onChange={() => onToggleStep(step.code)} className="rounded" />
+                <span className="min-w-0 flex-1 truncate text-gray-800">{step.label}</span>
+                <span className={`shrink-0 text-xs ${countFor(step) ? 'text-gray-500' : 'text-gray-300'}`}>
+                  {countFor(step)}
+                </span>
+              </label>
+            ))}
+          </div>
+
+          {selected.length > 0 && (
+            <button type="button" onClick={onClear}
+              className="mt-2 w-full rounded-lg border border-gray-200 px-2 py-1.5 text-xs text-gray-500 hover:bg-gray-50 hover:text-red-600">
+              Clear test step filter
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Export action button ──────────────────────────────────────────────────────
+function ExportButton({ format, icon: Icon, exporting, disabled, onClick, children }) {
+  const busy = exporting === format
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(format)}
+      disabled={disabled || !!exporting}
+      aria-busy={busy}
+      className="flex items-center justify-center gap-1.5 rounded-lg border border-pdi-navy px-3 py-2 text-sm font-medium text-pdi-navy whitespace-nowrap min-h-[40px] hover:bg-pdi-navy/5 disabled:opacity-40"
+    >
+      {busy ? <Loader2 size={15} className="animate-spin" /> : <Icon size={15} />}
+      {busy ? 'Exporting…' : children}
+    </button>
   )
 }
 
@@ -736,7 +1072,10 @@ function InjectorList({ injectors, selected, onToggle }) {
                 </td>
                 <td className="px-3 py-2.5 font-medium text-gray-900">{i.part_number || '—'}</td>
                 <td className="px-3 py-2.5 text-gray-700">{i.serial_number || '—'}</td>
-                <td className="px-3 py-2.5"><InjectorFlowBadge injector={i} /></td>
+                <td className="px-3 py-2.5">
+                  <InjectorFlowBadge injector={i} />
+                  <MatchedSteps steps={i.matched_steps} />
+                </td>
                 <td className="px-3 py-2.5 text-gray-500 text-xs">{formatInjectorTestDateTime(i.test_datetime)}</td>
               </tr>
             ))}
@@ -756,11 +1095,29 @@ function InjectorList({ injectors, selected, onToggle }) {
                 <InjectorFlowBadge injector={i} />
               </div>
               <div className="text-xs text-gray-500 mt-0.5">SN: {i.serial_number || '—'}</div>
+              <MatchedSteps steps={i.matched_steps} />
               <div className="text-xs text-gray-400 mt-0.5">{formatInjectorTestDateTime(i.test_datetime)}</div>
             </div>
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+/**
+ * The test steps this row matched the active step filter on — the server sends
+ * them so a filtered list says WHY each record is in it.
+ */
+function MatchedSteps({ steps }) {
+  if (!Array.isArray(steps) || steps.length === 0) return null
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {steps.map((label) => (
+        <span key={label} className="inline-flex items-center rounded bg-pdi-navy/5 px-1.5 py-0.5 text-[11px] text-pdi-navy">
+          {label}
+        </span>
+      ))}
     </div>
   )
 }
