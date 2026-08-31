@@ -21,10 +21,17 @@ import SectionVacuumTest from '../components/inspection/SectionVacuumTest'
 import SectionGrooveSpecs from '../components/inspection/SectionGrooveSpecs'
 import FileUploadZone from '../components/FileUploadZone'
 import AuthImage from '../components/AuthImage'
-import { initSectionData, mergeSectionData, formatFileSize } from '../lib/utils'
-import { getItemsCompletion, deriveOverallDisposition, getItemDisposition, ITEM_DISPOSITION_KEY } from '../lib/itemCompletion'
+import { initSectionData, mergeSectionData, formatFileSize, getSharedInspectionKeys } from '../lib/utils'
+import {
+  getItemsCompletion, deriveOverallDisposition, getItemDisposition, getItemLabel,
+  deriveLotSerial, seedItemSerials, ITEM_DISPOSITION_KEY, ITEM_SERIAL_KEY,
+} from '../lib/itemCompletion'
 import { dispositionColor, HEADER_FIELD_LABELS, COMPONENT_TYPE_LABELS } from '../lib/constants'
-import { isReceivingSection, isVisualSection, supportsPassAll, hasNonPassRows, passAllRows } from '../lib/sections'
+import {
+  isReceivingSection, isVisualSection, supportsPassAll, hasNonPassRows, passAllRows,
+  splitSectionsByScope, inspectionLevelKeys, extractSharedSectionData, stripSectionKeys,
+  sharedSectionAttachments, SHARED_SECTION_DATA_KEY,
+} from '../lib/sections'
 
 // Statuses that are still editable in the inspection form (not yet finalized).
 const EDITABLE_STATUSES = new Set(['draft', 'partially_complete'])
@@ -44,6 +51,11 @@ const SECTION_COMPONENTS = {
 
 // All section types now support per-item images
 const IMAGE_ENABLED_SECTIONS = new Set(Object.keys(SECTION_COMPONENTS))
+
+// Section C (Dimensional Inspection) lists one measurement per row. Whoever is
+// running the inspection can take a row off the form when the measurement does
+// not apply to the part in front of them.
+const REMOVABLE_ROW_SECTIONS = new Set(['dimensional', 'general_measurements'])
 
 // Detect any item in section_data marked Accepted ('A')
 function detectAcceptedItems(sectionData) {
@@ -222,6 +234,10 @@ export default function InspectionForm() {
   const [items, setItems] = useState([{}])
   const [activeItem, setActiveItem] = useState(0)
   const [sharedFlags, setSharedFlags] = useState({})
+  // Answers for the inspection-level sections (Section A — Receiving &
+  // Documentation Verification). They describe the delivery, so they are
+  // completed once for the whole inspection instead of once per item.
+  const [sharedSectionData, setSharedSectionData] = useState({})
   // The active item's section data (what the section components read/write).
   const sectionData = items[activeItem] || {}
   // Setter scoped to the active item — accepts a value or updater fn, mirroring
@@ -246,9 +262,16 @@ export default function InspectionForm() {
   const setDispositionNotes = useCallback((val) => {
     setSectionData(d => ({ ...d, __disposition_notes: val }))
   }, [setSectionData])
-  // Editable inspection header info (part #, PO, lot/serial, date received, inspector)
+  // Serial number of the item being edited. Every inspection point and image on
+  // this page is recorded against it.
+  const itemSerial = sectionData[ITEM_SERIAL_KEY] || ''
+  const setItemSerial = useCallback((val) => {
+    setSectionData(d => ({ ...d, [ITEM_SERIAL_KEY]: val }))
+  }, [setSectionData])
+  // Editable inspection header info (part #, PO, date received, inspector).
+  // The Lot / Serial No. is no longer here — it is entered per item.
   const [headerInfo, setHeaderInfo] = useState({
-    part_number: '', po_number: '', lot_serial_no: '', date_received: '', inspector_name: '',
+    part_number: '', po_number: '', date_received: '', inspector_name: '',
   })
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [saveState, setSaveState] = useState('idle')
@@ -275,6 +298,10 @@ export default function InspectionForm() {
     ? (typeof template.sections === 'string' ? JSON.parse(template.sections) : template.sections)
     : {}
   const effectiveSections = customSections ?? rawSections
+  // Section A is answered once for the whole inspection; everything else is
+  // answered once per inspected item.
+  const { inspectionLevel: inspectionLevelSections, perItem: perItemSections } =
+    splitSectionsByScope(effectiveSections)
 
   // Initialize section data when template and inspection are loaded
   useEffect(() => {
@@ -286,10 +313,10 @@ export default function InspectionForm() {
       ? JSON.parse(inspection.section_data || '{}')
       : (inspection.section_data || {})
 
-    // Extract shared control flags (kept once, applied to all items).
-    const flags = {}
-    if (saved.__dimensional_added) flags.__dimensional_added = true
-    if (saved.__admin_sections) flags.__admin_sections = saved.__admin_sections
+    // Everything kept once for the inspection (control flags, the injector-sync
+    // link) rides along unchanged; the Section A answers are handled below.
+    const flags = getSharedInspectionKeys(saved)
+    delete flags[SHARED_SECTION_DATA_KEY]
     setSharedFlags(flags)
 
     // Build the per-item list. New format stores answers under `__items`;
@@ -306,15 +333,33 @@ export default function InspectionForm() {
       savedItems = [legacy]
     }
 
+    // Section A's answers are kept once for the inspection (under __shared).
+    // Inspections saved before it moved up hold a copy inside their items, so
+    // those are hoisted here and dropped from the items below. Which sections
+    // are inspection-level is read from the sections actually in force (a
+    // Miscellaneous inspection defines its own under __admin_sections).
+    const effective = (flags.__admin_sections && typeof flags.__admin_sections === 'object')
+      ? flags.__admin_sections
+      : sections
+    const sharedKeys = inspectionLevelKeys(effective)
+    const sharedDefs = Object.fromEntries(sharedKeys.map(key => [key, effective[key]]))
+    setSharedSectionData(
+      mergeSectionData(extractSharedSectionData(saved, effective), initSectionData(sharedDefs))
+    )
+
     // Reconcile the item list length with the inspection's item_count, merging
     // each item's saved answers onto a fresh template so missing keys are filled.
     const count = Math.max(1, parseInt(inspection.item_count, 10) || savedItems.length || 1)
+    const perItemTemplate = Object.fromEntries(
+      Object.entries(sections).filter(([key]) => !sharedKeys.includes(key))
+    )
     const built = []
     for (let i = 0; i < count; i++) {
-      const savedItem = savedItems[i] || {}
-      const merged = mergeSectionData(savedItem, initSectionData(sections))
-      // Preserve each item's own disposition + notes (control keys, not template
-      // sections, so they aren't included by mergeSectionData).
+      const savedItem = stripSectionKeys(savedItems[i] || {}, sharedKeys)
+      const merged = mergeSectionData(savedItem, initSectionData(perItemTemplate))
+      // Preserve each item's own control keys (serial, disposition + notes) —
+      // they aren't template sections, so mergeSectionData doesn't carry them.
+      if (savedItem[ITEM_SERIAL_KEY] !== undefined) merged[ITEM_SERIAL_KEY] = savedItem[ITEM_SERIAL_KEY]
       if (savedItem[ITEM_DISPOSITION_KEY] !== undefined) merged[ITEM_DISPOSITION_KEY] = savedItem[ITEM_DISPOSITION_KEY]
       if (savedItem.__disposition_notes !== undefined) merged.__disposition_notes = savedItem.__disposition_notes
       built.push(merged)
@@ -327,13 +372,14 @@ export default function InspectionForm() {
         built[0].__disposition_notes = inspection.disposition_notes
       }
     }
-    setItems(built)
+    // Inspections created before serials moved to the item level carry theirs on
+    // the inspection row; seed the items from it so nothing is lost.
+    setItems(seedItemSerials(built, inspection.lot_serial_no))
     setActiveItem(0)
 
     setHeaderInfo({
       part_number: inspection.part_number || '',
       po_number: inspection.po_number || '',
-      lot_serial_no: inspection.lot_serial_no || '',
       date_received: (inspection.date_received || '').slice(0, 10),
       inspector_name: inspection.inspector_name || '',
     })
@@ -363,6 +409,7 @@ export default function InspectionForm() {
           item_count: items.length,
           status: autoStatus,
           ...headerInfo,
+          ...lotSerialPayload(),
         })
         setSaveState('saved')
         setTimeout(() => setSaveState('idle'), 2000)
@@ -370,26 +417,37 @@ export default function InspectionForm() {
         setSaveState('error')
       }
     }, 600)
-  }, [id, items, sharedFlags, headerInfo])
+  }, [id, items, sharedFlags, sharedSectionData, headerInfo])
 
   useEffect(() => {
     if (!initialLoad.current) debouncedSave()
-  }, [items, sharedFlags, headerInfo])
+  }, [items, sharedFlags, sharedSectionData, headerInfo])
 
   function handleAddDimensional() {
     setDimensionalAdded(true)
     setSharedFlags(f => ({ ...f, __dimensional_added: true }))
   }
 
-  // Build the persisted section_data blob: shared control flags + the per-item
-  // answers under __items.
+  // Build the persisted section_data blob: shared control flags, the
+  // inspection-level answers under __shared, and the per-item answers under
+  // __items.
   function buildSectionDataPayload() {
-    return { ...sharedFlags, __items: items }
+    return { ...sharedFlags, [SHARED_SECTION_DATA_KEY]: sharedSectionData, __items: items }
+  }
+
+  // The inspection row's Lot / Serial No. is derived from the item serials so
+  // the lists, search and PDF filename keep working. It is only sent once at
+  // least one item has a serial, so an inspection created with a serial on the
+  // row doesn't lose it before the inspector fills the items in.
+  function lotSerialPayload() {
+    const lot_serial_no = deriveLotSerial(items)
+    return lot_serial_no ? { lot_serial_no } : {}
   }
 
   // Attachments are scoped per item. Item 0 keeps the raw section key (so
   // existing single-item inspections keep their images); items 1+ get a
-  // namespaced key so each item's images stay distinct.
+  // namespaced key so each item's images stay distinct. Inspection-level
+  // sections always use the raw key — they belong to no single item.
   function attachmentKeyFor(itemIdx, sectionKey) {
     return itemIdx === 0 ? sectionKey : `item${itemIdx}__${sectionKey}`
   }
@@ -475,14 +533,47 @@ export default function InspectionForm() {
     })
   }
 
-  function handleDeleteItem(sectionKey, itemId) {
-    applyCustomSections(secs => ({
-      ...secs,
-      [sectionKey]: {
-        ...secs[sectionKey],
-        items: (secs[sectionKey].items || []).filter(it => String(it.id) !== String(itemId)),
-      },
-    }))
+  /**
+   * Remove one inspection point (row) from a section: it goes from the section
+   * definition for this inspection and its answers go with it — from the shared
+   * answers for an inspection-level section, and from every item otherwise.
+   */
+  function handleDeleteRow(sectionKey, itemId) {
+    applyCustomSections(secs => {
+      const sec = secs[sectionKey]
+      if (!sec) return secs
+      return {
+        ...secs,
+        [sectionKey]: { ...sec, items: (sec.items || []).filter(it => String(it.id) !== String(itemId)) },
+      }
+    })
+    const dropRow = data => (
+      Array.isArray(data) ? data.filter(r => String(r?.id) !== String(itemId)) : data
+    )
+    setItems(prev => prev.map(it => (
+      Array.isArray(it?.[sectionKey]) ? { ...it, [sectionKey]: dropRow(it[sectionKey]) } : it
+    )))
+    setSharedSectionData(d => (
+      Array.isArray(d?.[sectionKey]) ? { ...d, [sectionKey]: dropRow(d[sectionKey]) } : d
+    ))
+  }
+
+  /** True when a measurement/answer has been recorded against a row. */
+  function rowHasAnswers(sectionKey, itemId) {
+    const rowIn = data => (Array.isArray(data) ? data : []).find(r => String(r?.id) === String(itemId))
+    const filled = row => Object.entries(row || {}).some(([field, value]) => (
+      field !== 'id' && field !== 'spec' && String(value ?? '').trim() !== ''
+    ))
+    return [...items.map(it => rowIn(it?.[sectionKey])), rowIn(sharedSectionData[sectionKey])].some(filled)
+  }
+
+  /** Row removal from the inspection form — confirmed when data would be lost. */
+  function handleRemoveRow(sectionKey, section, itemId) {
+    if (rowHasAnswers(sectionKey, itemId) &&
+        !window.confirm(`Remove item #${itemId} from "${section.title}"? The measurements recorded against it are removed too.`)) {
+      return
+    }
+    handleDeleteRow(sectionKey, itemId)
   }
 
   function handleAddItem(sectionKey) {
@@ -503,13 +594,14 @@ export default function InspectionForm() {
   }
 
   // "Pass All" — mark every item in a checklist section (Section B) as Pass.
-  function handlePassAll(sectionKey, section) {
-    const current = sectionData[sectionKey]
+  function handlePassAll(sectionKey, section, shared) {
+    const current = shared ? sharedSectionData[sectionKey] : sectionData[sectionKey]
     if (hasNonPassRows(section, current) &&
         !window.confirm(`Mark every item in "${section.title}" as Pass? This replaces the results already selected in this section.`)) {
       return
     }
-    setSectionData(d => ({ ...d, [sectionKey]: passAllRows(section, d[sectionKey]) }))
+    const setter = shared ? setSharedSectionData : setSectionData
+    setter(d => ({ ...d, [sectionKey]: passAllRows(section, d[sectionKey]) }))
   }
 
   function handleEditItem(sectionKey, itemId, nameOrMeasurement, requirementOrLocation) {
@@ -552,6 +644,7 @@ export default function InspectionForm() {
         item_count: items.length,
         status: 'partially_complete',
         ...headerInfo,
+        ...lotSerialPayload(),
       })
       showToast('Saved as Partially Complete — set a Disposition on the remaining items to complete the inspection.', 'info')
       navigate(`/inspections/${id}`)
@@ -567,7 +660,7 @@ export default function InspectionForm() {
     // missing one, the inspection is saved as "Partially Complete" instead.
     const itemCompletion = getItemsCompletion(items)
     if (!itemCompletion.allComplete) {
-      const labels = itemCompletion.incompleteIndexes.map(i => `Item ${i + 1}`)
+      const labels = itemCompletion.incompleteIndexes.map(i => getItemLabel(items[i], i))
       const shown = labels.slice(0, 3).join(', ')
       const extra = labels.length > 3 ? ` (+${labels.length - 3} more)` : ''
       const verb = items.length > 1 ? `${shown}${extra} ${labels.length === 1 ? 'has' : 'have'} no Disposition selected` : 'No Disposition selected'
@@ -575,6 +668,8 @@ export default function InspectionForm() {
       await handleSavePartial()
       return
     }
+
+    const sharedKeys = new Set(inspectionLevelSections.map(([key]) => key))
 
     // Each item's disposition that requires attention (FAIL/ACCEPTED) needs notes
     // and at least one attachment on that item.
@@ -584,11 +679,13 @@ export default function InspectionForm() {
       if (d === 'FAIL' || d === 'ACCEPTED') {
         const notes = (itemData.__disposition_notes || '').trim()
         const itemAtts = attachments.filter(a => {
+          // Section A images document the delivery, not any one item.
+          if (sharedKeys.has(a.section_key)) return false
           if (itemIdx === 0) return !a.section_key || !/^item\d+__/.test(a.section_key)
           return (a.section_key || '').startsWith(`item${itemIdx}__`)
         })
         if (!notes || itemAtts.length === 0) {
-          dispErrors.push(items.length > 1 ? `Item ${itemIdx + 1}` : 'This inspection')
+          dispErrors.push(items.length > 1 ? getItemLabel(itemData, itemIdx) : 'This inspection')
         }
       }
     })
@@ -598,26 +695,30 @@ export default function InspectionForm() {
       return
     }
 
-    // Validate: Fail and Accepted items need description + image (across all items)
+    // Validate: Fail and Accepted rows need description + image. Section A is
+    // checked once for the inspection; the item-level sections once per item.
     const itemErrors = []
     const multiItem = items.length > 1
+    const checkRows = (key, section, data, sectionAtts, attKey, label) => {
+      if (section.section_type !== 'pass_fail_checklist' && section.section_type !== 'pfn_checklist') return
+      for (const row of Array.isArray(data) ? data : []) {
+        const resultField = row.result !== undefined ? row.result : (row.status || '')
+        const descField = row.notes || row.finding || ''
+        const isFail = resultField === 'F' || row.fail === true
+        const isAcc = resultField === 'A'
+        if (!isFail && !isAcc) continue
+        const hasImg = sectionAtts.some(a => a.section_key === attKey && String(a.item_id) === String(row.id))
+        if (!hasImg || !descField.trim()) itemErrors.push(`${label}"${section.title}" \u2014 #${row.id}`)
+      }
+    }
+    for (const [key, section] of inspectionLevelSections) {
+      // An image filed under the old per-item key still counts as evidence.
+      checkRows(key, section, sharedSectionData[key], sharedSectionAttachments(attachments, key), key, '')
+    }
     items.forEach((itemData, itemIdx) => {
-      for (const [key, section] of Object.entries(effectiveSections)) {
-        const sectionArr = Array.isArray(itemData[key]) ? itemData[key] : []
-        if (section.section_type === 'pass_fail_checklist' || section.section_type === 'pfn_checklist') {
-          for (const row of sectionArr) {
-            const resultField = row.result !== undefined ? row.result : (row.status || '')
-            const descField = row.notes || row.finding || ''
-            const isFail = resultField === 'F' || row.fail === true
-            const isAcc = resultField === 'A'
-            if (isFail || isAcc) {
-              const attKey = attachmentKeyFor(itemIdx, key)
-              const hasImg = attachments.some(a => a.section_key === attKey && String(a.item_id) === String(row.id))
-              const itemLabel = multiItem ? `Item ${itemIdx + 1} \u2014 ` : ''
-              if (!hasImg || !descField.trim()) itemErrors.push(`${itemLabel}"${section.title}" \u2014 #${row.id}`)
-            }
-          }
-        }
+      for (const [key, section] of perItemSections) {
+        const label = multiItem ? `${getItemLabel(itemData, itemIdx)} \u2014 ` : ''
+        checkRows(key, section, itemData[key], attachments, attachmentKeyFor(itemIdx, key), label)
       }
     })
 
@@ -630,8 +731,8 @@ export default function InspectionForm() {
     setCompleting(true)
     clearTimeout(saveTimer.current)
     try {
-      await update.mutateAsync({ id, section_data: buildSectionDataPayload(), disposition: deriveOverallDisposition(items), item_count: items.length, ...headerInfo })
-      const hasAccepted = items.some(itemData =>
+      await update.mutateAsync({ id, section_data: buildSectionDataPayload(), disposition: deriveOverallDisposition(items), item_count: items.length, ...headerInfo, ...lotSerialPayload() })
+      const hasAccepted = detectAcceptedItems(sharedSectionData) || items.some(itemData =>
         getItemDisposition(itemData) === 'ACCEPTED' ||
         Object.entries(itemData).some(([, rows]) =>
           Array.isArray(rows) && rows.some(r => r.result === 'A' || r.status === 'A')
@@ -693,6 +794,100 @@ export default function InspectionForm() {
   // Per-item completion state — drives the tab badges and the Complete gate.
   const completion = getItemsCompletion(items)
 
+  /**
+   * One section card. An inspection-level section (Section A) reads and writes
+   * the shared answers and keeps the raw attachment key; an item-level section
+   * reads and writes the item being edited and namespaces its attachments by
+   * item, so its images stay tied to that item's serial number.
+   */
+  function renderSectionCard(key, section, shared) {
+    // Skip optional sections unless dimensional has been added
+    if (section.optional && !dimensionalAdded) return null
+    const Component = SECTION_COMPONENTS[section.section_type]
+    if (!Component) return null
+    const supportsImages = IMAGE_ENABLED_SECTIONS.has(section.section_type)
+    const canEditItems = isAdmin && ITEM_EDITABLE.has(section.section_type)
+    const adminTools = isAdmin ? {
+      onDelete: (itemId) => handleRemoveRow(key, section, itemId),
+      onEdit: (itemId, a, b) => handleEditItem(key, itemId, a, b),
+    } : undefined
+    // Section A items may be marked N/A; Section B gets a "Pass All".
+    const allowNA = isReceivingSection(key, section)
+    const showPassAll = isVisualSection(key, section) && supportsPassAll(section)
+    const removableRows = REMOVABLE_ROW_SECTIONS.has(section.section_type)
+    const data = shared ? sharedSectionData[key] : sectionData[key]
+    const onChange = shared
+      ? val => setSharedSectionData(d => ({ ...d, [key]: val }))
+      : val => setSectionData(d => ({ ...d, [key]: val }))
+    return (
+      <CollapsibleSection
+        key={key}
+        title={section.title}
+        onDelete={isAdmin ? () => handleDeleteSection(key) : undefined}
+        headerAction={showPassAll ? (
+          <button
+            type="button"
+            onClick={() => handlePassAll(key, section, shared)}
+            title="Mark every item in this section as Pass"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-pdi-navy bg-white border border-pdi-navy/30 rounded-lg hover:bg-pdi-navy hover:text-white transition-colors min-h-[34px]"
+          >
+            <CheckSquare size={13} /> Pass All
+          </button>
+        ) : undefined}
+      >
+        {shared && items.length > 1 && (
+          <p className="mb-3 text-xs text-gray-500">
+            Completed once for the whole inspection — it covers the delivery, not each of the {items.length} items.
+          </p>
+        )}
+        <Component
+          section={section}
+          data={data}
+          onChange={onChange}
+          {...(supportsImages ? {
+            sectionKey: shared ? key : attachmentKeyFor(activeItem, key),
+            attachments: shared ? sharedSectionAttachments(attachments, key) : attachments,
+            onUploadItem: handleItemUpload,
+            onDeleteItem: handleDeleteFile,
+            uploadingKey,
+          } : {})}
+          adminItemTools={adminTools}
+          {...(removableRows ? { onRemoveItem: itemId => handleRemoveRow(key, section, itemId) } : {})}
+          allowNA={allowNA}
+        />
+
+        {/* Admin: Add item button in section footer */}
+        {canEditItems && (
+          <div className="mt-3 border-t border-dashed border-gray-200 pt-3">
+            {addingItemKey === key ? (
+              <div className="flex items-center gap-2">
+                <input
+                  autoFocus
+                  type="text"
+                  value={newItemName}
+                  onChange={e => setNewItemName(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddItem(key) } if (e.key === 'Escape') setAddingItemKey(null) }}
+                  placeholder={section.section_type === 'dimensional' ? 'Measurement name…' : 'Item name…'}
+                  className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+                />
+                <button type="button" onClick={() => handleAddItem(key)} className="text-xs text-pdi-navy hover:underline">Add</button>
+                <button type="button" onClick={() => setAddingItemKey(null)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => { setAddingItemKey(key); setNewItemName('') }}
+                className="flex items-center gap-1 text-xs text-pdi-navy hover:underline"
+              >
+                <PlusCircle size={12} /> Add item
+              </button>
+            )}
+          </div>
+        )}
+      </CollapsibleSection>
+    )
+  }
+
   return (
     <div className="flex flex-col h-full">
       {showAlertModal && completedInspectionId && (
@@ -726,10 +921,12 @@ export default function InspectionForm() {
                 <div className="text-xs font-medium text-gray-800 font-mono">{headerInfo.po_number}</div>
               </div>
             )}
-            {headerInfo.lot_serial_no && (
+            {itemSerial && (
               <div className="flex-shrink-0">
-                <div className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">Lot / Serial No.</div>
-                <div className="text-xs font-medium text-gray-800 font-mono">{headerInfo.lot_serial_no}</div>
+                <div className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">
+                  Serial No.{items.length > 1 ? ` (Item ${activeItem + 1})` : ''}
+                </div>
+                <div className="text-xs font-medium text-gray-800 font-mono">{itemSerial}</div>
               </div>
             )}
             {headerInfo.date_received && (
@@ -823,11 +1020,10 @@ export default function InspectionForm() {
         {/* Editable inspection details */}
         {detailsOpen && (
           <div className="border-t border-gray-100 bg-gray-50/70 px-3 sm:px-5 py-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               {[
                 { key: 'part_number', label: 'Part Number', mono: true },
                 { key: 'po_number', label: 'PO Number', mono: true },
-                { key: 'lot_serial_no', label: 'Lot / Serial No.', mono: true },
                 { key: 'date_received', label: 'Date Received', type: 'date' },
                 { key: 'inspector_name', label: 'Inspector' },
               ].map(f => (
@@ -851,7 +1047,7 @@ export default function InspectionForm() {
         <div className="max-w-[1440px] mx-auto p-3 sm:p-6 space-y-3 sm:space-y-4">
 
           {/* Accepted items notice for non-admins */}
-          {!isAdminRole && items.some(detectAcceptedItems) && (
+          {!isAdminRole && (detectAcceptedItems(sharedSectionData) || items.some(detectAcceptedItems)) && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2">
               <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
               <p className="text-sm text-amber-800">
@@ -860,6 +1056,9 @@ export default function InspectionForm() {
             </div>
           )}
 
+          {/* Section A — completed once, before the item-level inspections */}
+          {inspectionLevelSections.map(([key, section]) => renderSectionCard(key, section, true))}
+
           {/* Item navigation — one tab per inspected item */}
           {items.length > 1 && (
             <div className="bg-white rounded-xl border border-gray-200 px-3 py-2.5 sticky top-0 z-[5]">
@@ -867,14 +1066,15 @@ export default function InspectionForm() {
                 <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide flex-shrink-0 pr-1">
                   Items ({completion.perItem.filter(c => c.isComplete).length}/{items.length} dispositioned)
                 </span>
-                {items.map((_, idx) => {
+                {items.map((itemData, idx) => {
                   const done = completion.perItem[idx]?.isComplete
+                  const label = getItemLabel(itemData, idx)
                   return (
                     <button
                       key={idx}
                       type="button"
                       onClick={() => setActiveItem(idx)}
-                      title={done ? `Item ${idx + 1} — disposition set (${completion.perItem[idx].disposition})` : `Item ${idx + 1} — no disposition selected`}
+                      title={done ? `${label} — disposition set (${completion.perItem[idx].disposition})` : `${label} — no disposition selected`}
                       className={`flex-shrink-0 inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-lg border transition-colors min-h-[34px] ${
                         activeItem === idx
                           ? 'bg-pdi-navy text-white border-pdi-navy'
@@ -884,7 +1084,7 @@ export default function InspectionForm() {
                       {done
                         ? <Check size={13} className={activeItem === idx ? 'text-green-300' : 'text-green-600'} strokeWidth={3} />
                         : <Circle size={11} className={activeItem === idx ? 'text-orange-200' : 'text-orange-400'} strokeWidth={3} />}
-                      Item {idx + 1}
+                      {label}
                     </button>
                   )
                 })}
@@ -907,7 +1107,7 @@ export default function InspectionForm() {
                 </button>
               </div>
               <p className="mt-1.5 text-[11px] text-gray-500">
-                Editing <span className="font-semibold text-gray-700">Item {activeItem + 1}</span> of {items.length}
+                Editing <span className="font-semibold text-gray-700">{getItemLabel(items[activeItem], activeItem)}</span> of {items.length}
                 {completion.perItem[activeItem] && (
                   completion.perItem[activeItem].isComplete
                     ? <span className="text-green-600 font-medium"> · {completion.perItem[activeItem].disposition}</span>
@@ -917,84 +1117,28 @@ export default function InspectionForm() {
             </div>
           )}
 
-          {/* Inspection sections */}
-          {Object.entries(effectiveSections).map(([key, section]) => {
-            if (key === '__dimensional_added' || key === '__admin_sections') return null
-            // Skip optional sections unless dimensional has been added
-            if (section.optional && !dimensionalAdded) return null
-            const Component = SECTION_COMPONENTS[section.section_type]
-            if (!Component) return null
-            const supportsImages = IMAGE_ENABLED_SECTIONS.has(section.section_type)
-            const canEditItems = isAdmin && ITEM_EDITABLE.has(section.section_type)
-            const adminTools = isAdmin ? {
-              onDelete: (itemId) => handleDeleteItem(key, itemId),
-              onEdit: (itemId, a, b) => handleEditItem(key, itemId, a, b),
-            } : undefined
-            // Section A items may be marked N/A; Section B gets a "Pass All".
-            const allowNA = isReceivingSection(key, section)
-            const showPassAll = isVisualSection(key, section) && supportsPassAll(section)
-            return (
-              <CollapsibleSection
-                key={key}
-                title={section.title}
-                onDelete={isAdmin ? () => handleDeleteSection(key) : undefined}
-                headerAction={showPassAll ? (
-                  <button
-                    type="button"
-                    onClick={() => handlePassAll(key, section)}
-                    title="Mark every item in this section as Pass"
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-pdi-navy bg-white border border-pdi-navy/30 rounded-lg hover:bg-pdi-navy hover:text-white transition-colors min-h-[34px]"
-                  >
-                    <CheckSquare size={13} /> Pass All
-                  </button>
-                ) : undefined}
-              >
-                <Component
-                  section={section}
-                  data={sectionData[key]}
-                  onChange={val => setSectionData(d => ({ ...d, [key]: val }))}
-                  {...(supportsImages ? {
-                    sectionKey: attachmentKeyFor(activeItem, key),
-                    attachments,
-                    onUploadItem: handleItemUpload,
-                    onDeleteItem: handleDeleteFile,
-                    uploadingKey,
-                  } : {})}
-                  adminItemTools={adminTools}
-                  allowNA={allowNA}
-                />
+          {/* Item identification — the serial these inspection points belong to */}
+          <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-5">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+              <label htmlFor="item-serial" className="text-sm font-semibold text-pdi-navy sm:w-56 flex-shrink-0">
+                Serial No.{items.length > 1 ? ` — Item ${activeItem + 1} of ${items.length}` : ''}
+              </label>
+              <input
+                id="item-serial"
+                type="text"
+                value={itemSerial}
+                onChange={e => setItemSerial(e.target.value)}
+                placeholder="Serial number of the part being inspected…"
+                className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
+              />
+            </div>
+            <p className="mt-2 text-xs text-gray-500">
+              The inspection points and images below are recorded against this serial number.
+            </p>
+          </div>
 
-                {/* Admin: Add item button in section footer */}
-                {canEditItems && (
-                  <div className="mt-3 border-t border-dashed border-gray-200 pt-3">
-                    {addingItemKey === key ? (
-                      <div className="flex items-center gap-2">
-                        <input
-                          autoFocus
-                          type="text"
-                          value={newItemName}
-                          onChange={e => setNewItemName(e.target.value)}
-                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddItem(key) } if (e.key === 'Escape') setAddingItemKey(null) }}
-                          placeholder={section.section_type === 'dimensional' ? 'Measurement name…' : 'Item name…'}
-                          className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-pdi-navy"
-                        />
-                        <button type="button" onClick={() => handleAddItem(key)} className="text-xs text-pdi-navy hover:underline">Add</button>
-                        <button type="button" onClick={() => setAddingItemKey(null)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => { setAddingItemKey(key); setNewItemName('') }}
-                        className="flex items-center gap-1 text-xs text-pdi-navy hover:underline"
-                      >
-                        <PlusCircle size={12} /> Add item
-                      </button>
-                    )}
-                  </div>
-                )}
-              </CollapsibleSection>
-            )
-          })}
+          {/* Item-level inspection sections */}
+          {perItemSections.map(([key, section]) => renderSectionCard(key, section, false))}
 
           {/* Add Dimensional Inspection button */}
           {!dimensionalAdded && Object.values(effectiveSections).some(s => s.optional) && (
@@ -1046,7 +1190,7 @@ export default function InspectionForm() {
             <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 space-y-4">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
-                  Disposition{items.length > 1 ? ` — Item ${activeItem + 1}` : ''}
+                  Disposition{items.length > 1 ? ` — ${getItemLabel(items[activeItem], activeItem)}` : ''}
                 </h3>
                 {items.length > 1 && (
                   <span className="text-[11px] text-gray-400">Set a Disposition for each item</span>

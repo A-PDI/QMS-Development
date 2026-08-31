@@ -1,5 +1,6 @@
 import PFNToggle from './PFNToggle'
 import ItemAttachment from './ItemAttachment'
+import { Trash2 } from 'lucide-react'
 import { PFN_COLORS } from '../../lib/constants'
 
 export default function SectionGeneralMeasurements({
@@ -12,6 +13,7 @@ export default function SectionGeneralMeasurements({
   onUploadItem,
   onDeleteItem,
   uploadingKey,
+  onRemoveItem, // (itemId) — remove one measurement row from this inspection
 }) {
   function update(id, field, value) {
     const next = data.map(row => row.id === id ? { ...row, [field]: value } : row)
@@ -19,6 +21,9 @@ export default function SectionGeneralMeasurements({
   }
 
   const showImages = !!sectionKey && !!onUploadItem
+  // A measurement that doesn't apply to the part in front of the inspector can
+  // be taken off the form.
+  const showRemove = !readOnly && !!onRemoveItem
 
   return (
     <>
@@ -35,6 +40,9 @@ export default function SectionGeneralMeasurements({
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-28">Result</th>
               {showImages && (
                 <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 w-20">Image</th>
+              )}
+              {showRemove && (
+                <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 w-16">Tools</th>
               )}
             </tr>
           </thead>
@@ -102,6 +110,19 @@ export default function SectionGeneralMeasurements({
                       />
                     </td>
                   )}
+                  {showRemove && (
+                    <td className="px-3 py-2 text-center">
+                      <button
+                        type="button"
+                        onClick={() => onRemoveItem(item.id)}
+                        title="Remove this measurement from the inspection"
+                        aria-label={`Remove ${item.measurement || `item ${item.id}`}`}
+                        className="p-1 text-red-400 hover:bg-red-50 rounded"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </td>
+                  )}
                 </tr>
               )
             })}
@@ -131,6 +152,17 @@ export default function SectionGeneralMeasurements({
                     uploadingKey={uploadingKey}
                     readOnly={readOnly}
                   />
+                )}
+                {showRemove && (
+                  <button
+                    type="button"
+                    onClick={() => onRemoveItem(item.id)}
+                    title="Remove this measurement from the inspection"
+                    aria-label={`Remove ${item.measurement || `item ${item.id}`}`}
+                    className="p-1 text-red-400 hover:bg-red-50 rounded flex-shrink-0"
+                  >
+                    <Trash2 size={12} />
+                  </button>
                 )}
               </div>
               <div className="grid grid-cols-2 gap-2 mb-2">

@@ -24,8 +24,10 @@ import AddFireRingModal from '../components/inspection/AddFireRingModal'
 import FileUploadZone from '../components/FileUploadZone'
 import { formatDate, formatDateTime, formatFileSize, canAddFireRing } from '../lib/utils'
 import { HEADER_FIELD_LABELS, dispositionColor, dispositionLabel } from '../lib/constants'
-import { getItemDisposition } from '../lib/itemCompletion'
-import { isReceivingSection } from '../lib/sections'
+import { getItemDisposition, getItemSerial, getItemLabel, seedItemSerials } from '../lib/itemCompletion'
+import {
+  isReceivingSection, splitSectionsByScope, extractSharedSectionData, sharedSectionAttachments,
+} from '../lib/sections'
 
 const SECTION_COMPONENTS = {
   pfn_checklist: SectionReceiving,
@@ -110,7 +112,8 @@ export default function InspectionDetail() {
         return s || fallback
       }
       const part = clean(inspection.part_number, 'NoPart')
-      const serial = clean(inspection.lot_serial_no, 'NoSerial')
+      // lot_serial_no lists every item's serial; the filename takes the first.
+      const serial = clean(String(inspection.lot_serial_no || '').split(',')[0], 'NoSerial')
       a.download = `QC_${part}_${serial}.pdf`
       document.body.appendChild(a)
       a.click()
@@ -161,6 +164,10 @@ export default function InspectionDetail() {
   const sections = (rawSectionData.__admin_sections && typeof rawSectionData.__admin_sections === 'object')
     ? rawSectionData.__admin_sections
     : (typeof template.sections === 'string' ? JSON.parse(template.sections) : template.sections)
+  // Section A is answered once for the whole inspection; the rest per item.
+  const { inspectionLevel: inspectionLevelSections, perItem: perItemSections } =
+    splitSectionsByScope(sections)
+  const sharedSectionData = extractSharedSectionData(rawSectionData, sections)
   // Build the per-item list. New inspections store answers under __items;
   // legacy inspections keep answers as top-level section keys (= item 0).
   let itemDataList
@@ -178,6 +185,9 @@ export default function InspectionDetail() {
     if (inspection.disposition_notes) legacy.__disposition_notes = inspection.disposition_notes
     itemDataList = [legacy]
   }
+  // Inspections recorded before serials moved to the item level carry theirs on
+  // the inspection row; show it against the item(s) it belongs to.
+  itemDataList = seedItemSerials(itemDataList, inspection.lot_serial_no)
   // Attachment key for a given item index (mirrors the form/PDF convention).
   const attKeyFor = (itemIdx, sectionKey) => (itemIdx === 0 ? sectionKey : `item${itemIdx}__${sectionKey}`)
   const headerFields = typeof template.header_schema === 'string' ? JSON.parse(template.header_schema) : template.header_schema
@@ -458,15 +468,43 @@ export default function InspectionDetail() {
           </div>
         )}
 
+        {/* Section A — completed once for the whole inspection */}
+        {inspectionLevelSections.map(([key, section]) => {
+          const SectionComp = SECTION_COMPONENTS[section.section_type]
+          if (!SectionComp) return null
+          return (
+            <div key={key} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+              <div className="px-4 sm:px-5 py-3 border-b border-gray-100 bg-gray-50">
+                <h2 className="text-sm font-semibold text-gray-700">{section.title || key}</h2>
+              </div>
+              <div className="p-4 sm:p-5">
+                <SectionComp
+                  section={section}
+                  data={sharedSectionData[key]}
+                  onChange={() => {}}
+                  readOnly={true}
+                  sectionKey={key}
+                  attachments={sharedSectionAttachments(attachments, key)}
+                  allowNA={isReceivingSection(key, section)}
+                />
+              </div>
+            </div>
+          )
+        })}
+
         {/* Section data — rendered per inspected item */}
         {itemDataList.map((itemData, itemIdx) => {
           const itemDisp = getItemDisposition(itemData)
           const itemDispNotes = (itemData && itemData.__disposition_notes) || ''
+          const itemSerial = getItemSerial(itemData)
           return (
           <div key={`item-${itemIdx}`} className="space-y-3 sm:space-y-4">
-            {itemDataList.length > 1 && (
+            {(itemDataList.length > 1 || itemSerial) && (
               <div className="bg-pdi-navy text-white rounded-xl px-4 sm:px-5 py-2.5 text-sm font-semibold shadow-sm flex items-center justify-between gap-2">
-                <span>Item {itemIdx + 1} of {itemDataList.length}</span>
+                <span>
+                  {itemDataList.length > 1 ? `Item ${itemIdx + 1} of ${itemDataList.length}` : 'Inspected Item'}
+                  {itemSerial && <span className="font-mono font-normal text-white/80"> · SN {itemSerial}</span>}
+                </span>
                 {itemDisp && (
                   <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${dispositionColor(itemDisp)}`}>
                     {dispositionLabel(itemDisp)}
@@ -474,7 +512,7 @@ export default function InspectionDetail() {
                 )}
               </div>
             )}
-            {Object.entries(sections || {}).map(([key, section]) => {
+            {perItemSections.map(([key, section]) => {
               const SectionComp = SECTION_COMPONENTS[section.section_type]
               if (!SectionComp) return null
               return (
@@ -502,7 +540,7 @@ export default function InspectionDetail() {
               <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
                 <div className="px-4 sm:px-5 py-3 border-b border-gray-100 bg-gray-50">
                   <h2 className="text-sm font-semibold text-gray-700">
-                    {itemDataList.length > 1 ? `Item ${itemIdx + 1} Disposition` : 'Disposition'}
+                    {itemDataList.length > 1 ? `${getItemLabel(itemData, itemIdx)} — Disposition` : 'Disposition'}
                   </h2>
                 </div>
                 <div className="p-4 sm:p-5 space-y-2">

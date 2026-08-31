@@ -638,3 +638,32 @@ test('the SPEC column shows the GREEN acceptance band, not the blue target band'
   assert.ok(text.includes('220.0 - 240.0'), 'the green acceptance band is printed');
   assert.ok(!text.includes('228.0 - 232.0'), 'the blue target band is not printed');
 });
+
+test('a generated inspection answers Section A once and names each injector', async () => {
+  resetInjectorData();
+  await syncWith(benchBatch(3, { perReport: 3 }));
+  const rows = storedInjectors();
+  const selected = loadSelectedInjectors(rows.map((r) => r.id));
+
+  const result = generateInspectionReports(selected);
+  const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [result.inspections[0].inspection_id]);
+  const sectionData = JSON.parse(inspection.section_data);
+
+  // Section A checks the delivery, so it is answered once for the report.
+  const receiving = sectionData.__shared.receiving;
+  assert.ok(Array.isArray(receiving) && receiving.length > 0, 'Section A is filled in');
+  assert.ok(receiving.every((r) => r.status === 'P'), 'and auto-marked Pass');
+  assert.ok(sectionData.__items.every((it) => it.receiving === undefined),
+    'no item carries a copy of Section A');
+
+  // Every item is identified by the injector it covers.
+  assert.deepStrictEqual(
+    sectionData.__items.map((it) => it.__serial_no),
+    sectionData.__injector_source.injectors.map((i) => i.serial)
+  );
+  assert.strictEqual(
+    inspection.lot_serial_no,
+    sectionData.__items.map((it) => it.__serial_no).join(', '),
+    'the inspection row lists the serials it covers'
+  );
+});

@@ -6,6 +6,7 @@ import { useTemplate } from '../../hooks/useTemplates'
 import { useToast } from '../../hooks/useToast'
 import {
   getSectionData, getEffectiveSections, findFireRingKey, getSectionItems, initSectionData,
+  getSharedInspectionKeys,
 } from '../../lib/utils'
 import SectionGrooveSpecs from './SectionGrooveSpecs'
 
@@ -49,10 +50,9 @@ export default function AddFireRingModal({ inspectionId, onClose, onSaved }) {
     setSaving(true)
     try {
       const { sd, grooveKey, items } = model
-      // Preserve shared control flags; only the Fire Ring key changes per item.
-      const sharedFlags = {}
-      if (sd.__dimensional_added) sharedFlags.__dimensional_added = true
-      if (sd.__admin_sections) sharedFlags.__admin_sections = sd.__admin_sections
+      // Preserve everything kept once per inspection (control flags, the
+      // Section A answers, the injector link); only the Fire Ring key changes.
+      const sharedFlags = getSharedInspectionKeys(sd)
       const newItems = items.map((it, i) => ({ ...it, [grooveKey]: grooveByItem[i] }))
       // Status/disposition intentionally omitted so the inspection stays closed.
       await update.mutateAsync({ id: inspectionId, section_data: { ...sharedFlags, __items: newItems } })

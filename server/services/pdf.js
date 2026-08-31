@@ -303,15 +303,34 @@ function generateInspectionPdf(inspection, template, attachments = []) {
       }
       const dimensionalAdded = !!sd.__dimensional_added;
 
+      // Section A checks the delivery, so it is answered once for the whole
+      // inspection and printed once, ahead of the per-item pages.
+      const sharedKeys = Object.keys(secDefs).filter(
+        key => !key.startsWith('__') && isInspectionLevelSection(key, secDefs[key])
+      );
+      const sharedData = sharedAnswers(sd, sharedKeys, itemList);
+      for (const key of sharedKeys) {
+        const def = secDefs[key];
+        if (def.optional && !dimensionalAdded) continue;
+        // Older inspections answered Section A per item, so their photos may
+        // carry a namespaced key; print them with the section all the same.
+        const secAtts = attachments.filter(a =>
+          a.section_key === key || new RegExp(`^item\\d+__${escapeRe(key)}$`).test(a.section_key || '')
+        );
+        renderSection(doc, def, sharedData[key], secAtts);
+        vspace(doc, 8);
+      }
+
       itemList.forEach((itemData, itemIdx) => {
         // Each item after the first starts on a fresh page with its own header.
         if (itemIdx > 0) doc.addPage();
         if (itemList.length > 1) {
-          renderItemBanner(doc, itemIdx + 1, itemList.length);
+          renderItemBanner(doc, itemIdx + 1, itemList.length, itemSerial(itemData));
         }
 
         for (const [key, def] of Object.entries(secDefs)) {
           if (key.startsWith('__')) continue;
+          if (sharedKeys.includes(key)) continue;   // printed once, above
           if (def.optional && !dimensionalAdded) continue;
 
           const data    = (itemData && typeof itemData === 'object') ? itemData[key] : undefined;
@@ -320,29 +339,7 @@ function generateInspectionPdf(inspection, template, attachments = []) {
           const attKey  = itemIdx === 0 ? key : `item${itemIdx}__${key}`;
           const secAtts = attachments.filter(a => a.section_key === attKey);
 
-          switch (def.section_type) {
-            case 'pfn_checklist':
-              renderPfnChecklist(doc, def, data, secAtts); break;
-            case 'pfn_visual':
-              renderPfnVisual(doc, def, data, secAtts); break;
-            case 'dimensional':
-              renderDimensional(doc, def, data, secAtts); break;
-            case 'pass_fail_checklist':
-              renderPassFail(doc, def, data, secAtts); break;
-            case 'general_measurements':
-              renderGeneralMeasurements(doc, def, data, secAtts); break;
-            case 'groove_specs':
-              renderGrooveSpecs(doc, def, data, secAtts); break;
-            case 'camshaft_bore':
-              renderCamshaftBore(doc, def, data, secAtts); break;
-            case 'fire_ring_protrusion':
-              renderFireRing(doc, def, data, secAtts); break;
-            case 'valve_recession':
-              renderValveRecession(doc, def, data, secAtts); break;
-            case 'vacuum_test':
-              renderVacuumTest(doc, def, data, secAtts); break;
-            default: break;
-          }
+          renderSection(doc, def, data, secAtts);
           vspace(doc, 8);
         }
 
@@ -357,7 +354,7 @@ function generateInspectionPdf(inspection, template, attachments = []) {
         }
         if (itemDisp) {
           ensureSpace(doc, 60);
-          renderSectionTitle(doc, itemList.length > 1 ? `Item ${itemIdx + 1} — Disposition` : 'Final Result');
+          renderSectionTitle(doc, itemList.length > 1 ? `${itemLabel(itemData, itemIdx)} — Disposition` : 'Final Result');
           const color = dispColor(itemDisp);
           const bY = doc.y;
           doc.roundedRect(M, bY, PW, 32, 3).fillColor(color).fill();
@@ -635,16 +632,89 @@ function renderInfoGrid(doc, inspection) {
 }
 
 /**
- * Render an item banner (e.g. "ITEM 2 OF 5") at the top of a multi-item page.
+ * Render an item banner (e.g. "ITEM 2 OF 5 · SN 12345") at the top of a
+ * multi-item page. The serial number identifies the part the inspection points
+ * and images on the page were recorded against.
  */
-function renderItemBanner(doc, itemNo, totalItems) {
+function renderItemBanner(doc, itemNo, totalItems, serial = '') {
   const h = 22;
   const y = doc.y;
   doc.rect(M, y, PW, h).fillColor(NAVY).fill();
   doc.fontSize(10).font('Helvetica-Bold').fillColor(WHITE);
-  put(doc, `ITEM ${itemNo} OF ${totalItems}`, M + 10, y + 6, {
+  const label = serial
+    ? `ITEM ${itemNo} OF ${totalItems} \u00b7 SN ${serial}`
+    : `ITEM ${itemNo} OF ${totalItems}`;
+  put(doc, label, M + 10, y + 6, {
     width: PW - 20, lineBreak: false,
   }, y + h + 6);
+}
+
+// ── Section scope + item identity ────────────────────────────────────────────
+// These mirror client/src/lib/sections.js and client/src/lib/itemCompletion.js:
+// Section A (Receiving & Documentation Verification) checks the delivery, so it
+// is answered once for the whole inspection, and each item carries the serial
+// number of the part it covers.
+
+/** True for a section answered once per inspection rather than once per item. */
+function isInspectionLevelSection(key, def) {
+  return String(key || '').toLowerCase() === 'receiving' ||
+    String((def && def.title) || '').toUpperCase().includes('RECEIVING');
+}
+
+/** True when at least one row of a checklist section carries an answer. */
+function hasSectionAnswers(rows) {
+  return Array.isArray(rows) &&
+    rows.some(r => r && (r.status || r.result || r.finding || r.notes));
+}
+
+/**
+ * Answers for the inspection-level sections. They live under `__shared`;
+ * inspections recorded before Section A moved up kept a copy inside every item,
+ * so those are read from the first item that was actually filled in.
+ */
+function sharedAnswers(sd, sharedKeys, itemList) {
+  const stored = (sd && sd.__shared) || {};
+  const out = {};
+  for (const key of sharedKeys) {
+    if (stored[key] !== undefined) { out[key] = stored[key]; continue; }
+    const answered = itemList.find(it => hasSectionAnswers(it && it[key]));
+    const source = answered || itemList.find(it => it && it[key] !== undefined);
+    if (source) out[key] = source[key];
+  }
+  return out;
+}
+
+/** The serial number recorded against one item, or '' if none. */
+function itemSerial(itemData) {
+  return String((itemData && itemData.__serial_no) || '').trim();
+}
+
+/** Label for one item: its serial number when it has one. */
+function itemLabel(itemData, itemIdx) {
+  const serial = itemSerial(itemData);
+  return serial ? `Item ${itemIdx + 1} \u00b7 SN ${serial}` : `Item ${itemIdx + 1}`;
+}
+
+/** Escape a section key for use inside a regular expression. */
+function escapeRe(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Draw one section with the renderer for its type. */
+function renderSection(doc, def, data, secAtts = []) {
+  switch (def.section_type) {
+    case 'pfn_checklist':        renderPfnChecklist(doc, def, data, secAtts); break;
+    case 'pfn_visual':           renderPfnVisual(doc, def, data, secAtts); break;
+    case 'dimensional':          renderDimensional(doc, def, data, secAtts); break;
+    case 'pass_fail_checklist':  renderPassFail(doc, def, data, secAtts); break;
+    case 'general_measurements': renderGeneralMeasurements(doc, def, data, secAtts); break;
+    case 'groove_specs':         renderGrooveSpecs(doc, def, data, secAtts); break;
+    case 'camshaft_bore':        renderCamshaftBore(doc, def, data, secAtts); break;
+    case 'fire_ring_protrusion': renderFireRing(doc, def, data, secAtts); break;
+    case 'valve_recession':      renderValveRecession(doc, def, data, secAtts); break;
+    case 'vacuum_test':          renderVacuumTest(doc, def, data, secAtts); break;
+    default: break;
+  }
 }
 
 /**

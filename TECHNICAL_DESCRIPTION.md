@@ -293,7 +293,25 @@ CREATE TABLE inspection_templates (
 - `groove_specs` — Fire Ring (cylinder head). Each spec flagged `entry: true` gets its own per-cylinder measurement chart; any spec left `entry: false` is listed in a reference-only header instead.
 - `checklist` — Generic checklist items.
 
+**Section scope — inspection-level vs. per-item:**
+
+Section A (Receiving & Documentation Verification) checks the *delivery* — carton
+condition, labels, part marking, quantity, corrosion protection — so it is
+completed **once for the whole inspection**, before the item-level inspections
+begin, however many items the inspection covers. Every other section is
+completed **once per item**. `isInspectionLevelSection()` in
+`client/src/lib/sections.js` is the single definition of which is which (mirrored
+in `services/pdf.js` and `services/injectorInspection.js` on the server).
+
 Section B (Visual) carries a **Pass All** button in its section header that marks every item in the section Pass in one click.
+
+Section C (Dimensional) rows are removable from the inspection form: whoever is
+running the inspection can drop a measurement that does not apply to the part in
+front of them (`dimensional` and `general_measurements` sections). Removing a row
+takes it out of this inspection's section definition (stored under
+`__admin_sections`) and removes the answers recorded against it — the inspector
+is asked to confirm when a measurement has already been entered. Renaming a row
+and adding rows remain admin-only.
 
 ---
 
@@ -333,18 +351,53 @@ CREATE TABLE inspections (
 );
 ```
 
-**`section_data` JSON structure (stored per-section):**
+**`section_data` JSON structure:**
+
+One inspection covers `item_count` inspected items. Control keys (prefixed `__`)
+hold what belongs to the inspection; `__items` holds one entry per item, each
+with its own serial number, answers and disposition.
+
 ```json
 {
-  "A": {
-    "A1": { "value": "pass", "remarks": "" },
-    "A2": { "value": "fail", "remarks": "Damaged corner" }
+  "__shared": {
+    "receiving": [ { "id": 1, "status": "P", "finding": "" } ]
   },
-  "C": {
-    "C1": { "actual": "152.3" }
-  }
+  "__items": [
+    {
+      "__serial_no": "SN-1001",
+      "visual":      [ { "id": 1, "result": "F", "notes": "Chipped crown" } ],
+      "dimensional": [ { "id": 1, "spec": "85.00±0.02", "actual1": "85.01", "status": "P" } ],
+      "__disposition": "FAIL",
+      "__disposition_notes": "Returned to supplier"
+    }
+  ],
+  "__dimensional_added": true,
+  "__admin_sections": { "…": "section definitions overriding the template" },
+  "__injector_source": { "report_ext_id": "…", "injectors": [] }
 }
 ```
+
+| Key | Holds |
+| --- | --- |
+| `__shared` | Answers to the inspection-level sections (Section A), completed once |
+| `__items` | One entry per inspected item, keyed by section |
+| `__items[].__serial_no` | The serial number of the part that item covers |
+| `__items[].__disposition` | That item's PASS / FAIL / ACCEPTED result (+ `__disposition_notes`) |
+| `__dimensional_added` | Whether the optional dimensional sections were added |
+| `__admin_sections` | Section definitions for this inspection (edits, removed rows, Miscellaneous forms) |
+| `__injector_source` | Link back to the CarbonZapp test report an inspection was generated from |
+
+**Serial numbers.** A serial number is entered per item, so the inspection points
+and images recorded against an item belong to that item's serial. The
+`lot_serial_no` column on the inspection row is derived from them (every distinct
+item serial, in order) so the lists, search and the PDF filename keep working.
+Inspections recorded before serials moved to the item level are read back the
+other way: a single serial, or a comma-separated list matching the item count, is
+seeded onto the items.
+
+**Attachments.** Images are scoped the same way: an inspection-level section uses
+the bare section key, item 0 uses the bare key too, and items 1+ use
+`item{N}__{section_key}` (see `inspection_attachments.section_key`).
 
 **Status Transition Flow:**
 
@@ -635,11 +688,11 @@ An Axios instance configured with:
 ### Inspection Form Data Flow
 
 1. `InspectionForm.jsx` fetches the inspection record and its template via React Query.
-2. Header fields (part number, supplier, etc.) are held in local component state.
-3. Section data is held in a `sectionData` state object, keyed by section letter.
-4. Each section renders its appropriate component (`SectionVisual`, `SectionDimensional`, etc.), which receives its slice of `sectionData` and an `onChange` callback.
-5. On "Save", the component PATCHes the full `section_data` JSON plus header fields to `/api/inspections/:id`.
-6. On "Submit", it calls the submit mutation, which POSTs to `/api/inspections/:id/submit`.
+2. Header fields (part number, PO number, date received, inspector) are held in local component state.
+3. The saved `section_data` is split into the inspection-level answers (`sharedSectionData`, from `__shared`) and the per-item answers (`items`, from `__items`); `activeItem` is the item being edited. Legacy inspections that kept Section A inside their items have those answers hoisted, and their inspection-level serial seeded onto the items.
+4. Section A renders once at the top of the form. The serial-number field for the active item follows it, then that item's sections — each receiving its slice of the item's data and an `onChange` callback.
+5. Autosave (and "Save") PATCHes the rebuilt `section_data` JSON, the derived `lot_serial_no`, `item_count` and the header fields to `/api/inspections/:id`.
+6. "Complete Inspection" requires a disposition on every item; Fail/Accepted rows need a description and an image, checked once for Section A and once per item. It POSTs to `/api/inspections/:id/complete`.
 
 ### PDF Export
 
@@ -705,9 +758,13 @@ Multer disk storage configuration:
 
 `generateInspectionPdf(inspection, template, attachments)` uses PDFKit to build a multi-page PDF:
 - Header: PDI logo, form number, component type, inspection header fields
-- Sections: rendered according to section type (checklist items, measurement tables)
+- Inspection-level sections (Section A): rendered once, ahead of the item pages
+- Item pages: one per inspected item, headed by a banner naming the item and its
+  serial number (`ITEM 2 OF 5 · SN 12345`), then that item's sections rendered
+  according to section type (checklist items, measurement tables) and its
+  disposition
+- Overall disposition for a multi-item inspection (worst case across the items)
 - Attachments: listed at the end with file names and upload timestamps
-- Disposition and reviewer signature block
 - Returned as a Buffer, streamed directly to the HTTP response
 
 ---

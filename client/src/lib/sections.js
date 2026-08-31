@@ -67,3 +67,85 @@ export function passAllRows(section, data) {
     return next
   })
 }
+
+// ─── Section scope: inspection-level vs. per-item ────────────────────────────
+// Most sections are answered once for every inspected item. Section A checks
+// the DELIVERY — the carton, the paperwork, the count — so it is answered once
+// for the whole inspection, before the item-level inspections begin.
+
+/** Key under which the inspection-level answers live in section_data. */
+export const SHARED_SECTION_DATA_KEY = '__shared'
+
+/** True for a section completed once per inspection rather than once per item. */
+export function isInspectionLevelSection(key, section) {
+  return isReceivingSection(key, section)
+}
+
+/**
+ * A template's sections split by scope, each as [key, section] pairs in the
+ * template's own order. Control keys (`__…`) are dropped.
+ */
+export function splitSectionsByScope(sections) {
+  const inspectionLevel = []
+  const perItem = []
+  for (const [key, section] of Object.entries(sections || {})) {
+    if (key.startsWith('__')) continue
+    if (isInspectionLevelSection(key, section)) inspectionLevel.push([key, section])
+    else perItem.push([key, section])
+  }
+  return { inspectionLevel, perItem }
+}
+
+/** Keys of the sections answered once per inspection. */
+export function inspectionLevelKeys(sections) {
+  return splitSectionsByScope(sections).inspectionLevel.map(([key]) => key)
+}
+
+/** True when at least one row in a checklist section carries an answer. */
+function hasAnswers(rows) {
+  return (Array.isArray(rows) ? rows : []).some(row =>
+    !!(row && (row.status || row.result || row.finding || row.notes || row.pass || row.fail))
+  )
+}
+
+/**
+ * The inspection-level answers held in a saved section_data blob.
+ *
+ * They live under `__shared`. Inspections saved before Section A moved up kept
+ * a copy inside every item, so those are hoisted from the first item that was
+ * actually filled in (falling back to the first item).
+ */
+export function extractSharedSectionData(saved, sections) {
+  const stored = (saved && saved[SHARED_SECTION_DATA_KEY]) || {}
+  const items = Array.isArray(saved?.__items) && saved.__items.length > 0
+    ? saved.__items
+    : [saved || {}]
+  const shared = {}
+  for (const key of inspectionLevelKeys(sections)) {
+    if (stored[key] !== undefined) { shared[key] = stored[key]; continue }
+    const answered = items.find(it => it && hasAnswers(it[key]))
+    const source = answered || items.find(it => it && it[key] !== undefined)
+    if (source) shared[key] = source[key]
+  }
+  return shared
+}
+
+/** A copy of one item's answers without the inspection-level section keys. */
+export function stripSectionKeys(itemData, keys) {
+  const next = { ...(itemData || {}) }
+  for (const key of keys || []) delete next[key]
+  return next
+}
+
+/**
+ * Attachments as an inspection-level section sees them. An inspection answered
+ * before Section A moved up filed its images under the per-item key
+ * (`item2__receiving`); those are re-labelled to the section's own key so they
+ * still show against the section they document.
+ */
+export function sharedSectionAttachments(attachments, key) {
+  const legacy = new RegExp(`^item\\d+__${String(key).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
+  return (attachments || []).map(a => (
+    legacy.test(a?.section_key || '') ? { ...a, section_key: key } : a
+  ))
+}

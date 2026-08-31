@@ -9,9 +9,11 @@ import PartNumberCombobox from '../components/PartNumberCombobox'
 
 // Part Number, Part Description and Part Type are rendered first (in that
 // order) as a dedicated lookup block. The remaining header fields follow.
+// The Lot / Serial No. is NOT here: a serial number is entered per inspected
+// item in the inspection form, so the inspection points and images recorded
+// against an item belong to that item's serial.
 const FIELD_CONFIG = [
   { key: 'po_number',      label: 'PO Number',         required: true,  type: 'text' },
-  { key: 'lot_serial_no',  label: 'Lot / Serial No.',  required: false, type: 'text' },
   { key: 'date_received',  label: 'Date Received',      required: true,  type: 'date' },
   { key: 'inspector_name', label: 'Inspector Name',     required: true,  type: 'text' },
 ]
@@ -225,7 +227,7 @@ export default function NewInspection() {
               }}
               className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pdi-navy min-h-[40px]"
             />
-            <p className="mt-1 text-[11px] text-gray-500">A separate inspection form is created for each item; the header stays the same.</p>
+            <p className="mt-1 text-[11px] text-gray-500">A separate inspection form is created for each item, each with its own serial number; the header stays the same.</p>
           </div>
 
           {/* Remaining header fields — single column on mobile, two columns on sm+ */}

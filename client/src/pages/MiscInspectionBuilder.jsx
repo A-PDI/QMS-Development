@@ -325,7 +325,7 @@ export default function MiscInspectionBuilder() {
         part_number: header.part_number || '',
         description: header.description || '',
         po_number: header.po_number || '',
-        lot_serial_no: header.lot_serial_no || '',
+        // No serial here — it is entered per item in the inspection form.
         date_received: header.date_received || '',
         inspector_name: header.inspector_name || currentUser?.name || '',
         item_count: itemCount,
