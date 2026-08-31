@@ -169,3 +169,108 @@ test('a photo attached to an N/A item is dropped along with the item', async () 
   assert.ok(images(reported) > images(notApplicable),
     "the N/A item's photo is left out while a reported item's photo is embedded");
 });
+
+// ── Section A is inspection-level; items carry their own serial number ───────
+
+const VISUAL = {
+  title: 'B. VISUAL INSPECTION',
+  section_type: 'pass_fail_checklist',
+  items: [{ id: 1, name: 'Crown Face', requirement: 'No cracks' }],
+};
+
+/** How many times a phrase is drawn across the whole document. */
+function countOf(strings, phrase) {
+  return strings.filter((s) => s.includes(phrase)).length;
+}
+
+test('Section A is reported once, ahead of the per-item pages', async () => {
+  const buffer = await generateInspectionPdf(
+    inspection({
+      __shared: { receiving: [{ id: 1, status: 'P', finding: 'crate intact' }] },
+      __items: [
+        { __serial_no: 'SN-1', visual: [{ id: 1, result: 'P' }] },
+        { __serial_no: 'SN-2', visual: [{ id: 1, result: 'P' }] },
+      ],
+    }),
+    template({ receiving: RECEIVING, visual: VISUAL })
+  );
+  const strings = extractPdfText(buffer);
+
+  assert.strictEqual(countOf(strings, 'RECEIVING & DOCUMENTATION'), 1,
+    'the receiving checklist is completed once for the delivery');
+  assert.strictEqual(countOf(strings, 'crate intact'), 1, 'and so is its finding');
+  assert.strictEqual(countOf(strings, 'VISUAL INSPECTION'), 2, 'the item-level section is per item');
+});
+
+test('each item page is headed by the serial number it covers', async () => {
+  const buffer = await generateInspectionPdf(
+    inspection({
+      __shared: { receiving: [{ id: 1, status: 'P', finding: '' }] },
+      __items: [
+        { __serial_no: 'SN-1', visual: [{ id: 1, result: 'P' }], __disposition: 'PASS' },
+        { __serial_no: 'SN-2', visual: [{ id: 1, result: 'F' }], __disposition: 'FAIL' },
+      ],
+    }),
+    template({ receiving: RECEIVING, visual: VISUAL })
+  );
+  const strings = extractPdfText(buffer);
+  const text = strings.join(' ');
+
+  assert.ok(text.includes('ITEM 1 OF 2 · SN SN-1'));
+  assert.ok(text.includes('ITEM 2 OF 2 · SN SN-2'));
+  const dispositionTitles = strings.filter((s) => s.includes('DISPOSITION'));
+  assert.ok(dispositionTitles.some((s) => s.includes('ITEM 2 · SN SN-2')),
+    "an item's result is reported against its serial number");
+});
+
+test('an item with no serial number is still headed by its number', async () => {
+  const text = await pdfText(
+    inspection({ __items: [{ visual: [{ id: 1, result: 'P' }] }, { visual: [{ id: 1, result: 'P' }] }] }),
+    template({ visual: VISUAL })
+  );
+
+  assert.ok(text.includes('ITEM 1 OF 2'));
+  assert.ok(!text.includes('SN '), 'no serial, nothing to print');
+});
+
+test('a Section A answered per item before the change is still reported once', async () => {
+  const buffer = await generateInspectionPdf(
+    inspection({
+      __items: [
+        { receiving: [{ id: 1, status: '', finding: '' }], visual: [{ id: 1, result: 'P' }] },
+        { receiving: [{ id: 1, status: 'F', finding: 'carton crushed' }], visual: [{ id: 1, result: 'P' }] },
+      ],
+    }),
+    template({ receiving: RECEIVING, visual: VISUAL })
+  );
+  const strings = extractPdfText(buffer);
+
+  assert.strictEqual(countOf(strings, 'RECEIVING & DOCUMENTATION'), 1);
+  assert.strictEqual(countOf(strings, 'carton crushed'), 1,
+    'the answers that were actually recorded are the ones reported');
+});
+
+test('a photo attached to Section A before the change is still reported', async () => {
+  const attachments = [
+    { id: 'a1', section_key: 'item1__receiving', item_id: 1, mime_type: 'image/png', file_name: 'a.png', file_path: testImage('shared-a.png') },
+  ];
+  const withPhoto = await generateInspectionPdf(
+    inspection({
+      __shared: { receiving: [{ id: 1, status: 'F', finding: 'carton crushed' }] },
+      __items: [{ visual: [] }, { visual: [] }],
+    }),
+    template({ receiving: RECEIVING, visual: VISUAL }),
+    attachments
+  );
+  const without = await generateInspectionPdf(
+    inspection({
+      __shared: { receiving: [{ id: 1, status: 'F', finding: 'carton crushed' }] },
+      __items: [{ visual: [] }, { visual: [] }],
+    }),
+    template({ receiving: RECEIVING, visual: VISUAL })
+  );
+  const images = (buffer) => (buffer.toString('latin1').match(/\/Subtype\s*\/Image/g) || []).length;
+
+  assert.ok(images(withPhoto) > images(without),
+    'an image filed under the old per-item key still prints with Section A');
+});

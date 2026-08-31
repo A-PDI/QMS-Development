@@ -15,6 +15,7 @@ export default function SectionDimensional({
   onDeleteItem,
   uploadingKey,
   adminItemTools, // { onDelete(itemId), onEdit(itemId, name, requirement) }
+  onRemoveItem,   // (itemId) — remove one measurement row from this inspection
 }) {
   const [editingId, setEditingId] = useState(null)
   const [editMeasurement, setEditMeasurement] = useState('')
@@ -31,7 +32,11 @@ export default function SectionDimensional({
     setEditingId(null)
   }
 
-  const showTools = !!adminItemTools
+  // Admins can rename a row; anyone running the inspection can remove one that
+  // doesn't apply to the part in front of them. Both share the Tools column.
+  const canEditRows = !!adminItemTools?.onEdit
+  const removeRow = adminItemTools?.onDelete || onRemoveItem
+  const showTools = !readOnly && (canEditRows || !!removeRow)
   function update(id, field, value) {
     const next = data.map(row => row.id === id ? { ...row, [field]: value } : row)
     onChange(next)
@@ -175,8 +180,19 @@ export default function SectionDimensional({
                         </div>
                       ) : (
                         <div className="flex items-center justify-center gap-1">
-                          <button onClick={() => startEdit(item)} title="Edit item" className="p-1 text-blue-500 hover:bg-blue-50 rounded"><Pencil size={13} /></button>
-                          <button onClick={() => adminItemTools.onDelete(item.id)} title="Delete item" className="p-1 text-red-400 hover:bg-red-50 rounded"><Trash2 size={13} /></button>
+                          {canEditRows && (
+                            <button onClick={() => startEdit(item)} title="Edit measurement" className="p-1 text-blue-500 hover:bg-blue-50 rounded"><Pencil size={13} /></button>
+                          )}
+                          {removeRow && (
+                            <button
+                              onClick={() => removeRow(item.id)}
+                              title="Remove this measurement from the inspection"
+                              aria-label={`Remove ${item.measurement || `item ${item.id}`}`}
+                              className="p-1 text-red-400 hover:bg-red-50 rounded"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
                         </div>
                       )}
                     </td>
@@ -201,6 +217,17 @@ export default function SectionDimensional({
               <div className="flex items-baseline gap-1.5 mb-1">
                 <span className="font-mono text-xs font-bold text-pdi-navy">{item.id}.</span>
                 <span className="text-xs text-gray-700 font-medium">{item.measurement || (!singleValue && item.location) || `Item ${item.id}`}</span>
+                {showTools && removeRow && (
+                  <button
+                    type="button"
+                    onClick={() => removeRow(item.id)}
+                    title="Remove this measurement from the inspection"
+                    aria-label={`Remove ${item.measurement || `item ${item.id}`}`}
+                    className="ml-auto p-1 text-red-400 hover:bg-red-50 rounded flex-shrink-0"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
               </div>
               {specVal && <div className="text-xs text-gray-400 mb-2">Spec: {specVal}</div>}
               <div className={`grid gap-1.5 mb-1.5 ${singleValue ? 'grid-cols-1' : 'grid-cols-3'}`}>

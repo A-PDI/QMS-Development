@@ -9,8 +9,15 @@ import assert from 'node:assert'
 import {
   NA_STATUS,
   PFN_OPTIONS_WITH_NA,
+  SHARED_SECTION_DATA_KEY,
   isReceivingSection,
   isVisualSection,
+  isInspectionLevelSection,
+  splitSectionsByScope,
+  inspectionLevelKeys,
+  extractSharedSectionData,
+  stripSectionKeys,
+  sharedSectionAttachments,
   supportsPassAll,
   hasNonPassRows,
   passAllRows,
@@ -89,4 +96,82 @@ test('Pass All only warns when it would overwrite a result', () => {
   assert.ok(hasNonPassRows(visual, [{ id: 1, result: 'A' }]))
   assert.ok(hasNonPassRows(visual, [{ id: 1, pass: false, fail: true }]), 'legacy rows count too')
   assert.ok(hasNonPassRows(receiving, [{ id: 1, status: 'N' }]), 'N/A is a result to protect')
+})
+
+// ── Section scope ───────────────────────────────────────────────────────────
+const SECTIONS = { receiving, visual, dimensional }
+
+test('Section A is answered once per inspection, the rest once per item', () => {
+  assert.ok(isInspectionLevelSection('receiving', receiving))
+  assert.ok(!isInspectionLevelSection('visual', visual))
+  assert.ok(!isInspectionLevelSection('dimensional', dimensional))
+
+  const { inspectionLevel, perItem } = splitSectionsByScope(SECTIONS)
+  assert.deepStrictEqual(inspectionLevel.map(([key]) => key), ['receiving'])
+  assert.deepStrictEqual(perItem.map(([key]) => key), ['visual', 'dimensional'])
+  assert.deepStrictEqual(inspectionLevelKeys(SECTIONS), ['receiving'])
+})
+
+test('control keys are not sections', () => {
+  const { inspectionLevel, perItem } = splitSectionsByScope({
+    ...SECTIONS, __admin_sections: {}, __dimensional_added: true,
+  })
+  assert.deepStrictEqual(inspectionLevel.map(([key]) => key), ['receiving'])
+  assert.deepStrictEqual(perItem.map(([key]) => key), ['visual', 'dimensional'])
+})
+
+test('the inspection-level answers are read from __shared', () => {
+  const saved = {
+    [SHARED_SECTION_DATA_KEY]: { receiving: [{ id: 1, status: 'P' }] },
+    __items: [{ receiving: [{ id: 1, status: 'F' }], visual: [] }],
+  }
+  const shared = extractSharedSectionData(saved, SECTIONS)
+  assert.deepStrictEqual(shared, { receiving: [{ id: 1, status: 'P' }] })
+})
+
+test('an inspection saved before Section A moved up keeps its answers', () => {
+  const saved = {
+    __items: [
+      { receiving: [{ id: 1, status: '', finding: '' }] },
+      { receiving: [{ id: 1, status: 'F', finding: 'carton crushed' }] },
+    ],
+  }
+  const shared = extractSharedSectionData(saved, SECTIONS)
+  assert.deepStrictEqual(
+    shared.receiving,
+    [{ id: 1, status: 'F', finding: 'carton crushed' }],
+    'the item that was actually filled in is the one hoisted'
+  )
+})
+
+test('a legacy single-item inspection keeps its Section A answers', () => {
+  const saved = { receiving: [{ id: 1, status: 'P', finding: '' }], visual: [] }
+  assert.deepStrictEqual(extractSharedSectionData(saved, SECTIONS).receiving, [{ id: 1, status: 'P', finding: '' }])
+})
+
+test('an unanswered Section A still resolves to its empty rows', () => {
+  const saved = { __items: [{ receiving: [] }] }
+  assert.deepStrictEqual(extractSharedSectionData(saved, SECTIONS), { receiving: [] })
+  assert.deepStrictEqual(extractSharedSectionData({}, SECTIONS), {}, 'nothing saved yet, nothing to hoist')
+})
+
+test('the inspection-level keys come off the per-item answers', () => {
+  const item = { receiving: [{ id: 1 }], visual: [{ id: 1 }], __disposition: 'PASS' }
+  const stripped = stripSectionKeys(item, ['receiving'])
+  assert.deepStrictEqual(stripped, { visual: [{ id: 1 }], __disposition: 'PASS' })
+  assert.ok(item.receiving, 'the original item is not mutated')
+})
+
+test('an inspection-level section still sees images filed per item', () => {
+  const attachments = [
+    { id: 'a', section_key: 'receiving', item_id: 1 },
+    { id: 'b', section_key: 'item2__receiving', item_id: 3 },
+    { id: 'c', section_key: 'item2__visual', item_id: 1 },
+    { id: 'd' },
+  ]
+  assert.deepStrictEqual(
+    sharedSectionAttachments(attachments, 'receiving').map((a) => [a.id, a.section_key]),
+    [['a', 'receiving'], ['b', 'receiving'], ['c', 'item2__visual'], ['d', undefined]]
+  )
+  assert.strictEqual(attachments[1].section_key, 'item2__receiving', 'the originals are not mutated')
 })

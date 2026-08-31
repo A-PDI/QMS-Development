@@ -7,15 +7,20 @@
  * A single test report may contain several injectors (one per bench slot); each
  * injector becomes ONE ITEM inside the inspection (section_data.__items[]).
  *
+ * RECEIVING (Section A) checks the delivery, so it is filled in once for the
+ * whole report — auto-marked PASS ('P') — and stored under `__shared`.
+ *
  * For every item:
+ *   • __serial_no          = that injector's serial number.
  *   • DIMENSIONAL section  = that injector's flow / response test-bench steps.
- *   • RECEIVING & VISUAL   = auto-marked PASS ('P') when the injector passed all
+ *   • VISUAL               = auto-marked PASS ('P') when the injector passed all
  *                            of its flow tests; left OPEN ('') when it failed,
  *                            so a QC reviewer must inspect a failing injector.
  *
  * section_data shape produced (matches the client / PDF renderer):
  *   {
- *     __items: [ { receiving:[...], visual:[...], dimensional:[...],
+ *     __shared: { receiving: [...] },
+ *     __items: [ { __serial_no, visual:[...], dimensional:[...],
  *                  __disposition, __disposition_notes }, ... ],
  *     __dimensional_added: true,
  *     __admin_sections: { ...template.sections, dimensional: {items:[...]} },
@@ -147,30 +152,19 @@ function buildItemForInjector(inj, templateSections) {
   const passed = inj.overall_pass === 1;
   const failed = inj.overall_pass === 0;
 
-  // Receiving (pfn_checklist) and Visual (pass_fail_checklist) both use the
-  // unified {id, result} shape.
-  //
-  //  • SECTION A — Receiving & Documentation Verification (pfn_checklist):
-  //    always auto-marked PASS on generation. These checks (carton condition,
-  //    labels, part marking, quantity, corrosion protection) are independent of
-  //    the flow-test outcome, so they are populated regardless of pass/fail.
-  //  • VISUAL / quality checklist (pass_fail_checklist): auto-marked PASS when
-  //    the injector passed every flow test, left OPEN when it failed so a QC
-  //    reviewer must inspect a failing injector.
+  // VISUAL / quality checklist (pass_fail_checklist): auto-marked PASS when the
+  // injector passed every flow test, left OPEN when it failed so a QC reviewer
+  // must inspect a failing injector. (Section A is inspection-level — see
+  // buildSharedSections below.)
   const visualResult = passed ? 'P' : '';
-  const item = {};
+  // The serial number ties this item's test results and images to the injector.
+  const item = { __serial_no: inj.serial_number || '' };
 
   for (const [key, section] of Object.entries(templateSections)) {
-    if (key === 'dimensional') continue; // handled below
+    if (key === 'dimensional') continue;              // handled below
+    if (isInspectionLevelSection(key, section)) continue; // answered once, shared
     const srcItems = Array.isArray(section.items) ? section.items : [];
-    if (section.section_type === 'pfn_checklist') {
-      // Section A (Receiving & Documentation) — always Pass.
-      // IMPORTANT: the pfn_checklist renderer (SectionReceiving.jsx) and the PDF
-      // read the per-item value from `status` (NOT `result`, which is what the
-      // pass_fail_checklist renderer uses). Populate BOTH so the mark shows up
-      // regardless of which renderer reads the row.
-      item[key] = srcItems.map((it) => ({ id: it.id, status: 'P', result: 'P', notes: '', finding: '' }));
-    } else if (section.section_type === 'pass_fail_checklist') {
+    if (section.section_type === 'pass_fail_checklist') {
       // Visual checklist (SectionChecklist.jsx / PDF) reads `result`.
       item[key] = srcItems.map((it) => ({ id: it.id, result: visualResult, status: visualResult, notes: '', finding: '' }));
     }
@@ -182,6 +176,35 @@ function buildItemForInjector(inj, templateSections) {
   item.__disposition = inj.overall_pass == null ? '' : (failed ? 'FAIL' : 'PASS');
   item.__disposition_notes = '';
   return item;
+}
+
+/**
+ * True for a section answered once per inspection (Section A — Receiving &
+ * Documentation Verification). Mirrors client/src/lib/sections.js.
+ */
+function isInspectionLevelSection(key, section) {
+  return String(key || '').toLowerCase() === 'receiving' ||
+    String((section && section.title) || '').toUpperCase().includes('RECEIVING');
+}
+
+/**
+ * The inspection-level answers for a report: Section A (carton condition,
+ * labels, part marking, quantity, corrosion protection) checks the delivery, so
+ * it is filled in once and always auto-marked PASS — those checks are
+ * independent of how the injectors performed on the bench.
+ *
+ * IMPORTANT: the pfn_checklist renderer (SectionReceiving.jsx) and the PDF read
+ * the value from `status` (NOT `result`, which is what the pass_fail_checklist
+ * renderer uses). Populate BOTH so the mark shows up either way.
+ */
+function buildSharedSections(templateSections) {
+  const shared = {};
+  for (const [key, section] of Object.entries(templateSections)) {
+    if (!isInspectionLevelSection(key, section)) continue;
+    const srcItems = Array.isArray(section.items) ? section.items : [];
+    shared[key] = srcItems.map((it) => ({ id: it.id, status: 'P', result: 'P', notes: '', finding: '' }));
+  }
+  return shared;
 }
 
 /**
@@ -229,6 +252,7 @@ function autoFillReportInspection(reportExtId, injectorRows, opts = {}) {
   const __items = injectors.map((inj) => buildItemForInjector(inj, adminSections));
 
   const sectionData = {
+    __shared: buildSharedSections(adminSections),
     __items,
     __dimensional_added: true,
     __admin_sections: adminSections,

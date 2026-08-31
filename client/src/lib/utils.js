@@ -1,4 +1,5 @@
 import { format, parseISO } from 'date-fns'
+import { SHARED_SECTION_DATA_KEY } from './sections'
 
 export function formatDate(dateStr) {
   if (!dateStr) return '—'
@@ -120,6 +121,21 @@ export function getEffectiveSections(template, sectionData) {
   return typeof template.sections === 'string'
     ? JSON.parse(template.sections || '{}')
     : (template.sections || {})
+}
+
+/**
+ * The parts of section_data that belong to the inspection rather than to one
+ * item: the control flags, the inspection-level (Section A) answers, and the
+ * injector-sync link. Anything writing section_data back has to carry these
+ * through or they are lost.
+ */
+export function getSharedInspectionKeys(sectionData) {
+  const sd = sectionData || {}
+  const shared = {}
+  for (const key of ['__dimensional_added', '__admin_sections', SHARED_SECTION_DATA_KEY, '__injector_source']) {
+    if (sd[key] !== undefined) shared[key] = sd[key]
+  }
+  return shared
 }
 
 /** The per-item answer list (new __items format or a single legacy item). */
