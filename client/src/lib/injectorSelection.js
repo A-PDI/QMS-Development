@@ -325,6 +325,52 @@ export function validateSelectionForReport(selected = []) {
   return { ok: true, message: '', warnings }
 }
 
+/**
+ * How an injector is named in messages and modal headings.
+ *
+ * Serial first — it is what the test bench and the shop floor identify an
+ * injector by — with the part number as the qualifier behind it.
+ */
+export function injectorLabel(injector) {
+  const serial = String(injector?.serial_number ?? '').trim()
+  const part = String(injector?.part_number ?? '').trim()
+  if (serial && part) return `SN ${serial} · ${part}`
+  if (serial) return `SN ${serial}`
+  if (part) return part
+  return 'Injector'
+}
+
+/**
+ * The request for the single-injector quick preview opened from a row's serial
+ * number.
+ *
+ * It is the Custom Report preview of exactly ONE injector: the row that was
+ * clicked. It deliberately takes an injector rather than the page's selection
+ * so that opening a quick preview can neither read nor change which injectors
+ * are ticked for a report.
+ *
+ * Returns { ok, injectorIds, message } — the same shape the report validation
+ * uses, so the page reports a refusal the same way for both.
+ */
+export function quickPreviewRequest(injector) {
+  const id = injector?.id
+  if (id === undefined || id === null || id === '') {
+    return {
+      ok: false,
+      injectorIds: [],
+      message: 'That row has no injector id — refresh the list and try again.',
+    }
+  }
+  if (!hasTestResults(injector)) {
+    return {
+      ok: false,
+      injectorIds: [],
+      message: `${injectorLabel(injector)} has no test-bench results to preview. Re-sync the test bench and try again.`,
+    }
+  }
+  return { ok: true, injectorIds: [id], message: '' }
+}
+
 /** Short description of what is selected. */
 export function describeSelection(selected = []) {
   return `${selected.length} injector${selected.length === 1 ? '' : 's'}`

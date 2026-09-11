@@ -24,6 +24,8 @@ import {
   vendorPromptReport,
   suggestReportName,
   hasTestResults,
+  injectorLabel,
+  quickPreviewRequest,
   emptyFilters,
   buildInjectorQuery,
   describeActiveFilters,
@@ -94,7 +96,14 @@ export default function InjectorTests() {
   const [selectedIds, setSelectedIds] = useState(() => [])
   const selected = useMemo(() => new Set(selectedIds), [selectedIds])
   const [showOrder, setShowOrder] = useState(true)   // the report order matters, so show it
+  // One modal serves both preview paths — the whole selection (Generate ▸
+  // Preview) and a single row (its serial number):
+  //   { data, title, subtitle, loading, error }
   const [preview, setPreview] = useState(null)
+  // Bumped whenever a quick preview is opened or the modal is closed, so a
+  // slow response for a row the user has moved on from is dropped instead of
+  // replacing what is on screen.
+  const quickPreviewToken = useRef(0)
 
   // What to produce, and in which file formats. Several outputs at once.
   const [outputSelection, setOutputSelection] = useState(emptyOutputs)
@@ -187,11 +196,19 @@ export default function InjectorTests() {
   const outputIssue = validateOutputs(outputSelection)
   const canGenerate = selectedCount > 0 && outputIssue.ok && !generating
 
+  // ── Preview modal ──────────────────────────────────────────────────────────
+  // Closing invalidates any quick preview still in flight (see quickPreviewToken).
+  const closePreview = () => {
+    quickPreviewToken.current += 1
+    setPreview(null)
+  }
+
+  // While the modal is up the page behind it must not scroll, and Escape closes it.
   useEffect(() => {
     if (!preview) return undefined
     const previousOverflow = document.body.style.overflow
     const closeOnEscape = (event) => {
-      if (event.key === 'Escape') setPreview(null)
+      if (event.key === 'Escape') closePreview()
     }
     document.body.style.overflow = 'hidden'
     window.addEventListener('keydown', closeOnEscape)
@@ -200,6 +217,41 @@ export default function InjectorTests() {
       window.removeEventListener('keydown', closeOnEscape)
     }
   }, [preview])
+
+  /**
+   * Show one injector's test results, opened by clicking its serial number.
+   *
+   * It reuses the Custom Report preview — same endpoint, same table — for a
+   * selection of exactly this row, so a single injector reads identically to
+   * how it would read inside a report. The page's selection is neither read
+   * nor written here: the quick preview and the multi-select report workflow
+   * are independent.
+   */
+  const openQuickPreview = async (injector) => {
+    const request = quickPreviewRequest(injector)
+    if (!request.ok) {
+      setStatusMsg({ type: 'error', text: request.message })
+      showToast(request.message, 'error')
+      return
+    }
+
+    const token = quickPreviewToken.current + 1
+    quickPreviewToken.current = token
+    const title = injectorLabel(injector)
+    const subtitle = 'Quick preview — this injector only. Nothing has been generated or selected.'
+    setPreview({ data: null, title, subtitle, loading: true, error: '' })
+
+    try {
+      const { data: res } = await api.post('/injector-tests/reports/preview', { injector_ids: request.injectorIds })
+      if (quickPreviewToken.current !== token) return   // closed, or another row was opened
+      setPreview({ data: res.preview, title, subtitle, loading: false, error: '' })
+    } catch (err) {
+      const msg = await errorMessageFrom(err, 'The preview could not be loaded. Please try again.')
+      if (quickPreviewToken.current !== token) return
+      setPreview({ data: null, title, subtitle: '', loading: false, error: msg })
+      showToast(`Preview failed: ${msg}`, 'error')
+    }
+  }
 
   // ── Selection handlers ─────────────────────────────────────────────────────
   const toggle = (id) => setSelectedIds(prev => toggleSelected(prev, id))
@@ -409,7 +461,14 @@ export default function InjectorTests() {
     try {
       if (outputs.includes('preview')) {
         const { data: res } = await api.post('/injector-tests/reports/preview', { injector_ids: ids })
-        setPreview(res.preview)
+        quickPreviewToken.current += 1   // a quick preview still loading must not overwrite this
+        setPreview({
+          data: res.preview,
+          title: '',
+          subtitle: `${describeSelection(selection)}, in report order. Preview only — no PDF or inspection has been created.`,
+          loading: false,
+          error: '',
+        })
       }
 
       for (const format of formats) {
@@ -463,8 +522,10 @@ export default function InjectorTests() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="w-full max-w-[1600px] mx-auto px-3 sm:px-6 py-4 sm:py-8 space-y-4">
+    <div className="min-h-full bg-gray-50">
+      {/* The trailing padding keeps the last card clear of the browser's bottom
+          chrome; the device inset itself is added by the scroll area (Layout). */}
+      <div className="mx-auto w-full max-w-[1600px] space-y-4 px-3 pb-12 pt-4 sm:space-y-5 sm:px-6 sm:pb-16 sm:pt-8">
         {/* Page header */}
         <div className="mb-1">
           <h1 className="text-xl sm:text-2xl font-bold text-pdi-navy flex items-center gap-2">
@@ -479,22 +540,22 @@ export default function InjectorTests() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <button onClick={() => handleSync(false)} disabled={syncing || clearing}
-              className="flex items-center gap-2 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px] font-medium">
+              className="flex items-center gap-2 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[44px] sm:min-h-[40px] font-medium">
               <RefreshCw size={15} className={syncing ? 'animate-spin' : ''} />
               {syncing ? 'Syncing…' : 'Sync Now'}
             </button>
             <button onClick={() => handleSync(true)} disabled={syncing || clearing}
               title="Fetch the complete report set and reconcile any reports deleted from the test bench"
-              className="flex items-center gap-1.5 px-3 py-2 text-sm border border-pdi-navy/30 text-pdi-navy rounded-lg hover:bg-pdi-navy/5 disabled:opacity-50 min-h-[40px] font-medium">
+              className="flex items-center gap-1.5 px-3 py-2 text-sm border border-pdi-navy/30 text-pdi-navy rounded-lg hover:bg-pdi-navy/5 disabled:opacity-50 min-h-[44px] sm:min-h-[40px] font-medium">
               <RefreshCw size={14} /> Full Resync
             </button>
             <button onClick={() => setShowSettings(s => !s)}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">
+              className="flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[44px] sm:min-h-[40px]">
               <Settings size={15} /> Settings
             </button>
             <button onClick={() => setConfirmClear(true)} disabled={syncing || clearing}
               title="Delete all synced reports and the inspections generated from them (completed inspections are kept)"
-              className="flex items-center gap-1.5 px-3 py-2 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50 min-h-[40px]">
+              className="flex items-center gap-1.5 px-3 py-2 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50 min-h-[44px] sm:min-h-[40px]">
               <Trash2 size={14} className={clearing ? 'animate-pulse' : ''} /> {clearing ? 'Clearing…' : 'Clear All'}
             </button>
           </div>
@@ -601,9 +662,9 @@ export default function InjectorTests() {
                 <div className="flex flex-col sm:flex-row gap-2">
                   <input type="password" value={apiKeyInput} onChange={e => setApiKeyInput(e.target.value)}
                     placeholder="CarbonZapp API key" autoComplete="off"
-                    className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+                    className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[44px] sm:min-h-[40px]" />
                   <button onClick={handleSaveKey} disabled={savingKey}
-                    className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px]">
+                    className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[44px] sm:min-h-[40px]">
                     <Save size={14} /> {savingKey ? 'Saving…' : 'Save Key'}
                   </button>
                 </div>
@@ -611,7 +672,7 @@ export default function InjectorTests() {
             )}
             <div className="pt-1 border-t border-gray-100">
               <button onClick={handleTestConnection} disabled={testing || !settings?.hasApiKey}
-                className="flex items-center justify-center gap-1.5 px-3 py-2 text-sm border border-pdi-navy text-pdi-navy rounded-lg hover:bg-pdi-navy/5 disabled:opacity-40 min-h-[40px]">
+                className="flex items-center justify-center gap-1.5 px-3 py-2 text-sm border border-pdi-navy text-pdi-navy rounded-lg hover:bg-pdi-navy/5 disabled:opacity-40 min-h-[44px] sm:min-h-[40px]">
                 <RefreshCw size={14} className={testing ? 'animate-spin' : ''} /> {testing ? 'Testing…' : 'Test Connection'}
               </button>
               <p className="text-xs text-gray-400 mt-1">Verifies the key can reach the bench without importing anything.</p>
@@ -644,7 +705,7 @@ export default function InjectorTests() {
                 aria-label="Filter by part number"
                 title="One or more part numbers, separated by commas or spaces"
                 placeholder="Part number(s)…"
-                className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+                className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[44px] sm:min-h-[40px]" />
             </div>
             <div className="relative">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -652,16 +713,16 @@ export default function InjectorTests() {
                 aria-label="Filter by serial number"
                 title="One or more serial numbers, separated by commas or spaces — a column pasted from a spreadsheet works too"
                 placeholder="Serial number(s)…"
-                className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+                className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[44px] sm:min-h-[40px]" />
             </div>
-            <label className="flex min-h-[40px] items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm text-gray-600 focus-within:ring-1 focus-within:ring-pdi-navy">
+            <label className="flex min-h-[44px] sm:min-h-[40px] items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm text-gray-600 focus-within:ring-1 focus-within:ring-pdi-navy">
               <span className="text-xs font-medium whitespace-nowrap">From</span>
               <input type="date" value={filters.dateFrom} onChange={e => setFilter({ dateFrom: e.target.value })}
                 aria-label="Filter from test date"
                 max={filters.dateTo || undefined}
                 className="min-w-0 flex-1 bg-transparent text-sm text-gray-800 focus:outline-none" />
             </label>
-            <label className="flex min-h-[40px] items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm text-gray-600 focus-within:ring-1 focus-within:ring-pdi-navy">
+            <label className="flex min-h-[44px] sm:min-h-[40px] items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm text-gray-600 focus-within:ring-1 focus-within:ring-pdi-navy">
               <span className="text-xs font-medium whitespace-nowrap">To</span>
               <input type="date" value={filters.dateTo} onChange={e => setFilter({ dateTo: e.target.value })}
                 aria-label="Filter through test date"
@@ -670,7 +731,7 @@ export default function InjectorTests() {
             </label>
             <select value={filters.status} onChange={e => setFilter({ status: e.target.value })}
               aria-label="Filter by result status"
-              className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]">
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[44px] sm:min-h-[40px]">
               <option value="">All statuses</option>
               <option value="pass">Passed</option>
               <option value="fail">Failed</option>
@@ -708,11 +769,11 @@ export default function InjectorTests() {
             )}
             <span className="ml-auto flex items-center gap-2">
               <button onClick={toggleAllVisible} disabled={filtered.length === 0}
-                className="px-2.5 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 whitespace-nowrap">
+                className="min-h-[40px] whitespace-nowrap rounded-lg border border-gray-200 px-3 py-2 hover:bg-gray-50 disabled:opacity-40 sm:min-h-[32px] sm:px-2.5 sm:py-1.5">
                 {allVisibleSelected ? 'Deselect visible' : 'Select all visible'}
               </button>
               <button onClick={clearSelection} disabled={selectedIds.length === 0}
-                className="px-2.5 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 whitespace-nowrap">
+                className="min-h-[40px] whitespace-nowrap rounded-lg border border-gray-200 px-3 py-2 hover:bg-gray-50 disabled:opacity-40 sm:min-h-[32px] sm:px-2.5 sm:py-1.5">
                 Clear selection
               </button>
             </span>
@@ -777,7 +838,7 @@ export default function InjectorTests() {
 
             <div className="flex flex-wrap items-center gap-2 pt-1">
               <button type="button" onClick={runOutputs} disabled={!canGenerate}
-                className="flex items-center justify-center gap-1.5 rounded-lg bg-pdi-navy px-4 py-2 text-sm font-medium text-white min-h-[40px] hover:bg-pdi-navy-light disabled:opacity-40">
+                className="flex items-center justify-center gap-1.5 rounded-lg bg-pdi-navy px-4 py-2 text-sm font-medium text-white min-h-[44px] sm:min-h-[40px] hover:bg-pdi-navy-light disabled:opacity-40">
                 {generating ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}
                 {generating ? 'Generating…' : 'Generate'}
               </button>
@@ -836,12 +897,17 @@ export default function InjectorTests() {
                   : 'No injectors to show.'}
             </div>
           ) : (
-            <InjectorList injectors={filtered} selected={selected} onToggle={toggle} />
+            <InjectorList
+              injectors={filtered}
+              selected={selected}
+              onToggle={toggle}
+              onPreview={openQuickPreview}
+            />
           )}
         </div>
 
         {preview && (
-          <ReportPreviewModal preview={preview} onClose={() => setPreview(null)} />
+          <ReportPreviewModal view={preview} onClose={closePreview} />
         )}
       </div>
     </div>
@@ -896,7 +962,7 @@ function StepFilterMenu({
       <button type="button" onClick={() => setOpen((o) => !o)}
         aria-haspopup="true" aria-expanded={open}
         aria-label="Filter by test step outcome"
-        className={`flex w-full min-h-[40px] items-center justify-between gap-1.5 rounded-lg border px-3 py-2 text-sm whitespace-nowrap
+        className={`flex w-full min-h-[44px] sm:min-h-[40px] items-center justify-between gap-1.5 rounded-lg border px-3 py-2 text-sm whitespace-nowrap
           ${selected.length ? 'border-pdi-navy bg-pdi-navy/5 text-pdi-navy font-medium' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
         <span className="flex items-center gap-1.5 truncate"><ListFilter size={14} /> {summary}</span>
         <ChevronDown size={14} className={open ? 'rotate-180 transition-transform' : 'transition-transform'} />
@@ -1028,17 +1094,17 @@ function ReportOrderPanel({ injectors, disabled, onMove, onDrop, onRemove, onSor
             <div className="flex items-center gap-0.5 shrink-0">
               <button type="button" onClick={() => onMove(inj.id, -1)} disabled={disabled || idx === 0}
                 title="Move earlier" aria-label={`Move ${inj.serial_number || 'injector'} earlier`}
-                className="p-1.5 text-gray-400 hover:text-pdi-navy hover:bg-white rounded disabled:opacity-30 disabled:hover:bg-transparent">
+                className="rounded p-2.5 text-gray-400 hover:bg-white hover:text-pdi-navy disabled:opacity-30 disabled:hover:bg-transparent sm:p-1.5">
                 <ChevronUp size={16} />
               </button>
               <button type="button" onClick={() => onMove(inj.id, 1)} disabled={disabled || idx === injectors.length - 1}
                 title="Move later" aria-label={`Move ${inj.serial_number || 'injector'} later`}
-                className="p-1.5 text-gray-400 hover:text-pdi-navy hover:bg-white rounded disabled:opacity-30 disabled:hover:bg-transparent">
+                className="rounded p-2.5 text-gray-400 hover:bg-white hover:text-pdi-navy disabled:opacity-30 disabled:hover:bg-transparent sm:p-1.5">
                 <ChevronDown size={16} />
               </button>
               <button type="button" onClick={() => onRemove(inj.id)} disabled={disabled}
                 title="Remove" aria-label={`Remove ${inj.serial_number || 'injector'}`}
-                className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-white rounded disabled:opacity-30">
+                className="rounded p-2.5 text-gray-400 hover:bg-white hover:text-red-600 disabled:opacity-30 sm:p-1.5">
                 <X size={16} />
               </button>
             </div>
@@ -1060,7 +1126,7 @@ function OutputToggle({ output, icon: Icon, active, disabled, onClick }) {
       disabled={disabled}
       aria-pressed={active}
       title={output.hint}
-      className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium whitespace-nowrap min-h-[40px] disabled:opacity-40
+      className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium whitespace-nowrap min-h-[44px] sm:min-h-[40px] disabled:opacity-40
         ${active
           ? 'border-pdi-navy bg-pdi-navy text-white hover:bg-pdi-navy-light'
           : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
@@ -1080,7 +1146,7 @@ function FormatToggle({ format, icon: Icon, active, disabled, onClick }) {
       onClick={() => onClick(format.value)}
       disabled={disabled}
       aria-pressed={active}
-      className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium whitespace-nowrap min-h-[40px] disabled:opacity-40
+      className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium whitespace-nowrap min-h-[44px] sm:min-h-[40px] disabled:opacity-40
         ${active
           ? 'border-pdi-teal bg-pdi-teal text-white hover:opacity-90'
           : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
@@ -1092,15 +1158,25 @@ function FormatToggle({ format, icon: Icon, active, disabled, onClick }) {
 }
 
 // ── One continuous, test-date-ordered list of injectors ──────────────────────
-function InjectorList({ injectors, selected, onToggle }) {
+/**
+ * Every row carries two independent controls:
+ *
+ *   the checkbox      adds the injector to the report selection
+ *   the serial number opens that one injector's results (onPreview)
+ *
+ * They never share a click: the checkbox lives inside its own padded label and
+ * the serial is a button that stops the event (see SerialNumberButton), so a
+ * quick preview leaves the selection exactly as it was.
+ */
+function InjectorList({ injectors, selected, onToggle, onPreview }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      <div className="flex items-center justify-between gap-3 px-3 py-2.5 bg-gray-50 border-b border-gray-200">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-gray-200 bg-gray-50 px-3 py-3 sm:px-4">
         <div>
           <div className="text-sm font-semibold text-pdi-navy">Test Results</div>
           <div className="text-xs text-gray-500">{injectors.length} result{injectors.length === 1 ? '' : 's'} · newest first</div>
         </div>
-        <span className="text-xs text-gray-400">Select rows to build a report</span>
+        <span className="text-xs text-gray-400">Tick a row to build a report · tap a serial number to preview it</span>
       </div>
 
       {/* Desktop table */}
@@ -1108,7 +1184,7 @@ function InjectorList({ injectors, selected, onToggle }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase">
-              <th className="px-3 py-2 w-10"><span className="sr-only">Select</span></th>
+              <th className="px-3 py-2 w-12"><span className="sr-only">Select</span></th>
               <th className="px-3 py-2">Part Number</th>
               <th className="px-3 py-2">Serial Number</th>
               <th className="px-3 py-2">Flow Results</th>
@@ -1118,17 +1194,18 @@ function InjectorList({ injectors, selected, onToggle }) {
           <tbody className="divide-y divide-gray-100">
             {injectors.map(i => (
               <tr key={i.id} className={`hover:bg-gray-50 ${selected.has(i.id) ? 'bg-pdi-navy/5' : ''}`}>
-                <td className="px-3 py-2.5">
-                  <input type="checkbox" checked={selected.has(i.id)} onChange={() => onToggle(i.id)} className="rounded"
-                    aria-label={`Select injector ${i.serial_number || i.part_number || i.id}`} />
+                <td className="px-1 py-1.5">
+                  <SelectCheckbox injector={i} checked={selected.has(i.id)} onToggle={onToggle} />
                 </td>
-                <td className="px-3 py-2.5 font-medium text-gray-900">{i.part_number || '—'}</td>
-                <td className="px-3 py-2.5 text-gray-700">{i.serial_number || '—'}</td>
-                <td className="px-3 py-2.5">
+                <td className="px-3 py-3 font-medium text-gray-900">{i.part_number || '—'}</td>
+                <td className="px-3 py-3">
+                  <SerialNumberButton injector={i} onPreview={onPreview} />
+                </td>
+                <td className="px-3 py-3">
                   <InjectorFlowBadge injector={i} />
                   <MatchedSteps steps={i.matched_steps} />
                 </td>
-                <td className="px-3 py-2.5 text-gray-500 text-xs">{formatInjectorTestDateTime(i.test_datetime)}</td>
+                <td className="px-3 py-3 text-gray-500 text-xs">{formatInjectorTestDateTime(i.test_datetime)}</td>
               </tr>
             ))}
           </tbody>
@@ -1138,22 +1215,69 @@ function InjectorList({ injectors, selected, onToggle }) {
       {/* Mobile cards */}
       <div className="md:hidden divide-y divide-gray-100">
         {injectors.map(i => (
-          <div key={i.id} className={`p-3 flex gap-3 ${selected.has(i.id) ? 'bg-pdi-navy/5' : ''}`}>
-            <input type="checkbox" checked={selected.has(i.id)} onChange={() => onToggle(i.id)} className="rounded mt-1"
-              aria-label={`Select injector ${i.serial_number || i.part_number || i.id}`} />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center justify-between gap-2">
+          <div key={i.id} className={`flex gap-2 py-2 pl-1 pr-3 ${selected.has(i.id) ? 'bg-pdi-navy/5' : ''}`}>
+            <SelectCheckbox injector={i} checked={selected.has(i.id)} onToggle={onToggle} className="self-start" />
+            <div className="min-w-0 flex-1 py-1.5">
+              <div className="flex items-start justify-between gap-2">
                 <span className="font-medium text-sm text-gray-900 truncate">{i.part_number || '—'}</span>
                 <InjectorFlowBadge injector={i} />
               </div>
-              <div className="text-xs text-gray-500 mt-0.5">SN: {i.serial_number || '—'}</div>
+              <div className="mt-1 flex items-center gap-1.5 text-xs text-gray-500">
+                <span className="shrink-0">SN</span>
+                <SerialNumberButton injector={i} onPreview={onPreview} className="min-w-0" />
+              </div>
               <MatchedSteps steps={i.matched_steps} />
-              <div className="text-xs text-gray-400 mt-0.5">{formatInjectorTestDateTime(i.test_datetime)}</div>
+              <div className="mt-1 text-xs text-gray-400">{formatInjectorTestDateTime(i.test_datetime)}</div>
             </div>
           </div>
         ))}
       </div>
     </div>
+  )
+}
+
+/**
+ * The row's selection checkbox, in a label big enough to hit with a thumb.
+ *
+ * The padding is part of the label, so the whole 44px square toggles the row —
+ * and nothing else in the row is inside it.
+ */
+function SelectCheckbox({ injector, checked, onToggle, className = '' }) {
+  return (
+    <label className={`flex h-11 w-11 cursor-pointer items-center justify-center rounded-lg hover:bg-gray-100 ${className}`}>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={() => onToggle(injector.id)}
+        className="h-[18px] w-[18px] rounded border-gray-300 text-pdi-navy focus:ring-pdi-navy"
+        aria-label={`Select injector ${injector.serial_number || injector.part_number || injector.id} for the report`}
+      />
+    </label>
+  )
+}
+
+/**
+ * The serial number, as the trigger for that injector's quick preview.
+ *
+ * `stopPropagation` keeps the click off anything wrapping the row, so opening a
+ * preview never toggles the row's checkbox or disturbs the report selection.
+ */
+function SerialNumberButton({ injector, onPreview, className = '' }) {
+  const serial = injector.serial_number || '—'
+  return (
+    <button
+      type="button"
+      onClick={(event) => { event.stopPropagation(); onPreview(injector) }}
+      title={`Preview the test results for ${serial}`}
+      aria-label={`Preview test results for injector ${serial}`}
+      className={`-mx-2 inline-flex min-h-[36px] max-w-full items-center gap-1.5 rounded-lg px-2 text-left text-sm font-medium
+        text-pdi-navy underline decoration-dotted decoration-pdi-navy/40 underline-offset-4
+        hover:bg-pdi-navy/5 hover:decoration-solid active:bg-pdi-navy/10
+        focus:outline-none focus-visible:ring-2 focus-visible:ring-pdi-teal ${className}`}
+    >
+      <span className="truncate">{serial}</span>
+      <Eye size={13} className="shrink-0 text-pdi-navy/50" aria-hidden="true" />
+    </button>
   )
 }
 
@@ -1174,15 +1298,26 @@ function MatchedSteps({ steps }) {
   )
 }
 
-function ReportPreviewModal({ preview, onClose }) {
+/**
+ * The Custom Report comparison table, on screen.
+ *
+ * One component serves both preview paths — the whole selection and a single
+ * row's quick preview — because they are the same document: `view.data` is
+ * whatever POST /injector-tests/reports/preview returned for the ids that were
+ * asked for. `view.title` names the injector for a quick preview; without one
+ * the report's own title is used.
+ */
+function ReportPreviewModal({ view, onClose }) {
+  const { data: preview, title, subtitle, loading, error } = view || {}
+
   const formatRange = () => {
-    if (!preview.dateFrom) return '—'
+    if (!preview?.dateFrom) return '—'
     return preview.dateFrom === preview.dateTo ? preview.dateFrom : `${preview.dateFrom} – ${preview.dateTo}`
   }
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-2 sm:p-5"
+      className="overlay-safe-padding fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       role="presentation"
       onMouseDown={onClose}
     >
@@ -1190,72 +1325,92 @@ function ReportPreviewModal({ preview, onClose }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="report-preview-title"
-        className="flex max-h-[95vh] w-full max-w-7xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
+        aria-busy={loading ? 'true' : undefined}
+        className="flex max-h-full w-full max-w-7xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header className="flex items-start justify-between gap-4 border-b border-gray-200 px-4 py-3 sm:px-6">
-          <div>
-            <h2 id="report-preview-title" className="text-lg font-bold text-pdi-navy">{preview.title || 'Custom Report Preview'}</h2>
-            <p className="mt-0.5 text-xs text-gray-500">Preview only — no PDF or inspection has been created.</p>
+        <header className="flex items-start justify-between gap-3 border-b border-gray-200 px-4 py-3 sm:px-6">
+          <div className="min-w-0">
+            <h2 id="report-preview-title" className="truncate text-base font-bold text-pdi-navy sm:text-lg">
+              {title || preview?.title || 'Custom Report Preview'}
+            </h2>
+            <p className="mt-0.5 text-xs text-gray-500">
+              {subtitle || 'Preview only — no PDF or inspection has been created.'}
+            </p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close report preview"
-            className="rounded-lg p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-800">
+            className="-mr-2 -mt-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800">
             <X size={20} />
           </button>
         </header>
 
-        <div className="grid grid-cols-1 gap-2 border-b border-gray-200 bg-gray-50 px-4 py-3 text-sm sm:grid-cols-3 sm:px-6">
-          <div><span className="font-semibold text-gray-700">Part:</span> {preview.parts?.join(', ') || '—'}</div>
-          <div><span className="font-semibold text-gray-700">Brand:</span> {preview.brands?.join(', ') || '—'}</div>
-          <div><span className="font-semibold text-gray-700">Test date:</span> {formatRange()}</div>
-        </div>
+        {loading ? (
+          <div className="flex flex-1 items-center justify-center gap-2 px-4 py-12 text-sm text-gray-500">
+            <Loader2 size={18} className="animate-spin" /> Loading the test results…
+          </div>
+        ) : error ? (
+          <div className="flex flex-1 items-start gap-2 px-4 py-10 text-sm text-red-700 sm:px-6">
+            <AlertTriangle size={18} className="mt-0.5 flex-shrink-0" />
+            <span>{error}</span>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 gap-1 border-b border-gray-200 bg-gray-50 px-4 py-3 text-sm sm:grid-cols-3 sm:gap-2 sm:px-6">
+              <div><span className="font-semibold text-gray-700">Part:</span> {preview.parts?.join(', ') || '—'}</div>
+              <div><span className="font-semibold text-gray-700">Brand:</span> {preview.brands?.join(', ') || '—'}</div>
+              <div><span className="font-semibold text-gray-700">Test date:</span> {formatRange()}</div>
+            </div>
 
-        <div className="flex-1 overflow-auto">
-          <table className="min-w-full border-collapse text-[12px]">
-            <thead className="sticky top-0 z-10 bg-pdi-navy text-white">
-              <tr>
-                <th className="sticky left-0 z-20 min-w-48 border-r border-white/20 bg-pdi-navy px-3 py-2 text-left">Test Step</th>
-                <th className="min-w-32 border-r border-white/20 px-3 py-2 text-left">Specification</th>
-                {(preview.injectors || []).map((injector, index) => (
-                  <th key={injector.id || index} className="min-w-36 border-r border-white/20 px-3 py-2 text-left last:border-r-0">
-                    <div>{injector.partNumber || '—'}</div>
-                    <div className="font-normal text-white/75">SN {injector.serialNumber || '—'}</div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {(preview.rows || []).map((row) => (
-                <tr key={row.key} className="border-b border-gray-200 align-top odd:bg-white even:bg-gray-50">
-                  <th className="sticky left-0 border-r border-gray-200 bg-inherit px-3 py-2 text-left font-semibold text-gray-800">
-                    {row.label || row.key}
-                  </th>
-                  <td className="border-r border-gray-200 px-3 py-2 text-gray-600">
-                    {row.specification || '—'}{row.unit ? ` ${row.unit}` : ''}
-                  </td>
-                  {(row.values || []).map((cell, index) => (
-                    <td key={`${row.key}-${index}`} className={`border-r border-gray-200 px-3 py-2 last:border-r-0 ${previewCellClass(cell)}`}>
-                      {(cell.lines || ['—']).map((line, lineIndex) => <div key={lineIndex}>{line}</div>)}
-                    </td>
+            <div className="flex-1 overflow-auto">
+              <table className="min-w-full border-collapse text-[12px]">
+                <thead className="sticky top-0 z-10 bg-pdi-navy text-white">
+                  <tr>
+                    {/* Narrow enough on a phone that a single injector's column
+                        is on screen without scrolling sideways. */}
+                    <th className="sticky left-0 z-20 min-w-[7.5rem] border-r border-white/20 bg-pdi-navy px-3 py-2 text-left sm:min-w-48">Test Step</th>
+                    <th className="min-w-24 border-r border-white/20 px-3 py-2 text-left sm:min-w-32">Specification</th>
+                    {(preview.injectors || []).map((injector, index) => (
+                      <th key={injector.id || index} className="min-w-28 border-r border-white/20 px-3 py-2 text-left last:border-r-0 sm:min-w-36">
+                        <div>{injector.partNumber || '—'}</div>
+                        <div className="font-normal text-white/75">SN {injector.serialNumber || '—'}</div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(preview.rows || []).map((row) => (
+                    <tr key={row.key} className="border-b border-gray-200 align-top odd:bg-white even:bg-gray-50">
+                      <th className="sticky left-0 border-r border-gray-200 bg-inherit px-3 py-2 text-left font-semibold text-gray-800">
+                        {row.label || row.key}
+                      </th>
+                      <td className="border-r border-gray-200 px-3 py-2 text-gray-600">
+                        {row.specification || '—'}{row.unit ? ` ${row.unit}` : ''}
+                      </td>
+                      {(row.values || []).map((cell, index) => (
+                        <td key={`${row.key}-${index}`} className={`border-r border-gray-200 px-3 py-2 last:border-r-0 ${previewCellClass(cell)}`}>
+                          {(cell.lines || ['—']).map((line, lineIndex) => <div key={lineIndex}>{line}</div>)}
+                        </td>
+                      ))}
+                    </tr>
                   ))}
-                </tr>
-              ))}
-              <tr className="border-t-2 border-pdi-navy bg-gray-100 font-semibold">
-                <th className="sticky left-0 border-r border-gray-200 bg-gray-100 px-3 py-2 text-left text-gray-800">Overall Result</th>
-                <td className="border-r border-gray-200 px-3 py-2">—</td>
-                {(preview.injectors || []).map((injector, index) => (
-                  <td key={injector.id || index} className={`border-r border-gray-200 px-3 py-2 last:border-r-0 ${resultClass(injector.result)}`}>
-                    {injector.result || '—'}
-                  </td>
-                ))}
-              </tr>
-            </tbody>
-          </table>
-        </div>
+                  <tr className="border-t-2 border-pdi-navy bg-gray-100 font-semibold">
+                    <th className="sticky left-0 border-r border-gray-200 bg-gray-100 px-3 py-2 text-left text-gray-800">Overall Result</th>
+                    <td className="border-r border-gray-200 px-3 py-2">—</td>
+                    {(preview.injectors || []).map((injector, index) => (
+                      <td key={injector.id || index} className={`border-r border-gray-200 px-3 py-2 last:border-r-0 ${resultClass(injector.result)}`}>
+                        {injector.result || '—'}
+                      </td>
+                    ))}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
 
         <footer className="flex justify-end border-t border-gray-200 px-4 py-3 sm:px-6">
           <button type="button" onClick={onClose}
-            className="min-h-[40px] rounded-lg bg-pdi-navy px-4 py-2 text-sm font-medium text-white hover:bg-pdi-navy-light">
+            className="min-h-[44px] w-full rounded-lg bg-pdi-navy px-4 py-2 text-sm font-medium text-white hover:bg-pdi-navy-light sm:w-auto">
             Close Preview
           </button>
         </footer>

@@ -39,6 +39,8 @@ import {
   describeActiveFilters,
   hasActiveFilters,
   toggleStepFilter,
+  injectorLabel,
+  quickPreviewRequest,
 } from '../src/lib/injectorSelection.js'
 
 const inj = (id, extra = {}) => ({
@@ -363,4 +365,49 @@ test('the chosen outputs are described the way the page announces them', () => {
   )
   assert.strictEqual(describeOutputs({ outputs: ['inspection'], formats: ['xlsx'] }), 'Inspection')
   assert.strictEqual(describeOutputs(emptyOutputs()), '')
+})
+
+// ── Single-injector quick preview ───────────────────────────────────────────
+test('an injector is named by serial first, with the part number behind it', () => {
+  assert.strictEqual(injectorLabel(inj('7')), 'SN SN7 · 6513589PX')
+  assert.strictEqual(injectorLabel(inj('7', { part_number: '' })), 'SN SN7')
+  assert.strictEqual(injectorLabel(inj('7', { serial_number: '' })), '6513589PX')
+  assert.strictEqual(injectorLabel(inj('7', { serial_number: '  ', part_number: null })), 'Injector')
+  assert.strictEqual(injectorLabel(undefined), 'Injector')
+})
+
+test('a quick preview asks for exactly the one injector that was clicked', () => {
+  const request = quickPreviewRequest(inj('3'))
+  assert.strictEqual(request.ok, true)
+  assert.deepStrictEqual(request.injectorIds, ['3'], 'never more than the clicked row')
+  assert.strictEqual(request.message, '')
+})
+
+test('a quick preview is built from the row alone, never from the selection', () => {
+  // Three injectors are ticked for a report; previewing a fourth, unticked row
+  // must neither read nor disturb that selection.
+  let selected = []
+  for (const id of ['1', '2', '5']) selected = toggleSelected(selected, id)
+  const before = [...selected]
+
+  assert.deepStrictEqual(quickPreviewRequest(list[2]).injectorIds, ['3'], 'an unselected row previews on its own')
+  assert.deepStrictEqual(quickPreviewRequest(list[0]).injectorIds, ['1'], 'a selected row previews on its own too')
+  assert.deepStrictEqual(selected, before, 'the report selection is untouched')
+})
+
+test('a row with no bench results is refused before any request is made', () => {
+  const request = quickPreviewRequest(inj('4', { serial_number: 'ZX-400', steps_total: 0, steps_passed: 0 }))
+  assert.strictEqual(request.ok, false)
+  assert.deepStrictEqual(request.injectorIds, [])
+  assert.match(request.message, /SN ZX-400/)
+  assert.match(request.message, /no test-bench results/i)
+})
+
+test('a row without an id is refused rather than sent as an empty selection', () => {
+  for (const injector of [undefined, {}, inj(''), inj(null)]) {
+    const request = quickPreviewRequest(injector)
+    assert.strictEqual(request.ok, false)
+    assert.deepStrictEqual(request.injectorIds, [])
+    assert.match(request.message, /no injector id/i)
+  }
 })
