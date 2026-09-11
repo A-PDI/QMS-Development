@@ -175,6 +175,40 @@ test('report preview returns JSON and creates no PDF or inspection', async () =>
   assert.strictEqual(injectorInspectionCount(), before);
 });
 
+test('a preview of a single injector returns that one column, unchanged in shape', async () => {
+  // The list's serial-number quick preview posts exactly one id to this same
+  // endpoint, so a one-injector preview has to carry the full comparison table.
+  const ids = await seedInjectors(3);
+  const before = injectorInspectionCount();
+  await withUser(ADMIN, async (url) => {
+    const many = await fetch(`${url}/api/injector-tests/reports/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ injector_ids: ids }),
+    });
+    const res = await fetch(`${url}/api/injector-tests/reports/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ injector_ids: [ids[1]] }),
+    });
+    assert.strictEqual(res.status, 200);
+    const one = (await res.json()).preview;
+    const all = (await many.json()).preview;
+
+    assert.strictEqual(one.injectors.length, 1, 'only the injector that was asked for');
+    assert.strictEqual(one.injectors[0].id, ids[1]);
+    assert.deepStrictEqual(
+      one.rows.map((row) => row.key),
+      all.rows.map((row) => row.key),
+      'the same test steps as the multi-injector preview'
+    );
+    for (const row of one.rows) {
+      assert.strictEqual(row.values.length, 1, `${row.key} has one value column`);
+    }
+  });
+  assert.strictEqual(injectorInspectionCount(), before, 'a preview creates nothing');
+});
+
 test('a custom report is streamed as a PDF with a filename header', async () => {
   const ids = await seedInjectors(3);
   await withUser(ADMIN, async (url) => {
