@@ -12,7 +12,7 @@ const assert = require('node:assert');
 const express = require('express');
 
 const { db, extractPdfText, resetInjectorData, injectorInspectionCount } = require('./helpers/testEnv');
-const { benchBatch } = require('./helpers/benchData');
+const { benchReport, benchBatch } = require('./helpers/benchData');
 const ExcelJS = require('exceljs');
 const { errorHandler } = require('../middleware/error');
 const injectorRoutes = require('../routes/injector-tests');
@@ -71,6 +71,11 @@ test('qc_manager and inspector are refused by every injector route', async () =>
   const calls = [
     ['GET', '/api/injector-tests', null],
     ['POST', '/api/injector-tests/sync', {}],
+    ['GET', `/api/injector-tests/${ids[0]}/repair-history`, null],
+    ['POST', '/api/injector-tests/repairs/cases', { initial_test_id: ids[0] }],
+    ['POST', '/api/injector-tests/repairs/cases/not-a-case/attempts', {}],
+    ['PATCH', '/api/injector-tests/repairs/cases/not-a-case/status', { status: 'HOLD' }],
+    ['POST', '/api/injector-tests/repairs/attempts/not-an-attempt/retest', {}],
     ['POST', '/api/injector-tests/reports/preview', { injector_ids: ids }],
     ['POST', '/api/injector-tests/reports/custom', { injector_ids: ids }],
     ['POST', '/api/injector-tests/reports/customer', { injector_ids: ids }],
@@ -207,6 +212,65 @@ test('a preview of a single injector returns that one column, unchanged in shape
     }
   });
   assert.strictEqual(injectorInspectionCount(), before, 'a preview creates nothing');
+});
+
+test('repair routes create a case, offer a matching retest and close on pass', async () => {
+  resetInjectorData();
+  db.run(
+    `INSERT OR IGNORE INTO users (id, name, email, role, active)
+     VALUES (?, ?, ?, 'admin', 1)`,
+    [ADMIN.id, ADMIN.name, 'injector-route-tests@example.com']
+  );
+  carbonzapp.upsertReports([benchReport({
+    id: 'route-repair-before', serial: 'FIX-ROUTE-1', part: '4327147',
+    datetime: '2026-09-11T10:00:00Z', flow: { IVM01: 250 },
+  })]);
+  const before = db.get('SELECT id FROM injector_test_reports WHERE report_ext_id = ?', ['route-repair-before']);
+
+  await withUser(ADMIN, async (url) => {
+    const initialHistory = await (await fetch(`${url}/api/injector-tests/${before.id}/repair-history`)).json();
+    assert.strictEqual(initialHistory.can_start, true);
+
+    const createdResponse = await fetch(`${url}/api/injector-tests/repairs/cases`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        initial_test_id: before.id,
+        failure_categories: ['High Delivery'],
+        attempt: {
+          repair_date: '2026-09-11T11:00:00Z', technician: ADMIN.name,
+          diagnosis: 'Peak HP delivery is high.',
+          hypothesis: 'Needle stroke is excessive.',
+          expected_outcome: 'Peak HP delivery moves into specification.',
+          changes: [{ component: 'Needle', action_type: 'Adjusted', parameter: 'Needle Stroke', before_value: '0.247', after_value: '0.232', unit: 'mm' }],
+        },
+      }),
+    });
+    assert.strictEqual(createdResponse.status, 201);
+    const created = (await createdResponse.json()).repair_case;
+
+    carbonzapp.upsertReports([benchReport({
+      id: 'route-repair-after', serial: 'FIX-ROUTE-1', part: '4327147',
+      datetime: '2026-09-11T12:00:00Z', flow: { IVM01: 235 },
+    })]);
+    const history = await (await fetch(`${url}/api/injector-tests/${before.id}/repair-history`)).json();
+    assert.strictEqual(history.active_case_id, created.id);
+    assert.strictEqual(history.candidate_retests.length, 1);
+    const listWithRetest = await (await fetch(`${url}/api/injector-tests`)).json();
+    const flagged = listWithRetest.injectors.find((row) => row.id === before.id);
+    assert.strictEqual(flagged.repair_status, 'OPEN');
+    assert.strictEqual(flagged.repair_attempt_count, 1);
+    assert.strictEqual(flagged.repair_retest_available, true);
+
+    const linkedResponse = await fetch(`${url}/api/injector-tests/repairs/attempts/${created.attempts[0].id}/retest`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ after_test_id: history.candidate_retests[0].id }),
+    });
+    assert.strictEqual(linkedResponse.status, 200);
+    const linked = (await linkedResponse.json()).repair_case;
+    assert.strictEqual(linked.status, 'PASSED');
+    assert.strictEqual(linked.attempts[0].outcome, 'PASS');
+    assert.strictEqual(linked.attempts[0].deltas.find((row) => row.step_code === 'IVM01').absolute_delta, -15);
+  });
 });
 
 test('a custom report is streamed as a PDF with a filename header', async () => {

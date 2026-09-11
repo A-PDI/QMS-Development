@@ -542,6 +542,22 @@ function applyMigrations(db) {
     if (!info.some(c => c.name === 'job_number')) return;
     db.exec('CREATE INDEX IF NOT EXISTS idx_injector_reports_job ON injector_test_reports(job_number)');
   });
+
+  // ── Migration: persistent injector repair lifecycle ─────────────────────
+  // The tables and indexes are created by sqlite.js during schema startup.
+  // Recording this feature migration gives deployed databases an auditable
+  // rollout marker and refreshes planner statistics for its identity/date
+  // indexes after the new schema is installed.
+  once('injector_repair_history_v1', () => {
+    const tables = new Set(db.all(
+      "SELECT name FROM sqlite_schema WHERE type = 'table' AND name LIKE 'injector_repair_%'",
+      []
+    ).map((row) => row.name));
+    if (!tables.has('injector_repair_cases') || !tables.has('injector_repair_attempts')) {
+      throw new Error('injector repair tables were not created');
+    }
+    db.exec('PRAGMA optimize');
+  });
 }
 
 module.exports = { applyMigrations };
