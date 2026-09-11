@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Gauge, RefreshCw, Settings, Trash2, Search, X,
@@ -535,6 +536,7 @@ export default function InjectorTests() {
           <h1 className="text-xl sm:text-2xl font-bold text-pdi-navy flex items-center gap-2">
             <Gauge size={22} /> Injector Tests
           </h1>
+          <Link to="/injector-reports" className="mt-2 inline-flex min-h-11 items-center gap-2 rounded-lg border border-pdi-navy/20 px-3 text-sm font-medium text-pdi-navy"><BarChart3 size={16} /> Testing & Repair Analytics</Link>
           <p className="text-sm text-gray-500 mt-1">
             Import results from the CarbonZapp test bench, then select injectors and generate reports.
           </p>

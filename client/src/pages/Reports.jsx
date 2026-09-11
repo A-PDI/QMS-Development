@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
+import { getUser } from '../lib/auth'
 import { BarChart2, Download, Trash2, Plus, X } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts'
 import api from '../lib/api'
@@ -108,6 +110,7 @@ export default function Reports() {
         <div className="flex items-center gap-3">
           <BarChart2 size={24} className="text-pdi-navy flex-shrink-0" />
           <h1 className="text-xl sm:text-2xl font-bold text-pdi-navy">Reports</h1>
+          {getUser()?.role === 'admin' && <Link to="/injector-reports" className="ml-auto text-sm font-medium text-pdi-navy underline">Injector testing & repairs</Link>}
         </div>
       </div>
 

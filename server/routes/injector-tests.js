@@ -33,6 +33,7 @@ const router = express.Router();
 const db = require('../db/adapter');
 const { AppError } = require('../middleware/error');
 const carbonzapp = require('../services/carbonzapp');
+const { buildInjectorAnalytics, buildInjectorAnalyticsWorkbook, DEFINITIONS } = require('../services/injectorAnalytics');
 const {
   REPORT_TYPES,
   loadSelectedInjectors,
@@ -56,6 +57,7 @@ const {
 } = require('../services/injectorExport');
 const {
   getRepairHistory,
+  loadCase,
   getQuickEntry,
   saveQuickEntry,
   createRepairCase,
@@ -321,6 +323,27 @@ router.delete('/', requireAdmin, (req, res, next) => {
 });
 
 // ── Persistent repair lifecycle ────────────────────────────────────────────
+router.get('/analytics', requireAdmin, (req, res, next) => {
+  try { res.json({ ...buildInjectorAnalytics(req.query), definitions: DEFINITIONS }); } catch (err) { next(err); }
+});
+
+router.get('/analytics/export.xlsx', requireAdmin, async (req, res, next) => {
+  try {
+    const buffer = await buildInjectorAnalyticsWorkbook(req.query);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="Injector-Repair-Analytics.xlsx"');
+    res.send(Buffer.from(buffer));
+  } catch (err) { next(err); }
+});
+
+router.get('/repairs/cases/:id', requireAdmin, (req, res, next) => {
+  try {
+    const repairCase = loadCase(req.params.id);
+    if (!repairCase) throw new AppError('Repair case not found.', 404, 'NOT_FOUND');
+    res.json(repairCase);
+  } catch (err) { next(err); }
+});
+
 // These routes intentionally live outside CarbonZapp synchronisation. Repair
 // history remains intact even when the refreshable test cache is cleared.
 router.get('/:id/repair-history', requireAdmin, (req, res, next) => {

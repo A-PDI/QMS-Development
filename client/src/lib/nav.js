@@ -25,6 +25,7 @@ export const NAV_ITEMS = [
   // role alone (not qc_manager, unlike the other admin pages) — here, on the
   // route (see App.jsx) and on the API (routes/injector-tests.js).
   { to: '/injector-tests',  icon: 'gauge',         label: 'Injector Tests', adminOnly: true, roles: ['admin'] },
+  { to: '/injector-reports', icon: 'chart', label: 'Injector Reports', adminOnly: true, roles: ['admin'] },
 ]
 
 /**

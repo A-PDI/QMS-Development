@@ -24,6 +24,15 @@ const restricted = { id: 'r', name: 'Limited', role: 'inspector', permissions: J
 
 const injectorItem = NAV_ITEMS.find((i) => i.to === '/injector-tests')
 
+test('Injector Reports uses the same admin-only navigation and direct-route guard', () => {
+  assert.ok(canAccessRoute('/injector-reports', admin))
+  assert.ok(visibleNavItems(admin).some((item) => item.to === '/injector-reports'))
+  for (const user of [qcManager, inspector, restricted, null]) {
+    assert.strictEqual(canAccessRoute('/injector-reports', user), false)
+    assert.ok(!visibleNavItems(user).some((item) => item.to === '/injector-reports'))
+  }
+})
+
 test('Injector Tests sits directly below Admin in the sidebar', () => {
   const labels = NAV_ITEMS.map((i) => i.label)
   const adminIdx = labels.indexOf('Admin')

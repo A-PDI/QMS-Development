@@ -85,6 +85,19 @@ test('quick entry exposes the fixed table and saves measurements through the API
     const history = await (await fetch(`${url}/api/injector-tests/${injector.id}/repair-history`)).json();
     assert.strictEqual(history.cases[0].id, repair.id);
     assert.strictEqual((await (await fetch(endpoint)).json()).can_save, false);
+    const analyticsResponse = await fetch(`${url}/api/injector-tests/analytics?date_from=2026-09-10&date_to=2026-09-10`);
+    assert.strictEqual(analyticsResponse.status, 200);
+    const analytics = await analyticsResponse.json();
+    assert.strictEqual(analytics.testing.test_runs, 1);
+    assert.strictEqual(analytics.repairs.pending_retests, 1);
+    const caseResponse = await fetch(`${url}/api/injector-tests/repairs/cases/${repair.id}`);
+    assert.strictEqual(caseResponse.status, 200);
+    assert.strictEqual((await caseResponse.json()).attempts[0].changes[0].parameter, 'Needle Stroke');
+    const exportResponse = await fetch(`${url}/api/injector-tests/analytics/export.xlsx?date_from=2026-09-10`);
+    assert.strictEqual(exportResponse.status, 200);
+    assert.ok(exportResponse.headers.get('content-type').includes('spreadsheetml'));
+    const invalid = await fetch(`${url}/api/injector-tests/analytics?date_from=not-a-date`);
+    assert.strictEqual(invalid.status, 400);
   });
 });
 
@@ -104,6 +117,9 @@ test('qc_manager and inspector are refused by every injector route', async () =>
     ['GET', '/api/injector-tests', null],
     ['POST', '/api/injector-tests/sync', {}],
     ['GET', `/api/injector-tests/${ids[0]}/repair-history`, null],
+    ['GET', '/api/injector-tests/analytics', null],
+    ['GET', '/api/injector-tests/analytics/export.xlsx', null],
+    ['GET', '/api/injector-tests/repairs/cases/not-a-case', null],
     ['GET', `/api/injector-tests/${ids[0]}/quick-entry`, null],
     ['POST', `/api/injector-tests/${ids[0]}/quick-entry`, {}],
     ['POST', '/api/injector-tests/repairs/cases', { initial_test_id: ids[0] }],
