@@ -367,7 +367,7 @@ function DeltaTable({ deltas }) {
   )
 }
 
-function AttemptCard({ attempt }) {
+export function AttemptCard({ attempt }) {
   return (
     <article className="relative ml-5 rounded-xl border border-gray-200 bg-white p-3 shadow-sm sm:p-4">
       <span className="absolute -left-[1.85rem] top-4 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-pdi-teal text-white shadow">

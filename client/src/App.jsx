@@ -17,6 +17,7 @@ import QualityAlerts from './pages/QualityAlerts'
 import Reports from './pages/Reports'
 import Admin from './pages/Admin'
 import InjectorTests from './pages/InjectorTests'
+import InjectorReports from './pages/InjectorReports'
 import Drawings from './pages/Drawings'
 import NotFound from './pages/NotFound'
 
@@ -84,6 +85,7 @@ export default function App() {
             }
           />
           <Route path="*" element={<NotFound />} />
+          <Route path="injector-reports" element={<RoleRoute path="/injector-reports"><InjectorReports /></RoleRoute>} />
         </Route>
       </Routes>
     </BrowserRouter>
