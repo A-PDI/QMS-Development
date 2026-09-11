@@ -56,6 +56,8 @@ const {
 } = require('../services/injectorExport');
 const {
   getRepairHistory,
+  getQuickEntry,
+  saveQuickEntry,
   createRepairCase,
   addRepairAttempt,
   linkRetest,
@@ -324,6 +326,16 @@ router.delete('/', requireAdmin, (req, res, next) => {
 router.get('/:id/repair-history', requireAdmin, (req, res, next) => {
   try {
     res.json(getRepairHistory(req.params.id));
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/quick-entry', requireAdmin, (req, res, next) => {
+  try { res.json(getQuickEntry(req.params.id)); } catch (err) { next(err); }
+});
+
+router.post('/:id/quick-entry', requireAdmin, (req, res, next) => {
+  try {
+    res.status(201).json({ ok: true, repair_case: saveQuickEntry(req.params.id, req.body || {}, req.user) });
   } catch (err) { next(err); }
 });
 

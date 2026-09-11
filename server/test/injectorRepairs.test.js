@@ -12,6 +12,9 @@ const {
   linkRetest,
   getRepairHistory,
   loadCase,
+  getQuickEntry,
+  saveQuickEntry,
+  setCaseStatus,
 } = require('../services/injectorRepairs');
 
 const ADMIN = { id: 'u-admin', name: 'Alex Admin', role: 'admin' };
@@ -81,6 +84,72 @@ test('a failed test starts a permanent case with a structured first attempt', ()
   assert.strictEqual(history.can_start, false, 'a second active case cannot be started');
   assert.strictEqual(history.active_case_id, repairCase.id);
   assert.deepStrictEqual(history.candidate_retests, []);
+});
+
+function quickPayload(repairDate) {
+  return { repair_date: repairDate, measurements: [
+    { key: 'preload_screw_height', before_value: '0', after_value: '0', unit: 'mm' },
+    { key: 'armature_stroke', before_value: '.058', after_value: '.054', unit: 'mm' },
+    { key: 'needle_stroke', before_value: '.247', after_value: '.232', unit: 'mm' },
+    { key: 'nozzle_nut_torque', before_value: '65', after_value: '70', unit: 'ft-lb' },
+    { key: 'valve_body_torque', before_value: '50', after_value: '55', unit: 'N·m' },
+    { key: 'solenoid_nut_torque', before_value: '35', after_value: '40', unit: 'in-lb' },
+  ] };
+}
+
+test('quick entry records six measurements, identity, and immutable repair rounds', () => {
+  reset();
+  const initial = importTest({ id: 'quick-first', datetime: '2026-09-11T10:00:00Z', peakHp: 255 });
+  assert.strictEqual(getQuickEntry(initial.id).measurements.length, 6);
+  const first = saveQuickEntry(initial.id, quickPayload('2026-09-11T11:00:00Z'), ADMIN);
+  assert.strictEqual(first.attempts[0].changes.length, 6);
+  assert.strictEqual(first.attempts[0].technician, ADMIN.name);
+  assert.strictEqual(first.attempts[0].changes[0].before_value, '0');
+  assert.strictEqual(first.attempts[0].changes[0].action_type, 'No Change');
+  assert.strictEqual(getQuickEntry(initial.id).can_save, false);
+  assert.throws(() => saveQuickEntry(initial.id, quickPayload('2026-09-11T11:30:00Z'), ADMIN), /already been recorded/);
+
+  const retest = importTest({ id: 'quick-second', datetime: '2026-09-11T12:00:00Z', peakHp: 245 });
+  assert.strictEqual(getQuickEntry(retest.id).links_previous_retest, true);
+  // A failed second write must roll back the retest link too.
+  assert.throws(() => saveQuickEntry(retest.id, quickPayload('2026-09-11T11:30:00Z'), ADMIN), /repair date cannot be before/);
+  assert.strictEqual(loadCase(first.id).attempts[0].status, 'WAITING_RETEST');
+  const second = saveQuickEntry(retest.id, quickPayload('2026-09-11T13:00:00Z'), ADMIN);
+  assert.strictEqual(second.attempt_count, 2);
+  assert.strictEqual(second.attempts[0].after_test_id, retest.id);
+  assert.strictEqual(second.attempts[1].before_test_id, retest.id);
+  assert.strictEqual(second.attempts[0].deltas.find((d) => d.step_code === 'IVM01').absolute_delta, -10);
+  assert.strictEqual(second.attempts[0].changes[2].before_value, '.247');
+  carbonzapp.clearAllReports();
+  assert.strictEqual(loadCase(first.id).attempts[1].changes.length, 6);
+  const reimported = importTest({ id: 'quick-second', datetime: '2026-09-11T12:00:00Z', peakHp: 245 });
+  assert.strictEqual(getQuickEntry(reimported.id).can_save, false);
+});
+
+test('quick entry validates pairs and units and respects case disposition', () => {
+  reset();
+  const initial = importTest({ id: 'quick-validation', datetime: '2026-09-11T10:00:00Z', peakHp: 255 });
+  for (const patch of [{ before_value: '' }, { after_value: 'abc' }, { after_value: '-1' }, { unit: '' }]) {
+    const payload = quickPayload('2026-09-11T11:00:00Z');
+    Object.assign(payload.measurements[0], patch);
+    assert.throws(() => saveQuickEntry(initial.id, payload, ADMIN));
+  }
+  assert.throws(() => saveQuickEntry(initial.id, { measurements: [] }, ADMIN), /at least one/);
+  assert.strictEqual(db.get('SELECT COUNT(*) AS count FROM injector_repair_cases').count, 0);
+  const payload = quickPayload('2026-09-11T11:00:00Z');
+  payload.measurements = [payload.measurements[0], { key: 'needle_stroke', before_value: '', after_value: '', unit: 'mm' }];
+  const repair = saveQuickEntry(initial.id, payload, ADMIN);
+  assert.strictEqual(repair.attempts[0].changes.length, 1);
+  const retest = importTest({ id: 'quick-held', datetime: '2026-09-11T12:00:00Z', peakHp: 245 });
+  setCaseStatus(repair.id, 'HOLD', ADMIN);
+  assert.strictEqual(getQuickEntry(retest.id).can_save, false);
+  assert.throws(() => saveQuickEntry(retest.id, quickPayload('2026-09-11T13:00:00Z'), ADMIN), /on hold/);
+  setCaseStatus(repair.id, 'OPEN', ADMIN);
+  linkRetest(repair.attempts[0].id, { after_test_id: retest.id }, ADMIN);
+  carbonzapp.clearAllReports();
+  const restored = importTest({ id: 'quick-held', datetime: '2026-09-11T12:00:00Z', peakHp: 245 });
+  const next = saveQuickEntry(restored.id, quickPayload('2026-09-11T13:00:00Z'), ADMIN);
+  assert.strictEqual(next.attempt_count, 2, 'a cleared/reimported retest still starts the next round');
 });
 
 test('linking a passing retest calculates deltas and closes the case', () => {

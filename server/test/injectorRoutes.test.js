@@ -56,6 +56,38 @@ async function seedInjectors(count = 4) {
 }
 
 // ── Authorisation: admin role only ───────────────────────────────────────────
+test('quick entry exposes the fixed table and saves measurements through the API', async () => {
+  resetInjectorData();
+  db.run("INSERT OR IGNORE INTO users (id,name,email,role,active) VALUES (?,?,?,'admin',1)",
+    [ADMIN.id, ADMIN.name, 'quick-api@example.com']);
+  carbonzapp.upsertReports([benchReport({
+    id: 'quick-api', slot: 0, serial: 'FIX-QUICK-API', part: '4327147',
+    datetime: '2026-09-10T10:00:00Z', flow: { IVM01: 255, IVM06: 260, IVM06_RETURN: 28 },
+  })]);
+  const injector = db.get('SELECT id FROM injector_test_reports WHERE report_ext_id = ?', ['quick-api']);
+  await withUser(ADMIN, async (url) => {
+    const endpoint = `${url}/api/injector-tests/${injector.id}/quick-entry`;
+    const context = await (await fetch(endpoint)).json();
+    assert.strictEqual(context.can_save, true);
+    assert.deepStrictEqual(context.measurements.map((m) => m.label), [
+      'Preload Screw Height', 'Armature Stroke', 'Needle Stroke',
+      'Nozzle Nut Torque', 'Valve Body Torque', 'Solenoid Nut Torque',
+    ]);
+    const response = await fetch(endpoint, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repair_date: '2026-09-10T11:00:00Z', measurements: [
+        { key: 'needle_stroke', before_value: '.247', after_value: '.232', unit: 'mm' },
+      ] }),
+    });
+    assert.strictEqual(response.status, 201);
+    const { repair_case: repair } = await response.json();
+    assert.strictEqual(repair.attempts[0].changes[0].after_value, '.232');
+    const history = await (await fetch(`${url}/api/injector-tests/${injector.id}/repair-history`)).json();
+    assert.strictEqual(history.cases[0].id, repair.id);
+    assert.strictEqual((await (await fetch(endpoint)).json()).can_save, false);
+  });
+});
+
 test('an admin can reach the injector list', async () => {
   await seedInjectors(2);
   await withUser(ADMIN, async (url) => {
@@ -72,6 +104,8 @@ test('qc_manager and inspector are refused by every injector route', async () =>
     ['GET', '/api/injector-tests', null],
     ['POST', '/api/injector-tests/sync', {}],
     ['GET', `/api/injector-tests/${ids[0]}/repair-history`, null],
+    ['GET', `/api/injector-tests/${ids[0]}/quick-entry`, null],
+    ['POST', `/api/injector-tests/${ids[0]}/quick-entry`, {}],
     ['POST', '/api/injector-tests/repairs/cases', { initial_test_id: ids[0] }],
     ['POST', '/api/injector-tests/repairs/cases/not-a-case/attempts', {}],
     ['PATCH', '/api/injector-tests/repairs/cases/not-a-case/status', { status: 'HOLD' }],
