@@ -12,6 +12,7 @@ import { chooseSaveTarget, writeBlobToTarget, deriveFilename } from '../lib/down
 import { describeConnectionResult, describeSyncResult } from '../lib/syncStatus'
 import { formatInjectorTestDateTime } from '../lib/injectorDateTime'
 import InjectorRepairHistory from '../components/InjectorRepairHistory'
+import InjectorQuickEntry from '../components/InjectorQuickEntry'
 import {
   filterInjectors,
   toggleSelected,
@@ -102,6 +103,7 @@ export default function InjectorTests() {
   // Preview) and a single row (its serial number):
   //   { data, title, subtitle, loading, error }
   const [preview, setPreview] = useState(null)
+  const [quickEntry, setQuickEntry] = useState(null)
   // Bumped whenever a quick preview is opened or the modal is closed, so a
   // slow response for a row the user has moved on from is dropped instead of
   // replacing what is on screen.
@@ -229,7 +231,7 @@ export default function InjectorTests() {
    * nor written here: the quick preview and the multi-select report workflow
    * are independent.
    */
-  const openQuickPreview = async (injector) => {
+  const openQuickPreview = async (injector, initialTab = 'results') => {
     const request = quickPreviewRequest(injector)
     if (!request.ok) {
       setStatusMsg({ type: 'error', text: request.message })
@@ -241,16 +243,16 @@ export default function InjectorTests() {
     quickPreviewToken.current = token
     const title = injectorLabel(injector)
     const subtitle = 'Quick preview — this injector only. Nothing has been generated or selected.'
-    setPreview({ data: null, title, subtitle, injector, loading: true, error: '' })
+    setPreview({ data: null, title, subtitle, injector, initialTab, loading: true, error: '' })
 
     try {
       const { data: res } = await api.post('/injector-tests/reports/preview', { injector_ids: request.injectorIds })
       if (quickPreviewToken.current !== token) return   // closed, or another row was opened
-      setPreview({ data: res.preview, title, subtitle, injector, loading: false, error: '' })
+      setPreview({ data: res.preview, title, subtitle, injector, initialTab, loading: false, error: '' })
     } catch (err) {
       const msg = await errorMessageFrom(err, 'The preview could not be loaded. Please try again.')
       if (quickPreviewToken.current !== token) return
-      setPreview({ data: null, title, subtitle: '', injector, loading: false, error: msg })
+      setPreview({ data: null, title, subtitle: '', injector, initialTab, loading: false, error: msg })
       showToast(`Preview failed: ${msg}`, 'error')
     }
   }
@@ -904,6 +906,7 @@ export default function InjectorTests() {
               selected={selected}
               onToggle={toggle}
               onPreview={openQuickPreview}
+              onQuickEntry={setQuickEntry}
             />
           )}
         </div>
@@ -911,6 +914,10 @@ export default function InjectorTests() {
         {preview && (
           <ReportPreviewModal view={preview} onClose={closePreview} />
         )}
+        {quickEntry && <InjectorQuickEntry injector={quickEntry} onClose={() => setQuickEntry(null)} onHistory={() => {
+          openQuickPreview(quickEntry, 'repair')
+          setQuickEntry(null)
+        }} />}
       </div>
     </div>
   )
@@ -1170,7 +1177,7 @@ function FormatToggle({ format, icon: Icon, active, disabled, onClick }) {
  * the serial is a button that stops the event (see SerialNumberButton), so a
  * quick preview leaves the selection exactly as it was.
  */
-function InjectorList({ injectors, selected, onToggle, onPreview }) {
+function InjectorList({ injectors, selected, onToggle, onPreview, onQuickEntry }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-gray-200 bg-gray-50 px-3 py-3 sm:px-4">
@@ -1191,6 +1198,7 @@ function InjectorList({ injectors, selected, onToggle, onPreview }) {
               <th className="px-3 py-2">Serial Number</th>
               <th className="px-3 py-2">Flow Results</th>
               <th className="px-3 py-2">Tested</th>
+              <th className="px-3 py-2">Repair</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -1208,6 +1216,7 @@ function InjectorList({ injectors, selected, onToggle, onPreview }) {
                   <MatchedSteps steps={i.matched_steps} />
                 </td>
                 <td className="px-3 py-3 text-gray-500 text-xs">{formatInjectorTestDateTime(i.test_datetime)}</td>
+                <td className="px-3 py-3"><QuickEntryButton injector={i} onOpen={onQuickEntry} /></td>
               </tr>
             ))}
           </tbody>
@@ -1230,12 +1239,21 @@ function InjectorList({ injectors, selected, onToggle, onPreview }) {
               </div>
               <MatchedSteps steps={i.matched_steps} />
               <div className="mt-1 text-xs text-gray-400">{formatInjectorTestDateTime(i.test_datetime)}</div>
+              <div className="mt-2"><QuickEntryButton injector={i} onOpen={onQuickEntry} /></div>
             </div>
           </div>
         ))}
       </div>
     </div>
   )
+}
+
+function QuickEntryButton({ injector, onOpen }) {
+  return <button type="button" onClick={() => onOpen(injector)}
+    aria-label={`Quick Entry for injector ${injector.serial_number || injector.part_number || injector.id}`}
+    className="inline-flex min-h-11 items-center gap-1.5 whitespace-nowrap rounded-lg border border-pdi-navy/20 px-3 py-2 text-sm font-medium text-pdi-navy hover:bg-pdi-navy/5">
+    <Wrench size={15} /> Quick Entry
+  </button>
 }
 
 /**
@@ -1311,7 +1329,7 @@ function MatchedSteps({ steps }) {
  */
 function ReportPreviewModal({ view, onClose }) {
   const { data: preview, title, subtitle, loading, error } = view || {}
-  const [activeTab, setActiveTab] = useState('results')
+  const [activeTab, setActiveTab] = useState(view?.initialTab || 'results')
   const repairEnabled = Boolean(view?.injector?.id)
   const selectedTab = repairEnabled ? activeTab : 'results'
 

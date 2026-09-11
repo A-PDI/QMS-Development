@@ -30,6 +30,14 @@ const ACTION_OPTIONS = [
   'Inspected', 'No Change',
 ];
 const MAX_CHANGES = 25;
+const QUICK_MEASUREMENTS = [
+  { key: 'preload_screw_height', label: 'Preload Screw Height', component: 'Spring', units: ['mm', 'in'] },
+  { key: 'armature_stroke', label: 'Armature Stroke', component: 'Armature', units: ['mm', 'in'] },
+  { key: 'needle_stroke', label: 'Needle Stroke', component: 'Needle', units: ['mm', 'in'] },
+  { key: 'nozzle_nut_torque', label: 'Nozzle Nut Torque', component: 'Nozzle Nut', units: ['ft-lb', 'in-lb', 'N·m'] },
+  { key: 'valve_body_torque', label: 'Valve Body Torque', component: 'Valve Body', units: ['ft-lb', 'in-lb', 'N·m'] },
+  { key: 'solenoid_nut_torque', label: 'Solenoid Nut Torque', component: 'Solenoid', units: ['ft-lb', 'in-lb', 'N·m'] },
+];
 
 function text(value, max = 2000) {
   return String(value == null ? '' : value).trim().slice(0, max);
@@ -213,13 +221,19 @@ function insertBeforeMeasurements(attemptId, beforeTest) {
 }
 
 function withTransaction(work) {
-  db.exec('BEGIN IMMEDIATE');
+  // Savepoints also allow Quick Entry to link a retest and create the next
+  // attempt atomically using the same lifecycle functions.
+  const savepoint = `repair_${uuidv4().replace(/-/g, '')}`;
+  db.exec(`SAVEPOINT ${savepoint}`);
   try {
     const result = work();
-    db.exec('COMMIT');
+    db.exec(`RELEASE SAVEPOINT ${savepoint}`);
     return result;
   } catch (err) {
-    try { db.exec('ROLLBACK'); } catch (_) { /* original error wins */ }
+    try {
+      db.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+      db.exec(`RELEASE SAVEPOINT ${savepoint}`);
+    } catch (_) { /* original error wins */ }
     throw err;
   }
 }
@@ -526,6 +540,105 @@ function getRepairHistory(testId) {
   };
 }
 
+function matchesSavedTest(test, attempt, prefix) {
+  return attempt[`${prefix}_test_id`] === test.id
+    || (test.report_ext_id != null
+      && attempt[`${prefix}_report_ext_id`] === test.report_ext_id
+      && Number(attempt[`${prefix}_slot_position`]) === Number(test.slot_position));
+}
+
+function quickEntryContext(testId) {
+  const test = getTest(testId);
+  const repairCase = activeCaseFor(test);
+  const previous = repairCase && db.get(
+    'SELECT * FROM injector_repair_attempts WHERE repair_case_id = ? ORDER BY attempt_number DESC LIMIT 1',
+    [repairCase.id]
+  );
+  let reason = '';
+  let linkPrevious = false;
+  if (!test.serial_number) reason = 'A serial number is required to record a repair.';
+  else if (repairCase && repairCase.status !== 'OPEN') reason = 'This repair is on hold or under engineering review. Reopen it in Repair History first.';
+  else if (!['FAIL', 'DNF', 'UNKNOWN'].includes(statusOfTest(test)) || (!repairCase && statusOfTest(test) !== 'FAIL')) {
+    reason = 'Quick Entry records repairs after an unsuccessful test. Use Repair History to link a passing retest.';
+  } else if (previous) {
+    if (previous.status === 'WAITING_RETEST') {
+      if (matchesSavedTest(test, previous, 'before') || !candidateRetests(repairCase, previous).some((row) => row.id === test.id)) {
+        reason = 'Measurements have already been recorded for this repair. Run and sync a new retest before recording the next repair.';
+      } else linkPrevious = true;
+    } else if (!matchesSavedTest(test, previous, 'after')) {
+      reason = 'Open Quick Entry on the latest linked retest to record the next repair.';
+    }
+  } else {
+    const saved = db.all(
+      `SELECT a.* FROM injector_repair_attempts a JOIN injector_repair_cases c ON c.id = a.repair_case_id
+        WHERE c.part_number = ? COLLATE NOCASE AND c.serial_number = ? COLLATE NOCASE`,
+      [test.part_number || '', test.serial_number]
+    );
+    if (saved.some((attempt) => matchesSavedTest(test, attempt, 'before') || matchesSavedTest(test, attempt, 'after'))) {
+      reason = 'This test is already part of a repair history. Select a new failed test to start another case.';
+    }
+  }
+  return { test, repairCase, previous, reason, linkPrevious };
+}
+
+function getQuickEntry(testId) {
+  const context = quickEntryContext(testId);
+  return {
+    measurements: QUICK_MEASUREMENTS,
+    can_save: !context.reason,
+    reason: context.reason,
+    attempt_number: context.previous ? Number(context.previous.attempt_number) + 1 : 1,
+    links_previous_retest: context.linkPrevious,
+  };
+}
+
+function saveQuickEntry(testId, payload, user) {
+  const values = payload && payload.measurements;
+  if (!Array.isArray(values) || values.length > QUICK_MEASUREMENTS.length) {
+    throw new AppError('Enter the repair measurements.', 400, 'VALIDATION_ERROR');
+  }
+  const seen = new Set();
+  const changes = values.map((value) => {
+    const definition = QUICK_MEASUREMENTS.find((item) => item.key === value?.key);
+    if (!definition || seen.has(value.key)) throw new AppError('Unknown or repeated measurement.', 400, 'VALIDATION_ERROR');
+    seen.add(value.key);
+    const before = text(value.before_value, 100);
+    const after = text(value.after_value, 100);
+    if (!before && !after) return null;
+    const validNumber = (number) => /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(number) && Number.isFinite(Number(number));
+    if (!validNumber(before) || !validNumber(after)) {
+      throw new AppError(`${definition.label}: enter a nonnegative number in both Before and After, or leave both blank.`, 400, 'VALIDATION_ERROR');
+    }
+    if (!definition.units.includes(value.unit)) {
+      throw new AppError(`${definition.label}: select the measurement unit.`, 400, 'VALIDATION_ERROR');
+    }
+    return {
+      component: definition.component, parameter: definition.label,
+      action_type: Number(before) === Number(after) ? 'No Change' : 'Adjusted',
+      before_value: before, after_value: after, unit: value.unit,
+    };
+  }).filter(Boolean);
+  if (!changes.length) throw new AppError('Complete at least one Before / After measurement pair.', 400, 'VALIDATION_ERROR');
+  const attempt = {
+    repair_date: payload.repair_date,
+    technician: user && user.name,
+    diagnosis: 'Measurements recorded via Quick Entry.',
+    repair_notes: payload.notes,
+    changes,
+  };
+  return withTransaction(() => {
+    const context = quickEntryContext(testId);
+    if (context.reason) throw new AppError(context.reason, 409, 'QUICK_ENTRY_UNAVAILABLE');
+    if (!context.repairCase) return createRepairCase({ initial_test_id: testId, attempt }, user);
+    if (context.linkPrevious) linkRetest(context.previous.id, { after_test_id: testId }, user);
+    // The durable identity still resolves after a cache clear/reimport.
+    if (!context.linkPrevious && !context.previous.after_test_id) {
+      db.run('UPDATE injector_repair_attempts SET after_test_id = ? WHERE id = ?', [testId, context.previous.id]);
+    }
+    return addRepairAttempt(context.repairCase.id, attempt, user);
+  });
+}
+
 module.exports = {
   ACTIVE_CASE_STATUSES,
   COMPONENT_OPTIONS,
@@ -537,4 +650,6 @@ module.exports = {
   setCaseStatus,
   getRepairHistory,
   loadCase,
+  getQuickEntry,
+  saveQuickEntry,
 };
