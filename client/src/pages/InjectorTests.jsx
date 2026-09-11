@@ -4,12 +4,14 @@ import {
   Gauge, RefreshCw, Settings, Trash2, Search, X,
   AlertTriangle, CheckCircle2, Loader2, XCircle, Save, FileText, BarChart3, Info, ShieldAlert, Eye,
   ListFilter, FileSpreadsheet, FileDown, ChevronDown, ChevronUp, ArrowDownAZ, GripVertical, Play,
+  Wrench,
 } from 'lucide-react'
 import api from '../lib/api'
 import { useToast } from '../hooks/useToast'
 import { chooseSaveTarget, writeBlobToTarget, deriveFilename } from '../lib/download'
 import { describeConnectionResult, describeSyncResult } from '../lib/syncStatus'
 import { formatInjectorTestDateTime } from '../lib/injectorDateTime'
+import InjectorRepairHistory from '../components/InjectorRepairHistory'
 import {
   filterInjectors,
   toggleSelected,
@@ -239,16 +241,16 @@ export default function InjectorTests() {
     quickPreviewToken.current = token
     const title = injectorLabel(injector)
     const subtitle = 'Quick preview — this injector only. Nothing has been generated or selected.'
-    setPreview({ data: null, title, subtitle, loading: true, error: '' })
+    setPreview({ data: null, title, subtitle, injector, loading: true, error: '' })
 
     try {
       const { data: res } = await api.post('/injector-tests/reports/preview', { injector_ids: request.injectorIds })
       if (quickPreviewToken.current !== token) return   // closed, or another row was opened
-      setPreview({ data: res.preview, title, subtitle, loading: false, error: '' })
+      setPreview({ data: res.preview, title, subtitle, injector, loading: false, error: '' })
     } catch (err) {
       const msg = await errorMessageFrom(err, 'The preview could not be loaded. Please try again.')
       if (quickPreviewToken.current !== token) return
-      setPreview({ data: null, title, subtitle: '', loading: false, error: msg })
+      setPreview({ data: null, title, subtitle: '', injector, loading: false, error: msg })
       showToast(`Preview failed: ${msg}`, 'error')
     }
   }
@@ -1309,6 +1311,9 @@ function MatchedSteps({ steps }) {
  */
 function ReportPreviewModal({ view, onClose }) {
   const { data: preview, title, subtitle, loading, error } = view || {}
+  const [activeTab, setActiveTab] = useState('results')
+  const repairEnabled = Boolean(view?.injector?.id)
+  const selectedTab = repairEnabled ? activeTab : 'results'
 
   const formatRange = () => {
     if (!preview?.dateFrom) return '—'
@@ -1344,7 +1349,26 @@ function ReportPreviewModal({ view, onClose }) {
           </button>
         </header>
 
-        {loading ? (
+        {repairEnabled && (
+          <div className="flex border-b border-gray-200 bg-white px-4 sm:px-6" role="tablist" aria-label="Injector details">
+            <button type="button" role="tab" aria-selected={selectedTab === 'results'}
+              onClick={() => setActiveTab('results')}
+              className={`min-h-11 border-b-2 px-3 text-sm font-medium ${selectedTab === 'results' ? 'border-pdi-teal text-pdi-navy' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
+              Test Results
+            </button>
+            <button type="button" role="tab" aria-selected={selectedTab === 'repair'}
+              onClick={() => setActiveTab('repair')}
+              className={`min-h-11 border-b-2 px-3 text-sm font-medium ${selectedTab === 'repair' ? 'border-pdi-teal text-pdi-navy' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
+              Repair History
+            </button>
+          </div>
+        )}
+
+        {selectedTab === 'repair' ? (
+          <div className="flex-1 overflow-auto px-3 py-4 sm:px-6">
+            <InjectorRepairHistory testId={view.injector.id} />
+          </div>
+        ) : loading ? (
           <div className="flex flex-1 items-center justify-center gap-2 px-4 py-12 text-sm text-gray-500">
             <Loader2 size={18} className="animate-spin" /> Loading the test results…
           </div>
@@ -1411,7 +1435,7 @@ function ReportPreviewModal({ view, onClose }) {
         <footer className="flex justify-end border-t border-gray-200 px-4 py-3 sm:px-6">
           <button type="button" onClick={onClose}
             className="min-h-[44px] w-full rounded-lg bg-pdi-navy px-4 py-2 text-sm font-medium text-white hover:bg-pdi-navy-light sm:w-auto">
-            Close Preview
+            {repairEnabled ? 'Close Details' : 'Close Preview'}
           </button>
         </footer>
       </section>
@@ -1445,13 +1469,23 @@ function InjectorFlowBadge({ injector }) {
     )
   }
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs">
+    <span className="inline-flex flex-wrap items-center gap-1.5 text-xs">
       {status === 'pass'
         ? <span className="inline-flex items-center gap-1 bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium"><CheckCircle2 size={12} /> Passed</span>
         : status === 'dnf'
           ? <span className="inline-flex items-center gap-1 bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium"><AlertTriangle size={12} /> DNF</span>
           : <span className="inline-flex items-center gap-1 bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium"><XCircle size={12} /> Failed</span>}
       <span className="text-gray-500">{steps_passed}/{steps_total} steps</span>
+      {injector.repair_status && (
+        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium ${injector.repair_retest_available
+          ? 'bg-blue-100 text-blue-800'
+          : 'bg-purple-100 text-purple-800'}`}>
+          <Wrench size={11} />
+          {injector.repair_retest_available
+            ? `Retest ready · Repair #${injector.repair_attempt_count}`
+            : `${String(injector.repair_status).replaceAll('_', ' ')} · Repair #${injector.repair_attempt_count}`}
+        </span>
+      )}
     </span>
   )
 }

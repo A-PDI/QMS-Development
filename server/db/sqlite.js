@@ -265,6 +265,113 @@ function migrateSchema() {
     `CREATE INDEX IF NOT EXISTS idx_injector_reports_serial ON injector_test_reports(serial_number)`,
     // Selection on the Injector Tests page groups/filters by job number.
     `CREATE INDEX IF NOT EXISTS idx_injector_reports_job ON injector_test_reports(job_number)`,
+    // Repair history is permanent engineering data. CarbonZapp rows are only
+    // cache references (ON DELETE SET NULL); the identifying test snapshots and
+    // calculated result deltas below survive Clear All / full resync.
+    `CREATE TABLE IF NOT EXISTS injector_repair_cases (
+      id TEXT PRIMARY KEY,
+      part_number TEXT,
+      serial_number TEXT NOT NULL,
+      initial_test_id TEXT REFERENCES injector_test_reports(id) ON DELETE SET NULL,
+      initial_report_ext_id TEXT,
+      initial_slot_position INTEGER,
+      initial_test_datetime TEXT,
+      initial_result_status TEXT,
+      status TEXT NOT NULL DEFAULT 'OPEN'
+        CHECK (status IN ('OPEN', 'PASSED', 'SCRAPPED', 'HOLD', 'ENGINEERING_REVIEW')),
+      failure_categories_json TEXT NOT NULL DEFAULT '[]',
+      opened_at TEXT NOT NULL,
+      opened_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      opened_by_name TEXT,
+      closed_at TEXT,
+      closed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      closed_by_name TEXT,
+      final_test_id TEXT REFERENCES injector_test_reports(id) ON DELETE SET NULL,
+      final_report_ext_id TEXT,
+      final_slot_position INTEGER,
+      final_test_datetime TEXT,
+      final_result_status TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_injector_repair_cases_identity
+       ON injector_repair_cases(part_number COLLATE NOCASE, serial_number COLLATE NOCASE, opened_at DESC)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_injector_repair_cases_one_active
+       ON injector_repair_cases(part_number COLLATE NOCASE, serial_number COLLATE NOCASE)
+       WHERE status IN ('OPEN', 'HOLD', 'ENGINEERING_REVIEW')`,
+    `CREATE TABLE IF NOT EXISTS injector_repair_attempts (
+      id TEXT PRIMARY KEY,
+      repair_case_id TEXT NOT NULL REFERENCES injector_repair_cases(id) ON DELETE CASCADE,
+      attempt_number INTEGER NOT NULL,
+      before_test_id TEXT REFERENCES injector_test_reports(id) ON DELETE SET NULL,
+      before_report_ext_id TEXT,
+      before_slot_position INTEGER,
+      before_test_datetime TEXT,
+      before_result_status TEXT,
+      after_test_id TEXT REFERENCES injector_test_reports(id) ON DELETE SET NULL,
+      after_report_ext_id TEXT,
+      after_slot_position INTEGER,
+      after_test_datetime TEXT,
+      after_result_status TEXT,
+      repair_date TEXT NOT NULL,
+      technician TEXT NOT NULL,
+      technician_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      diagnosis TEXT,
+      hypothesis TEXT,
+      expected_outcome TEXT,
+      observed_outcome TEXT,
+      repair_notes TEXT,
+      status TEXT NOT NULL DEFAULT 'WAITING_RETEST'
+        CHECK (status IN ('WAITING_RETEST', 'COMPLETED')),
+      outcome TEXT NOT NULL DEFAULT 'PENDING'
+        CHECK (outcome IN ('PENDING', 'PASS', 'FAIL', 'DNF', 'UNKNOWN')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(repair_case_id, attempt_number)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_injector_repair_attempts_case
+       ON injector_repair_attempts(repair_case_id, attempt_number)`,
+    `CREATE TABLE IF NOT EXISTS injector_repair_changes (
+      id TEXT PRIMARY KEY,
+      repair_attempt_id TEXT NOT NULL REFERENCES injector_repair_attempts(id) ON DELETE CASCADE,
+      sequence INTEGER NOT NULL DEFAULT 1,
+      component TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      parameter TEXT,
+      before_value TEXT,
+      after_value TEXT,
+      unit TEXT,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_injector_repair_changes_attempt
+       ON injector_repair_changes(repair_attempt_id, sequence)`,
+    `CREATE TABLE IF NOT EXISTS injector_repair_result_deltas (
+      id TEXT PRIMARY KEY,
+      repair_attempt_id TEXT NOT NULL REFERENCES injector_repair_attempts(id) ON DELETE CASCADE,
+      step_key TEXT NOT NULL,
+      step_code TEXT,
+      step_name TEXT NOT NULL,
+      tank_role TEXT NOT NULL,
+      before_value REAL,
+      after_value REAL,
+      absolute_delta REAL,
+      percent_delta REAL,
+      target_value REAL,
+      before_distance_from_target REAL,
+      after_distance_from_target REAL,
+      correction_effectiveness REAL,
+      before_status TEXT,
+      after_status TEXT,
+      spec_min REAL,
+      spec_max REAL,
+      unit TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(repair_attempt_id, step_key)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_injector_repair_deltas_attempt
+       ON injector_repair_result_deltas(repair_attempt_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_injector_reports_identity_datetime
+       ON injector_test_reports(part_number COLLATE NOCASE, serial_number COLLATE NOCASE, test_datetime)`,
   ];
   for (const sql of tableMigrations) {
     try { rawDb.exec(sql); } catch (_) {}

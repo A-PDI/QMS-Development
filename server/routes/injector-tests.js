@@ -9,6 +9,11 @@
  *   GET  /settings                      → CarbonZapp settings (masked key, last sync)
  *   PUT  /settings                      → save the CarbonZapp API key
  *   POST /sync                          → "Sync Now" — import test records ONLY
+ *   GET  /:id/repair-history            → permanent repair cases + retest candidates
+ *   POST /repairs/cases                 → start case + first structured attempt
+ *   POST /repairs/cases/:id/attempts    → add the next repair attempt
+ *   PATCH /repairs/cases/:id/status     → hold, reopen, review, or scrap a case
+ *   POST /repairs/attempts/:id/retest   → link retest + snapshot flow deltas
  *   POST /reports/preview               → selected comparison data (JSON only)
  *   POST /reports/custom                → Custom Report PDF for selected injectors
  *                                          (optional vendor_name; bench brand fallback)
@@ -49,6 +54,13 @@ const {
   buildInjectorWorkbook,
   exportFilename,
 } = require('../services/injectorExport');
+const {
+  getRepairHistory,
+  createRepairCase,
+  addRepairAttempt,
+  linkRetest,
+  setCaseStatus,
+} = require('../services/injectorRepairs');
 
 // Roles allowed to reach the Injector Tests feature: the ADMIN role only.
 // Matches the `roles` restriction on the sidebar item in client/src/lib/nav.js
@@ -125,6 +137,56 @@ function buildListFilters(criteria) {
   return { sql, params };
 }
 
+function injectorIdentityKey(partNumber, serialNumber) {
+  return `${String(partNumber || '').trim().toUpperCase()}\u0000${String(serialNumber || '').trim().toUpperCase()}`;
+}
+
+/**
+ * Add the current repair state to list rows in one bounded query. This is what
+ * lets a newly synced retest announce itself in the list instead of requiring
+ * the user to remember which serial number already has an open case.
+ */
+function withRepairState(rows) {
+  const activeCases = db.all(
+    `SELECT c.id, c.part_number, c.serial_number, c.status,
+            (SELECT COUNT(*) FROM injector_repair_attempts a
+              WHERE a.repair_case_id = c.id) AS attempt_count,
+            EXISTS(
+              SELECT 1
+                FROM injector_repair_attempts pending
+                JOIN injector_test_reports candidate
+                  ON candidate.part_number = c.part_number COLLATE NOCASE
+                 AND candidate.serial_number = c.serial_number COLLATE NOCASE
+                 AND datetime(candidate.test_datetime) > datetime(pending.repair_date)
+                 AND candidate.id != COALESCE(pending.before_test_id, '')
+               WHERE pending.repair_case_id = c.id
+                 AND pending.status = 'WAITING_RETEST'
+                 AND NOT EXISTS (
+                   SELECT 1 FROM injector_repair_attempts linked
+                    WHERE linked.after_test_id = candidate.id
+                 )
+            ) AS retest_available
+       FROM injector_repair_cases c
+      WHERE c.status IN ('OPEN', 'HOLD', 'ENGINEERING_REVIEW')`,
+    []
+  );
+  const byIdentity = new Map(activeCases.map((repairCase) => [
+    injectorIdentityKey(repairCase.part_number, repairCase.serial_number),
+    repairCase,
+  ]));
+  return rows.map((row) => {
+    const repairCase = byIdentity.get(injectorIdentityKey(row.part_number, row.serial_number));
+    if (!repairCase) return row;
+    return {
+      ...row,
+      repair_case_id: repairCase.id,
+      repair_status: repairCase.status,
+      repair_attempt_count: Number(repairCase.attempt_count) || 0,
+      repair_retest_available: Boolean(repairCase.retest_available),
+    };
+  });
+}
+
 /**
  * Run the row-level query, then apply any test-step criteria in JavaScript —
  * individual steps live inside the stored report JSON, which SQL cannot reach.
@@ -137,10 +199,10 @@ function queryInjectors(criteria) {
   const withSteps = needsStepData(criteria);
   const columns = withSteps ? `${LIST_COLUMNS}, report_json` : LIST_COLUMNS;
 
-  const rows = db.all(
+  const rows = withRepairState(db.all(
     `SELECT ${columns} FROM injector_test_reports WHERE ${BASE_EXCLUSIONS}${filterSql}${LIST_ORDER}`,
     params
-  );
+  ));
   const totalRow = db.get(`SELECT COUNT(*) AS c FROM injector_test_reports WHERE ${BASE_EXCLUSIONS}`, []);
 
   if (!withSteps) return { injectors: rows, total: totalRow ? totalRow.c : rows.length };
@@ -253,6 +315,43 @@ router.delete('/', requireAdmin, (req, res, next) => {
   try {
     const result = carbonzapp.clearAllReports();
     res.json({ ok: true, ...result });
+  } catch (err) { next(err); }
+});
+
+// ── Persistent repair lifecycle ────────────────────────────────────────────
+// These routes intentionally live outside CarbonZapp synchronisation. Repair
+// history remains intact even when the refreshable test cache is cleared.
+router.get('/:id/repair-history', requireAdmin, (req, res, next) => {
+  try {
+    res.json(getRepairHistory(req.params.id));
+  } catch (err) { next(err); }
+});
+
+router.post('/repairs/cases', requireAdmin, (req, res, next) => {
+  try {
+    const repairCase = createRepairCase(req.body || {}, req.user);
+    res.status(201).json({ ok: true, repair_case: repairCase });
+  } catch (err) { next(err); }
+});
+
+router.post('/repairs/cases/:id/attempts', requireAdmin, (req, res, next) => {
+  try {
+    const repairCase = addRepairAttempt(req.params.id, req.body || {}, req.user);
+    res.status(201).json({ ok: true, repair_case: repairCase });
+  } catch (err) { next(err); }
+});
+
+router.patch('/repairs/cases/:id/status', requireAdmin, (req, res, next) => {
+  try {
+    const repairCase = setCaseStatus(req.params.id, req.body && req.body.status, req.user);
+    res.json({ ok: true, repair_case: repairCase });
+  } catch (err) { next(err); }
+});
+
+router.post('/repairs/attempts/:id/retest', requireAdmin, (req, res, next) => {
+  try {
+    const repairCase = linkRetest(req.params.id, req.body || {}, req.user);
+    res.json({ ok: true, repair_case: repairCase });
   } catch (err) { next(err); }
 });
 

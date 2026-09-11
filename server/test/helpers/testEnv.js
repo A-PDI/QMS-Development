@@ -64,6 +64,9 @@ function extractPdfText(buffer) {
 
 /** Remove every injector/inspection row so each test starts from a clean slate. */
 function resetInjectorData() {
+  // Repair cases cascade to attempts, structured changes and delta snapshots.
+  // Delete them first so repeated tests cannot trip the one-active-case rule.
+  try { db.run('DELETE FROM injector_repair_cases', []); } catch (_) {}
   db.run('DELETE FROM injector_test_reports', []);
   db.run("DELETE FROM app_settings WHERE key IN ('carbonzapp_last_sync', 'carbonzapp_api_key')", []);
   const ids = db.all("SELECT id FROM inspections WHERE inspector_name IN ('Injector Test Bench', 'Test User')", [])
