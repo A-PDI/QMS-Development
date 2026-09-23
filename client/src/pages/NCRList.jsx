@@ -1,9 +1,13 @@
 import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { PlusCircle, Search, AlertTriangle } from 'lucide-react'
-import { useNCRs } from '../hooks/useNCRs'
+import { PlusCircle, Search, AlertTriangle, Eye, Pencil, Download, Printer, Trash2, Loader2 } from 'lucide-react'
+import { useNCRs, useDeleteNCR, downloadNCRPdf, apiErrorMessage } from '../hooks/useNCRs'
+import { useToast } from '../hooks/useToast'
+import { getUser } from '../lib/auth'
+import { isAdminUser } from '../lib/nav'
 import { formatDate } from '../lib/utils'
-import { NCR_STATUS_COLORS, NCR_STATUS_LABELS, NCR_SEVERITY_COLORS, NCR_SEVERITY_LABELS } from '../lib/constants'
+import { NCR_STATUS_COLORS, NCR_STATUS_LABELS, NCR_SEVERITY_COLORS, NCR_SEVERITY_LABELS, NCR_DISPOSITION_LABELS } from '../lib/constants'
+import NcrDeleteDialog from '../components/ncr/NcrDeleteDialog'
 
 function NcrBadge({ value, colorMap, labelMap, className = '' }) {
   const color = colorMap[value] || 'bg-gray-100 text-gray-600 ring-1 ring-gray-200'
@@ -14,9 +18,41 @@ function NcrBadge({ value, colorMap, labelMap, className = '' }) {
   )
 }
 
+function dispositionLabel(value) {
+  return NCR_DISPOSITION_LABELS[value] || value?.replace(/_/g, ' ') || '—'
+}
+
+/** View · Edit · Download PDF · Print · Delete (admin-level users only). */
+function RowActions({ ncr, canDelete, downloading, onView, onEdit, onDownload, onPrint, onDelete }) {
+  const base = 'p-2 rounded-md border min-h-[36px] min-w-[36px] flex items-center justify-center disabled:opacity-40'
+  const neutral = `${base} border-gray-200 text-gray-600 hover:bg-gray-50 hover:text-pdi-navy`
+  // Row clicks open the report; the buttons must not trigger that as well.
+  const act = fn => e => { e.stopPropagation(); fn(ncr) }
+  return (
+    <div className="flex items-center gap-1">
+      <button type="button" onClick={act(onView)} title="View" aria-label={`View ${ncr.ncr_number}`} className={neutral}><Eye size={14} /></button>
+      <button type="button" onClick={act(onEdit)} title="Edit" aria-label={`Edit ${ncr.ncr_number}`} className={neutral}><Pencil size={14} /></button>
+      <button type="button" onClick={act(onDownload)} disabled={downloading} title="Download PDF" aria-label={`Download ${ncr.ncr_number} PDF`} className={neutral}>
+        {downloading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+      </button>
+      <button type="button" onClick={act(onPrint)} title="Print" aria-label={`Print ${ncr.ncr_number}`} className={neutral}><Printer size={14} /></button>
+      {canDelete && (
+        <button type="button" onClick={act(onDelete)} title="Delete" aria-label={`Delete ${ncr.ncr_number}`}
+          className={`${base} border-red-200 text-red-500 hover:bg-red-50`}><Trash2 size={14} /></button>
+      )}
+    </div>
+  )
+}
+
 export default function NCRList() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const { showToast } = useToast()
+  const canDelete = isAdminUser(getUser())
+  const deleteNCR = useDeleteNCR()
+  const [downloadingId, setDownloadingId] = useState(null)
+  const [pendingDelete, setPendingDelete] = useState(null)
+  const [deleting, setDeleting] = useState(false)
   const [filters, setFilters] = useState({ page: 1, limit: 25, status: searchParams.get('status') || '' })
   const [search, setSearch] = useState('')
 
@@ -32,6 +68,39 @@ export default function NCRList() {
   function applySearch(e) {
     e.preventDefault()
     setFilters(f => ({ ...f, search, page: 1 }))
+  }
+
+  async function handleDownload(ncr) {
+    setDownloadingId(ncr.id)
+    try {
+      if (await downloadNCRPdf(ncr)) showToast(`${ncr.ncr_number} PDF saved`, 'success')
+    } catch (err) {
+      showToast(await apiErrorMessage(err, 'Failed to generate PDF'), 'error')
+    } finally {
+      setDownloadingId(null)
+    }
+  }
+
+  async function handleDelete() {
+    setDeleting(true)
+    try {
+      await deleteNCR.mutateAsync(pendingDelete.id)
+      showToast(`${pendingDelete.ncr_number} deleted`, 'success')
+    } catch (err) {
+      showToast(await apiErrorMessage(err, 'Failed to delete NCR'), 'error')
+    } finally {
+      setDeleting(false)
+      setPendingDelete(null)
+    }
+  }
+
+  const actions = {
+    canDelete,
+    onView: ncr => navigate(`/ncrs/${ncr.id}`),
+    onEdit: ncr => navigate(`/ncrs/${ncr.id}/edit`),
+    onDownload: handleDownload,
+    onPrint: ncr => navigate(`/ncrs/${ncr.id}?print=1`),
+    onDelete: ncr => setPendingDelete(ncr),
   }
 
   return (
@@ -89,16 +158,16 @@ export default function NCRList() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  {['NCR #', 'Part Number', 'Supplier', 'Description', 'Severity', 'Disposition', 'Status', 'Created', 'Closed'].map(h => (
+                  {['NCR #', 'Part Number', 'Supplier', 'Description', 'Severity', 'Disposition', 'Status', 'Created', 'Closed', 'Actions'].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {isLoading ? (
-                  <tr><td colSpan={9} className="text-center text-gray-400 py-12">Loading…</td></tr>
+                  <tr><td colSpan={10} className="text-center text-gray-400 py-12">Loading…</td></tr>
                 ) : ncrs.length === 0 ? (
-                  <tr><td colSpan={9} className="text-center text-gray-400 py-12">No NCRs found</td></tr>
+                  <tr><td colSpan={10} className="text-center text-gray-400 py-12">No NCRs found</td></tr>
                 ) : ncrs.map(ncr => (
                   <tr key={ncr.id} onClick={() => navigate(`/ncrs/${ncr.id}`)} className="hover:bg-orange-50/40 cursor-pointer">
                     <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{ncr.ncr_number}</td>
@@ -108,12 +177,15 @@ export default function NCRList() {
                     <td className="px-4 py-3">
                       <NcrBadge value={ncr.severity} colorMap={NCR_SEVERITY_COLORS} labelMap={NCR_SEVERITY_LABELS} />
                     </td>
-                    <td className="px-4 py-3 text-xs text-gray-600">{ncr.ncr_disposition?.replace(/_/g, ' ') || '—'}</td>
+                    <td className="px-4 py-3 text-xs text-gray-600">{dispositionLabel(ncr.ncr_disposition)}</td>
                     <td className="px-4 py-3">
                       <NcrBadge value={ncr.status} colorMap={NCR_STATUS_COLORS} labelMap={NCR_STATUS_LABELS} />
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500">{formatDate(ncr.created_at)}</td>
                     <td className="px-4 py-3 text-xs text-gray-500">{ncr.closed_at ? formatDate(ncr.closed_at) : '—'}</td>
+                    <td className="px-4 py-2">
+                      <RowActions ncr={ncr} downloading={downloadingId === ncr.id} {...actions} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -127,11 +199,11 @@ export default function NCRList() {
             ) : ncrs.length === 0 ? (
               <div className="text-center text-gray-400 py-12 text-sm">No NCRs found</div>
             ) : ncrs.map(ncr => (
+              <div key={ncr.id}>
               <button
-                key={ncr.id}
                 type="button"
                 onClick={() => navigate(`/ncrs/${ncr.id}`)}
-                className="w-full text-left px-4 py-3 hover:bg-orange-50/40 active:bg-orange-50 transition-colors min-h-[44px]"
+                className="w-full text-left px-4 pt-3 pb-2 hover:bg-orange-50/40 active:bg-orange-50 transition-colors min-h-[44px]"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
@@ -151,7 +223,7 @@ export default function NCRList() {
                   </div>
                   <div className="min-w-0 truncate">
                     <span className="text-gray-400">Disp: </span>
-                    <span className="text-gray-700">{ncr.ncr_disposition?.replace(/_/g, ' ') || '—'}</span>
+                    <span className="text-gray-700">{dispositionLabel(ncr.ncr_disposition)}</span>
                   </div>
                   <div className="min-w-0 truncate">
                     <span className="text-gray-400">Created: </span>
@@ -163,6 +235,10 @@ export default function NCRList() {
                   </div>
                 </div>
               </button>
+              <div className="px-4 pb-3">
+                <RowActions ncr={ncr} downloading={downloadingId === ncr.id} {...actions} />
+              </div>
+              </div>
             ))}
           </div>
 
@@ -179,6 +255,10 @@ export default function NCRList() {
           )}
         </div>
       </div>
+
+      {pendingDelete && (
+        <NcrDeleteDialog ncr={pendingDelete} deleting={deleting} onCancel={() => setPendingDelete(null)} onConfirm={handleDelete} />
+      )}
     </div>
   )
 }

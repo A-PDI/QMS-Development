@@ -160,7 +160,8 @@ InspectionApp/
 │           ├── InspectionForm.jsx    # Edit/fill inspection (header + sections + attachments)
 │           ├── InspectionDetail.jsx  # Read-only view, submit/approve/reject actions
 │           ├── NCRList.jsx           # Non-conformance report list
-│           ├── NCRDetail.jsx         # NCR detail view
+│           ├── NCRView.jsx           # NCR report view: download PDF, print, close, delete (admin)
+│           ├── NCREditor.jsx         # Create/edit NCR: fields, captioned photos, user sections
 │           ├── Admin.jsx             # User management (roles, active status)
 │           └── NotFound.jsx          # 404 page
 │
@@ -569,6 +570,11 @@ All endpoints except `/api/auth/*` and `/health` require a valid JWT in the `Aut
 | POST | `/api/ncrs` | JWT | Create new NCR |
 | GET | `/api/ncrs/:id` | JWT | NCR detail |
 | PATCH | `/api/ncrs/:id` | JWT | Update NCR fields or status |
+| PUT | `/api/ncrs/:id/content` | JWT | Save user sections (title, text), photo placement and captions |
+| POST | `/api/ncrs/:id/images` | JWT | Upload one JPEG/PNG photo (multipart `file`, optional `caption`) |
+| GET | `/api/ncrs/images/:imageId` | JWT | Stream an NCR photo |
+| GET | `/api/ncrs/:id/pdf` | JWT | Generate the NCR report PDF |
+| DELETE | `/api/ncrs/:id` | JWT (admin, qc_manager) | Delete an NCR with its sections and photos |
 
 ### Dashboard
 
@@ -655,7 +661,9 @@ Role is enforced on both the frontend (UI elements conditionally rendered) and t
 /inspections/:id          → InspectionDetail.jsx (protected)
 /inspections/:id/edit     → InspectionForm.jsx (protected)
 /ncrs                     → NCRList.jsx (protected)
-/ncrs/:id                 → NCRDetail.jsx (protected)
+/ncrs/new                 → NCREditor.jsx (protected)
+/ncrs/:id                 → NCRView.jsx (protected)
+/ncrs/:id/edit            → NCREditor.jsx (protected)
 /admin                    → Admin.jsx (admin only)
 *                         → NotFound.jsx
 ```

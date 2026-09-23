@@ -2132,4 +2132,13 @@ module.exports = {
   INJ_PAGE_W,
   INJ_PAGE_H,
   INJ_USABLE_W,
+  // Portrait report primitives shared with the NCR report (services/ncrPdf.js)
+  // so both documents share one look.
+  renderSectionTitle,
+  ensureSpace,
+  vspace,
+  put,
+  PORTRAIT: { M, PW, PH, FOOT },
+  PALETTE: { NAVY, TEAL, RED, GREEN, AMBER, BLACK, DGRAY, MGRAY, LGRAY, BORDER, ROWALT, THBG, SECBG, WHITE },
+  LOGO_PATH,
 };

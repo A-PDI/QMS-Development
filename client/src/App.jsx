@@ -11,7 +11,8 @@ import MiscInspectionBuilder from './pages/MiscInspectionBuilder'
 import InspectionForm from './pages/InspectionForm'
 import InspectionDetail from './pages/InspectionDetail'
 import NCRList from './pages/NCRList'
-import NCRDetail from './pages/NCRDetail'
+import NCRView from './pages/NCRView'
+import NCREditor from './pages/NCREditor'
 import MyInspections from './pages/MyInspections'
 import QualityAlerts from './pages/QualityAlerts'
 import Reports from './pages/Reports'
@@ -71,7 +72,9 @@ export default function App() {
           <Route path="inspections/:id" element={<InspectionDetail />} />
           <Route path="inspections/:id/edit" element={<InspectionForm />} />
           <Route path="ncrs" element={<NCRList />} />
-          <Route path="ncrs/:id" element={<NCRDetail />} />
+          <Route path="ncrs/new" element={<NCREditor />} />
+          <Route path="ncrs/:id" element={<NCRView />} />
+          <Route path="ncrs/:id/edit" element={<NCREditor />} />
           <Route path="quality-alerts" element={<QualityAlerts />} />
           <Route path="drawings" element={<Drawings />} />
           <Route path="reports" element={<Reports />} />

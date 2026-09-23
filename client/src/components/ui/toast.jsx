@@ -3,7 +3,7 @@ import { X, CheckCircle, AlertCircle } from 'lucide-react'
 
 export function ToastContainer({ toasts, dismiss }) {
   return (
-    <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 w-80">
+    <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 w-80 print:hidden">
       {toasts.map((t) => (
         <div
           key={t.id}

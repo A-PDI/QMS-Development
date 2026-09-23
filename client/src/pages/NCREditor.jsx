@@ -1,11 +1,17 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { AlertTriangle, X, Save, CheckCircle, Search, ChevronDown, ChevronUp, Link } from 'lucide-react'
-import { useNCR, useCreateNCR, useUpdateNCR } from '../hooks/useNCRs'
+import { AlertTriangle, X, Save, Search, Link, Plus, Loader2 } from 'lucide-react'
+import { useNCR, useCreateNCR, useUpdateNCR, useSaveNCRContent, uploadNCRImage, apiErrorMessage } from '../hooks/useNCRs'
 import { useInspections, useInspection } from '../hooks/useInspections'
 import { useToast } from '../hooks/useToast'
 import { formatDateTime, formatDate } from '../lib/utils'
 import { NCR_SEVERITY_LABELS, NCR_STATUS_LABELS, NCR_DISPOSITION_LABELS, COMPONENT_TYPE_LABELS } from '../lib/constants'
+import {
+  NCR_SECTION_SUGGESTIONS, editorContentFromNcr, emptySection, moveItem, allImages,
+  contentProblem, pendingUploads, markUploaded, buildContentPayload, assignSectionIds,
+} from '../lib/ncrReport'
+import NcrImageEditor from '../components/ncr/NcrImageEditor'
+import NcrSectionEditor, { SECTION_TITLE_LIST_ID } from '../components/ncr/NcrSectionEditor'
 
 const EMPTY_FORM = {
   part_number: '', supplier: '', po_number: '', description_of_defect: '',
@@ -58,19 +64,34 @@ function extractFailedItems(inspection, template) {
   return items
 }
 
-export default function NCRDetail() {
+/**
+ * Create (/ncrs/new) or edit (/ncrs/:id/edit) an NCR: its fields, the general
+ * Photos block and user-created sections (title, text, captioned photos).
+ * Nothing reaches the server until Save; photos are uploaded then.
+ */
+export default function NCREditor() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { showToast } = useToast()
-  const isNew = id === 'new'
+  const isNew = !id
 
-  const { data: ncr, isLoading } = useNCR(isNew ? null : id)
+  const { data: ncr, isLoading, isError } = useNCR(isNew ? null : id)
   const createNCR = useCreateNCR()
   const updateNCR = useUpdateNCR()
+  const saveContent = useSaveNCRContent()
 
   const [form, setForm] = useState({ ...EMPTY_FORM })
+  const [content, setContent] = useState({ sections: [], photos: [] })
+  const [removedImageIds, setRemovedImageIds] = useState([])
+  // Set once a new NCR has been created, so a retried save updates it rather
+  // than creating a second one (e.g. after a photo failed to upload).
+  const [createdNcr, setCreatedNcr] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [saveStatus, setSaveStatus] = useState('')
+  const [dirty, setDirty] = useState(false)
+  const loadedIdRef = useRef(null)
+  const previewUrlsRef = useRef(new Set())
 
   // Inspection linking state (new NCRs only)
   const [inspSearch, setInspSearch] = useState('')
@@ -114,31 +135,91 @@ export default function NCRDetail() {
     }
   }, [linkedInspection?.id, isNew])
 
+  // Load each NCR once. Later refetches (e.g. on window focus) must not
+  // overwrite what the user is typing.
   useEffect(() => {
-    if (!isNew && ncr) {
-      setForm({
-        part_number: ncr.part_number || '',
-        supplier: ncr.supplier || '',
-        po_number: ncr.po_number || '',
-        description_of_defect: ncr.description_of_defect || '',
-        quantity_affected: ncr.quantity_affected || '',
-        severity: ncr.severity || 'major',
-        ncr_disposition: ncr.ncr_disposition || 'pending',
-        corrective_action_required: !!ncr.corrective_action_required,
-        corrective_action_due_date: ncr.corrective_action_due_date || '',
-        status: ncr.status || 'open',
-      })
-      if (ncr.inspection_id) setLinkedInspId(ncr.inspection_id)
-    }
+    if (isNew || !ncr || loadedIdRef.current === ncr.id) return
+    loadedIdRef.current = ncr.id
+    setForm({
+      part_number: ncr.part_number || '',
+      supplier: ncr.supplier || '',
+      po_number: ncr.po_number || '',
+      description_of_defect: ncr.description_of_defect || '',
+      quantity_affected: ncr.quantity_affected ?? '',
+      severity: ncr.severity || 'major',
+      ncr_disposition: ncr.ncr_disposition || 'pending',
+      corrective_action_required: !!ncr.corrective_action_required,
+      corrective_action_due_date: ncr.corrective_action_due_date || '',
+      status: ncr.status || 'open',
+    })
+    setContent(editorContentFromNcr(ncr))
+    setRemovedImageIds([])
+    setDirty(false)
+    if (ncr.inspection_id) setLinkedInspId(ncr.inspection_id)
   }, [ncr, isNew])
+
+  // Warn before closing the tab with unsaved changes.
+  useEffect(() => {
+    if (!dirty) return
+    const warn = e => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
+
+  // Release local photo previews when leaving the editor.
+  useEffect(() => {
+    const urls = previewUrlsRef.current
+    return () => { urls.forEach(url => URL.revokeObjectURL(url)); urls.clear() }
+  }, [])
 
   function set(key, value) {
     setForm(f => ({ ...f, [key]: value }))
+    setDirty(true)
+  }
+
+  function updateContent(updater) {
+    setContent(prev => {
+      const next = updater(prev)
+      allImages(next).forEach(img => { if (img.previewUrl) previewUrlsRef.current.add(img.previewUrl) })
+      return next
+    })
+    setDirty(true)
+  }
+
+  function forgetImage(img) {
+    if (img.id) setRemovedImageIds(ids => (ids.includes(img.id) ? ids : [...ids, img.id]))
+    if (img.previewUrl) { URL.revokeObjectURL(img.previewUrl); previewUrlsRef.current.delete(img.previewUrl) }
+  }
+
+  function removePhoto(img) {
+    forgetImage(img)
+    updateContent(c => ({ ...c, photos: c.photos.filter(p => p.key !== img.key) }))
+  }
+
+  function removeSectionImage(sectionKey, img) {
+    forgetImage(img)
+    updateContent(c => ({
+      ...c,
+      sections: c.sections.map(s => (s.key === sectionKey ? { ...s, images: s.images.filter(i => i.key !== img.key) } : s)),
+    }))
+  }
+
+  function addSection() {
+    updateContent(c => ({ ...c, sections: [...c.sections, emptySection()] }))
+  }
+
+  function removeSection(section) {
+    const label = section.title.trim() ? `"${section.title.trim()}"` : 'this section'
+    const photos = section.images.length ? ` and its ${section.images.length} photo${section.images.length === 1 ? '' : 's'}` : ''
+    if (!window.confirm(`Remove ${label}${photos}? This takes effect when you save.`)) return
+    section.images.forEach(forgetImage)
+    updateContent(c => ({ ...c, sections: c.sections.filter(s => s.key !== section.key) }))
   }
 
   function selectInspection(insp) {
     setLinkedInspId(insp.id)
     setShowInspSelector(false)
+    setDirty(true)
   }
 
   function clearInspection() {
@@ -148,59 +229,102 @@ export default function NCRDetail() {
     setLinkedTemplate(null)
   }
 
+  function handleCancel() {
+    if (dirty && !window.confirm('Discard your unsaved changes?')) return
+    const savedId = id || createdNcr?.id
+    navigate(savedId ? `/ncrs/${savedId}` : '/ncrs')
+  }
+
   async function handleSave() {
     if (!form.description_of_defect.trim()) {
       showToast('Description of defect is required', 'error'); return
     }
-    setSaving(true)
-    try {
-      if (isNew) {
-        const created = await createNCR.mutateAsync({
-          ...form,
-          inspection_id: linkedInspId || undefined,
-        })
-        showToast(`NCR ${created.ncr_number} created`, 'success')
-        navigate(`/ncrs/${created.id}`)
-      } else {
-        await updateNCR.mutateAsync({ id, ...form })
-        showToast('NCR updated', 'success')
-      }
-    } catch (err) {
-      showToast(err?.response?.data?.error || err.message || 'Save failed', 'error')
-    } finally {
-      setSaving(false)
-    }
-  }
+    const problem = contentProblem(content)
+    if (problem) { showToast(problem, 'error'); return }
 
-  async function handleClose() {
     setSaving(true)
     try {
-      await updateNCR.mutateAsync({ id, status: 'closed' })
-      showToast('NCR closed', 'success')
+      // 1. The NCR itself.
+      let saved = createdNcr
+      if (!id && !createdNcr) {
+        setSaveStatus('Creating NCR…')
+        saved = await createNCR.mutateAsync({ ...form, inspection_id: linkedInspId || undefined })
+        setCreatedNcr(saved)
+      } else {
+        setSaveStatus('Saving details…')
+        saved = await updateNCR.mutateAsync({ id: id || createdNcr.id, ...form })
+      }
+      const ncrId = saved.id
+
+      // 2. New photos, one at a time so a failure names the file.
+      const uploads = pendingUploads(content)
+      const uploadedIds = new Map()
+      const failed = []
+      for (let i = 0; i < uploads.length; i++) {
+        setSaveStatus(`Uploading photo ${i + 1} of ${uploads.length}…`)
+        try {
+          const image = await uploadNCRImage(ncrId, uploads[i].file, uploads[i].caption.trim())
+          uploadedIds.set(uploads[i].key, image.id)
+        } catch (err) {
+          failed.push(`${uploads[i].file.name}: ${await apiErrorMessage(err, 'upload failed')}`)
+        }
+      }
+      // Record uploads straight away so a retry never uploads a photo twice.
+      let next = markUploaded(content, uploadedIds)
+      setContent(next)
+
+      // 3. Sections, photo order and captions.
+      setSaveStatus('Saving sections…')
+      const layout = await saveContent.mutateAsync({ id: ncrId, ...buildContentPayload(next, removedImageIds) })
+      next = assignSectionIds(next, layout)
+      setContent(next)
+      setRemovedImageIds([])
+
+      if (failed.length) {
+        showToast(`Saved, but ${failed.length} photo${failed.length === 1 ? '' : 's'} did not upload (${failed.join('; ')}). Save again to retry.`, 'error')
+        return
+      }
+      setDirty(false)
+      showToast(id ? `${saved.ncr_number} saved` : `${saved.ncr_number} created`, 'success')
+      navigate(`/ncrs/${ncrId}`)
     } catch (err) {
-      showToast('Failed to close NCR', 'error')
+      showToast(await apiErrorMessage(err, 'Save failed'), 'error')
     } finally {
       setSaving(false)
+      setSaveStatus('')
     }
   }
 
   if (!isNew && isLoading) return <div className="p-4 sm:p-6 text-gray-400">Loading…</div>
+  if (!isNew && (isError || !ncr)) {
+    return (
+      <div className="p-4 sm:p-6 space-y-3">
+        <p className="text-red-500">Could not load this NCR.</p>
+        <button onClick={() => navigate('/ncrs')} className="text-sm text-pdi-navy hover:underline">Back to NCRs</button>
+      </div>
+    )
+  }
+
+  const heading = createdNcr?.ncr_number || (isNew ? 'New NCR' : `Edit ${ncr?.ncr_number}`)
 
   return (
     <div className="min-h-full bg-gray-50/50">
+      <datalist id={SECTION_TITLE_LIST_ID}>
+        {NCR_SECTION_SUGGESTIONS.map(t => <option key={t} value={t} />)}
+      </datalist>
+
       {/* Header — stacks on mobile */}
       <div className="sticky top-0 z-10 bg-white border-b border-gray-200 shadow-sm">
         <div className="px-4 sm:px-6 pt-2 sm:pt-3 flex items-center gap-2 flex-wrap">
           <AlertTriangle size={16} className="text-orange-500 flex-shrink-0" />
-          <span className="font-bold text-pdi-navy text-sm sm:text-base truncate">
-            {isNew ? 'New NCR' : ncr?.ncr_number}
-          </span>
+          <span className="font-bold text-pdi-navy text-sm sm:text-base truncate">{heading}</span>
           {!isNew && ncr?.part_number && (
             <>
               <span className="text-gray-400 hidden sm:inline">·</span>
               <span className="text-xs sm:text-sm text-gray-600 truncate max-w-[40vw] sm:max-w-none">{ncr.part_number}</span>
             </>
           )}
+          {saveStatus && <span className="text-xs text-gray-500 ml-auto">{saveStatus}</span>}
         </div>
         <div className="px-4 sm:px-6 py-2 sm:py-3 flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
           <button
@@ -209,35 +333,25 @@ export default function NCRDetail() {
             title="Save"
             className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-orange-500 text-white rounded-lg hover:bg-orange-600 active:bg-orange-700 disabled:opacity-50 min-h-[40px] flex-shrink-0"
           >
-            <Save size={14} />
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
             <span className="hidden sm:inline">{saving ? 'Saving…' : 'Save'}</span>
           </button>
-          {!isNew && ncr?.status !== 'closed' && (
-            <button
-              onClick={handleClose}
-              disabled={saving}
-              title="Mark Closed"
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 active:bg-green-800 disabled:opacity-50 min-h-[40px] flex-shrink-0"
-            >
-              <CheckCircle size={14} />
-              <span className="hidden sm:inline">Mark Closed</span>
-            </button>
-          )}
           <button
-            onClick={() => navigate('/ncrs')}
-            title="Close"
-            className="ml-auto flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 active:bg-gray-100 min-h-[40px] flex-shrink-0"
+            onClick={handleCancel}
+            disabled={saving}
+            title="Cancel"
+            className="ml-auto flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50 min-h-[40px] flex-shrink-0"
           >
             <X size={14} />
-            <span className="hidden sm:inline">Close</span>
+            <span className="hidden sm:inline">Cancel</span>
           </button>
         </div>
       </div>
 
       <div className="max-w-[900px] mx-auto p-3 sm:p-6 space-y-3 sm:space-y-5">
 
-        {/* ── Inspection Link (new NCRs) ── */}
-        {isNew && (
+        {/* ── Inspection Link (new NCRs, until first saved) ── */}
+        {isNew && !createdNcr && (
           <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-5">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-2 mb-3">
               <h3 className="text-sm sm:text-base font-semibold text-pdi-navy flex items-center gap-2">
@@ -476,6 +590,21 @@ export default function NCRDetail() {
           </div>
         </div>
 
+        {/* Photos — general captioned photos of the non-conformance */}
+        <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-5">
+          <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-0.5 mb-3 sm:mb-4">
+            <h3 className="text-sm sm:text-base font-semibold text-pdi-navy">Photos</h3>
+            <span className="text-xs text-gray-400">Shown under the defect description, numbered as figures</span>
+          </div>
+          <NcrImageEditor
+            images={content.photos}
+            onChange={photos => updateContent(c => ({ ...c, photos }))}
+            onRemove={removePhoto}
+            onError={msg => showToast(msg, 'error')}
+            disabled={saving}
+          />
+        </div>
+
         {/* Disposition & Corrective Action */}
         <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-5">
           <h3 className="text-sm sm:text-base font-semibold text-pdi-navy mb-3 sm:mb-4">Disposition &amp; Corrective Action</h3>
@@ -498,6 +627,39 @@ export default function NCRDetail() {
               className="w-4 h-4 rounded border-gray-300 text-pdi-navy focus:ring-pdi-navy" />
             <span className="text-sm text-gray-700">Corrective action required from supplier</span>
           </label>
+        </div>
+
+        {/* User-created report sections */}
+        <div className="space-y-3 sm:space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-0.5 px-1">
+            <h3 className="text-sm sm:text-base font-semibold text-pdi-navy">Report Sections</h3>
+            <span className="text-xs text-gray-400">e.g. Containment, Root Cause, Corrective Action — each with text and photos</span>
+          </div>
+          {content.sections.length === 0 && (
+            <p className="text-sm text-gray-400 px-1">No sections yet.</p>
+          )}
+          {content.sections.map((section, i) => (
+            <NcrSectionEditor
+              key={section.key}
+              section={section}
+              index={i}
+              count={content.sections.length}
+              disabled={saving}
+              onChange={next => updateContent(c => ({ ...c, sections: c.sections.map(s => (s.key === section.key ? next : s)) }))}
+              onMove={delta => updateContent(c => ({ ...c, sections: moveItem(c.sections, i, delta) }))}
+              onRemove={() => removeSection(section)}
+              onRemoveImage={img => removeSectionImage(section.key, img)}
+              onError={msg => showToast(msg, 'error')}
+            />
+          ))}
+          <button
+            type="button"
+            onClick={addSection}
+            disabled={saving}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium text-pdi-navy bg-white border-2 border-dashed border-gray-200 rounded-xl hover:border-pdi-navy hover:bg-pdi-frost disabled:opacity-50 min-h-[48px]"
+          >
+            <Plus size={16} /> Add Section
+          </button>
         </div>
       </div>
     </div>

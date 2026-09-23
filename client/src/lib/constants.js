@@ -143,6 +143,7 @@ export const NCR_SEVERITY_COLORS = {
 }
 export const NCR_STATUS_LABELS  = { open: 'Open', closed: 'Closed', in_progress: 'In Progress' }
 export const NCR_DISPOSITION_LABELS = {
+  pending: 'Pending',
   accepted_as_is: 'Accepted As-Is',
   rework: 'Rework',
   return_to_supplier: 'Return to Supplier',

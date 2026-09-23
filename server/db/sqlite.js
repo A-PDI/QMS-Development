@@ -189,6 +189,33 @@ function migrateSchema() {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`,
     `CREATE INDEX IF NOT EXISTS idx_ncrs_status ON ncrs(status)`,
+    // User-created NCR report sections (title + free text), in report order.
+    `CREATE TABLE IF NOT EXISTS ncr_sections (
+      id TEXT PRIMARY KEY,
+      ncr_id TEXT NOT NULL REFERENCES ncrs(id) ON DELETE CASCADE,
+      title TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_ncr_sections_ncr ON ncr_sections(ncr_id, sort_order)`,
+    // Captioned NCR photos. section_id NULL = the report's general Photos block.
+    `CREATE TABLE IF NOT EXISTS ncr_images (
+      id TEXT PRIMARY KEY,
+      ncr_id TEXT NOT NULL REFERENCES ncrs(id) ON DELETE CASCADE,
+      section_id TEXT REFERENCES ncr_sections(id) ON DELETE SET NULL,
+      caption TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      file_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      mime_type TEXT,
+      file_size_bytes INTEGER,
+      uploaded_by TEXT,
+      uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_ncr_images_ncr ON ncr_images(ncr_id, section_id, sort_order)`,
     // Engineering drawings (per part number, versioned)
     `CREATE TABLE IF NOT EXISTS engineering_drawings (
       id TEXT PRIMARY KEY,
