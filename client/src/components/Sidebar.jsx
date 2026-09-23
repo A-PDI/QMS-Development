@@ -159,7 +159,7 @@ export default function Sidebar({ open = false, onClose }) {
     <>
       {open && (
         <div
-          className="fixed inset-0 z-40 bg-black/50 md:hidden"
+          className="fixed inset-0 z-40 bg-black/50 md:hidden print:hidden"
           aria-hidden="true"
           onClick={onClose}
         />
@@ -167,7 +167,7 @@ export default function Sidebar({ open = false, onClose }) {
 
       <aside
         className={`
-          fixed inset-y-0 left-0 z-50 w-60 flex flex-col bg-gradient-to-b from-pdi-navy to-pdi-navy-light shadow-xl
+          fixed inset-y-0 left-0 z-50 w-60 flex flex-col bg-gradient-to-b from-pdi-navy to-pdi-navy-light shadow-xl print:hidden
           transform transition-transform duration-200 ease-out
           ${open ? 'translate-x-0' : '-translate-x-full'}
           md:static md:translate-x-0 md:shadow-xl md:flex-shrink-0

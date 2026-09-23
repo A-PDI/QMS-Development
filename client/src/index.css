@@ -70,3 +70,19 @@
     }
   }
 }
+
+/* ── Printing ─────────────────────────────────────────────────────────────────
+   Pages that print (the NCR report) hide the app chrome with Tailwind's
+   `print:` variants. These rules set the paper and keep the report's colours
+   (navy banner, cell hairlines) even when "Background graphics" is off. */
+@media print {
+  @page {
+    size: letter;
+    margin: 0.5in;
+  }
+
+  .ncr-report {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}

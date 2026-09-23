@@ -27,13 +27,13 @@ export default function Layout() {
   }, [drawerOpen])
 
   return (
-    <div className="flex h-screen bg-gray-50 overflow-hidden">
+    <div className="flex h-screen bg-gray-50 overflow-hidden print:block print:h-auto print:overflow-visible print:bg-white">
       <Sidebar open={drawerOpen} onClose={() => setDrawerOpen(false)} />
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 print:block">
         {/* Mobile top bar — hidden on md and up. `app-topbar` adds the status
             bar / notch inset on top of its own padding (see index.css). */}
-        <header className="app-topbar md:hidden flex items-center justify-between bg-white border-b border-gray-200 pr-4 pb-2.5 shadow-sm flex-shrink-0">
+        <header className="app-topbar md:hidden print:hidden flex items-center justify-between bg-white border-b border-gray-200 pr-4 pb-2.5 shadow-sm flex-shrink-0">
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
@@ -57,7 +57,7 @@ export default function Layout() {
 
         {/* `app-scroll-area` keeps the last row of every page clear of the
             home indicator and the browser's bottom chrome. */}
-        <main className="app-scroll-area flex-1 overflow-y-auto">
+        <main className="app-scroll-area flex-1 overflow-y-auto print:overflow-visible print:p-0">
           <Outlet />
         </main>
       </div>
