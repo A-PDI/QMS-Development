@@ -100,8 +100,9 @@ export default function NCREditor() {
   const [showInspSelector, setShowInspSelector] = useState(!searchParams.get('inspection_id'))
 
   // Fetch inspection list for search
+  // Passed inspections have nothing to raise an NCR against, so they are not offered.
   const { data: inspListData } = useInspections(
-    inspSearchActive ? { search: inspSearchActive, limit: 20 } : { limit: 20 },
+    { ...(inspSearchActive ? { search: inspSearchActive } : {}), limit: 20, exclude_disposition: 'PASS' },
     { enabled: isNew && showInspSelector }
   )
   const inspList = inspListData?.inspections || []
@@ -348,7 +349,7 @@ export default function NCREditor() {
         </div>
       </div>
 
-      <div className="max-w-[900px] mx-auto p-3 sm:p-6 space-y-3 sm:space-y-5">
+      <div className="p-3 sm:p-6 space-y-3 sm:space-y-5">
 
         {/* ── Inspection Link (new NCRs, until first saved) ── */}
         {isNew && !createdNcr && (
@@ -538,7 +539,7 @@ export default function NCREditor() {
         {/* Part / PO Info */}
         <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-5">
           <h3 className="text-sm sm:text-base font-semibold text-pdi-navy mb-3 sm:mb-4">Part &amp; Supplier Information</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
             {[
               ['Part Number', 'part_number', 'text'],
               ['Supplier', 'supplier', 'text'],

@@ -19,7 +19,7 @@ function SectionTitle({ children }) {
 function Figure({ image, number, large, onSettled }) {
   return (
     <figure className="break-inside-avoid flex flex-col items-center">
-      <div className={`w-full flex items-end justify-center ${large ? 'max-h-[26rem] print:max-h-[4.2in]' : 'h-56 sm:h-60 print:h-[2.8in]'}`}>
+      <div className={`w-full flex items-end justify-center ${large ? 'max-h-[26rem] print:max-h-[4.2in]' : 'h-56 sm:h-60 xl:h-72 print:h-[2.8in]'}`}>
         <AuthImage
           src={ncrImagePath(image.id)}
           alt={image.caption || `Figure ${number}`}
@@ -39,7 +39,7 @@ function FigureGrid({ images, numbers, onSettled }) {
   if (!images.length) return null
   const single = images.length === 1
   return (
-    <div className={`grid gap-x-4 gap-y-5 ${single ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2 print:grid-cols-2'}`}>
+    <div className={`grid gap-x-4 gap-y-5 ${single ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 print:grid-cols-2'}`}>
       {images.map(img => (
         <Figure key={img.id} image={img} number={numbers.get(img.id)} large={single} onSettled={() => onSettled(img.id)} />
       ))}

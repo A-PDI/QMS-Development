@@ -530,7 +530,7 @@ All endpoints except `/api/auth/*` and `/health` require a valid JWT in the `Aut
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/inspections` | JWT | Paginated list. Query: `status`, `component_type`, `search`, `page`, `limit` (default 20) |
+| GET | `/api/inspections` | JWT | Paginated list. Query: `status`, `component_type`, `search`, `exclude_disposition` (comma-separated codes, e.g. `PASS`), `page`, `limit` (default 20) |
 | POST | `/api/inspections` | JWT | Create new inspection. Body: `{ template_id, part_number, ... }` |
 | GET | `/api/inspections/:id` | JWT | Single inspection with sections, attachments, notes, activity |
 | PATCH | `/api/inspections/:id` | JWT | Update header fields, section_data, or disposition |

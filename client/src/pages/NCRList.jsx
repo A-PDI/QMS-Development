@@ -18,6 +18,19 @@ function NcrBadge({ value, colorMap, labelMap, className = '' }) {
   )
 }
 
+// Desktop table columns. Lower-priority columns appear as the screen widens so
+// the table never scrolls sideways and the actions stay in view; the NCR view
+// and the phone cards show every field.
+const SUPPLIER_COL = 'hidden xl:table-cell'
+const CREATED_COL = 'hidden xl:table-cell'
+const DISPOSITION_COL = 'hidden 2xl:table-cell'
+const CLOSED_COL = 'hidden 2xl:table-cell'
+const TABLE_COLUMNS = [
+  ['NCR #', ''], ['Part Number', ''], ['Supplier', SUPPLIER_COL], ['Description', 'w-full'],
+  ['Severity', ''], ['Disposition', DISPOSITION_COL], ['Status', ''], ['Created', CREATED_COL],
+  ['Closed', CLOSED_COL], ['Actions', ''],
+]
+
 function dispositionLabel(value) {
   return NCR_DISPOSITION_LABELS[value] || value?.replace(/_/g, ' ') || '—'
 }
@@ -154,12 +167,12 @@ export default function NCRList() {
         {/* Results */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           {/* Desktop table */}
-          <div className="hidden md:block overflow-x-auto">
+          <div className="hidden lg:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  {['NCR #', 'Part Number', 'Supplier', 'Description', 'Severity', 'Disposition', 'Status', 'Created', 'Closed', 'Actions'].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
+                  {TABLE_COLUMNS.map(([h, cls]) => (
+                    <th key={h} className={`px-3 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap ${cls}`}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -170,20 +183,20 @@ export default function NCRList() {
                   <tr><td colSpan={10} className="text-center text-gray-400 py-12">No NCRs found</td></tr>
                 ) : ncrs.map(ncr => (
                   <tr key={ncr.id} onClick={() => navigate(`/ncrs/${ncr.id}`)} className="hover:bg-orange-50/40 cursor-pointer">
-                    <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{ncr.ncr_number}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{ncr.part_number || '—'}</td>
-                    <td className="px-4 py-3 text-sm">{ncr.supplier || '—'}</td>
-                    <td className="px-4 py-3 text-sm max-w-xs truncate">{ncr.description_of_defect}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3 font-mono text-xs font-bold text-pdi-navy whitespace-nowrap">{ncr.ncr_number}</td>
+                    <td className="px-3 py-3 font-mono text-xs whitespace-nowrap">{ncr.part_number || '—'}</td>
+                    <td className={`px-3 py-3 text-sm max-w-[12rem] truncate ${SUPPLIER_COL}`}>{ncr.supplier || '—'}</td>
+                    <td className="px-3 py-3 text-sm max-w-0 truncate" title={ncr.description_of_defect}>{ncr.description_of_defect}</td>
+                    <td className="px-3 py-3 whitespace-nowrap">
                       <NcrBadge value={ncr.severity} colorMap={NCR_SEVERITY_COLORS} labelMap={NCR_SEVERITY_LABELS} />
                     </td>
-                    <td className="px-4 py-3 text-xs text-gray-600">{dispositionLabel(ncr.ncr_disposition)}</td>
-                    <td className="px-4 py-3">
+                    <td className={`px-3 py-3 text-xs text-gray-600 whitespace-nowrap ${DISPOSITION_COL}`}>{dispositionLabel(ncr.ncr_disposition)}</td>
+                    <td className="px-3 py-3 whitespace-nowrap">
                       <NcrBadge value={ncr.status} colorMap={NCR_STATUS_COLORS} labelMap={NCR_STATUS_LABELS} />
                     </td>
-                    <td className="px-4 py-3 text-xs text-gray-500">{formatDate(ncr.created_at)}</td>
-                    <td className="px-4 py-3 text-xs text-gray-500">{ncr.closed_at ? formatDate(ncr.closed_at) : '—'}</td>
-                    <td className="px-4 py-2">
+                    <td className={`px-3 py-3 text-xs text-gray-500 whitespace-nowrap ${CREATED_COL}`}>{formatDate(ncr.created_at)}</td>
+                    <td className={`px-3 py-3 text-xs text-gray-500 whitespace-nowrap ${CLOSED_COL}`}>{ncr.closed_at ? formatDate(ncr.closed_at) : '—'}</td>
+                    <td className="px-3 py-2">
                       <RowActions ncr={ncr} downloading={downloadingId === ncr.id} {...actions} />
                     </td>
                   </tr>
@@ -193,7 +206,7 @@ export default function NCRList() {
           </div>
 
           {/* Mobile card list */}
-          <div className="md:hidden divide-y divide-gray-100">
+          <div className="lg:hidden divide-y divide-gray-100">
             {isLoading ? (
               <div className="text-center text-gray-400 py-12 text-sm">Loading…</div>
             ) : ncrs.length === 0 ? (

@@ -64,6 +64,8 @@ const {
   addRepairAttempt,
   linkRetest,
   setCaseStatus,
+  autoLinkRetests,
+  repairRolesForTests,
 } = require('../services/injectorRepairs');
 
 // Roles allowed to reach the Injector Tests feature: the ADMIN role only.
@@ -141,56 +143,6 @@ function buildListFilters(criteria) {
   return { sql, params };
 }
 
-function injectorIdentityKey(partNumber, serialNumber) {
-  return `${String(partNumber || '').trim().toUpperCase()}\u0000${String(serialNumber || '').trim().toUpperCase()}`;
-}
-
-/**
- * Add the current repair state to list rows in one bounded query. This is what
- * lets a newly synced retest announce itself in the list instead of requiring
- * the user to remember which serial number already has an open case.
- */
-function withRepairState(rows) {
-  const activeCases = db.all(
-    `SELECT c.id, c.part_number, c.serial_number, c.status,
-            (SELECT COUNT(*) FROM injector_repair_attempts a
-              WHERE a.repair_case_id = c.id) AS attempt_count,
-            EXISTS(
-              SELECT 1
-                FROM injector_repair_attempts pending
-                JOIN injector_test_reports candidate
-                  ON candidate.part_number = c.part_number COLLATE NOCASE
-                 AND candidate.serial_number = c.serial_number COLLATE NOCASE
-                 AND datetime(candidate.test_datetime) > datetime(pending.repair_date)
-                 AND candidate.id != COALESCE(pending.before_test_id, '')
-               WHERE pending.repair_case_id = c.id
-                 AND pending.status = 'WAITING_RETEST'
-                 AND NOT EXISTS (
-                   SELECT 1 FROM injector_repair_attempts linked
-                    WHERE linked.after_test_id = candidate.id
-                 )
-            ) AS retest_available
-       FROM injector_repair_cases c
-      WHERE c.status IN ('OPEN', 'HOLD', 'ENGINEERING_REVIEW')`,
-    []
-  );
-  const byIdentity = new Map(activeCases.map((repairCase) => [
-    injectorIdentityKey(repairCase.part_number, repairCase.serial_number),
-    repairCase,
-  ]));
-  return rows.map((row) => {
-    const repairCase = byIdentity.get(injectorIdentityKey(row.part_number, row.serial_number));
-    if (!repairCase) return row;
-    return {
-      ...row,
-      repair_case_id: repairCase.id,
-      repair_status: repairCase.status,
-      repair_attempt_count: Number(repairCase.attempt_count) || 0,
-      repair_retest_available: Boolean(repairCase.retest_available),
-    };
-  });
-}
-
 /**
  * Run the row-level query, then apply any test-step criteria in JavaScript —
  * individual steps live inside the stored report JSON, which SQL cannot reach.
@@ -203,7 +155,7 @@ function queryInjectors(criteria) {
   const withSteps = needsStepData(criteria);
   const columns = withSteps ? `${LIST_COLUMNS}, report_json` : LIST_COLUMNS;
 
-  const rows = withRepairState(db.all(
+  const rows = repairRolesForTests(db.all(
     `SELECT ${columns} FROM injector_test_reports WHERE ${BASE_EXCLUSIONS}${filterSql}${LIST_ORDER}`,
     params
   ));
@@ -305,7 +257,14 @@ router.post('/sync', requireAdmin, async (req, res, next) => {
       fullResync: !!full_resync,
       allowLargePrune: !!allow_large_prune,
     });
-    res.json({ ok: true, ...result });
+    // Newly synced results may be the retests repairs are waiting for.
+    let repairsLinked = 0;
+    try {
+      repairsLinked = autoLinkRetests({ user: req.user });
+    } catch (err) {
+      console.error('[InjectorTests] Linking retests after sync failed:', err.message);
+    }
+    res.json({ ok: true, ...result, repairs_linked: repairsLinked });
   } catch (err) {
     return mapCarbonzappError(err, next);
   }

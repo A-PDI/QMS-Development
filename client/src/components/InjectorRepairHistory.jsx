@@ -54,6 +54,15 @@ function resultStyle(status) {
   return 'text-gray-500'
 }
 
+/** True when the attempt's before/after test is the result being viewed. */
+function isViewedTest(attempt, prefix, viewedTest) {
+  if (!viewedTest) return false
+  if (viewedTest.testId && attempt[`${prefix}_test_id`] === viewedTest.testId) return true
+  return viewedTest.reportExtId != null
+    && attempt[`${prefix}_report_ext_id`] === viewedTest.reportExtId
+    && Number(attempt[`${prefix}_slot_position`]) === Number(viewedTest.slotPosition)
+}
+
 function emptyChange(options) {
   return {
     component: options?.components?.[0] || 'Nozzle',
@@ -66,6 +75,7 @@ function RepairAttemptForm({ mode, repairCase, testId, options, onCancel, onSave
   const currentUser = getUser()
   const { showToast } = useToast()
   const [saving, setSaving] = useState(false)
+  const lastRetest = repairCase?.attempts?.[repairCase.attempts.length - 1] || null
   const [form, setForm] = useState({
     repair_date: localDateTimeNow(),
     technician: currentUser?.name || '',
@@ -139,6 +149,11 @@ function RepairAttemptForm({ mode, repairCase, testId, options, onCancel, onSave
           <h3 className="text-sm font-bold text-pdi-navy">
             {mode === 'start' ? 'Start Repair Case · Attempt 1' : `Repair Attempt ${(repairCase?.attempt_count || 0) + 1}`}
           </h3>
+          {mode !== 'start' && lastRetest && (
+            <p className="mt-1 text-xs font-medium text-pdi-navy">
+              Recorded on the {formatInjectorTestDateTime(lastRetest.after_test_datetime)} retest of Repair #{lastRetest.attempt_number}
+            </p>
+          )}
           <p className="mt-1 text-xs text-gray-500">Record what you believe is wrong, what changed, and what you expect the retest to show.</p>
         </div>
         <button type="button" onClick={onCancel} className="rounded-lg px-2 py-1 text-xs text-gray-500 hover:bg-white">Cancel</button>
@@ -296,7 +311,7 @@ function RetestLinker({ attempt, candidates, onLinked }) {
         <div className="min-w-0 flex-1">
           <h4 className="text-sm font-semibold text-blue-900">Link the retest for Repair #{attempt.attempt_number}</h4>
           {!candidates?.length ? (
-            <p className="mt-1 text-sm text-blue-800">No newer matching test is available yet. Sync the CarbonZapp results after this injector is retested.</p>
+            <p className="mt-1 text-sm text-blue-800">Waiting for the next test of this injector. It is linked to this repair automatically when the retest is synced.</p>
           ) : (
             <div className="mt-3 space-y-3">
               <label className="block text-sm text-blue-950">Matching retest
@@ -367,16 +382,26 @@ function DeltaTable({ deltas }) {
   )
 }
 
-export function AttemptCard({ attempt }) {
+export function AttemptCard({ attempt, viewedTest = null }) {
+  const onViewed = isViewedTest(attempt, 'before', viewedTest)
+  const retestViewed = isViewedTest(attempt, 'after', viewedTest)
   return (
-    <article className="relative ml-5 rounded-xl border border-gray-200 bg-white p-3 shadow-sm sm:p-4">
+    <article className={`relative ml-5 rounded-xl border bg-white p-3 shadow-sm sm:p-4 ${onViewed || retestViewed ? 'border-pdi-teal ring-1 ring-pdi-teal' : 'border-gray-200'}`}>
       <span className="absolute -left-[1.85rem] top-4 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-pdi-teal text-white shadow">
         <Wrench size={13} />
       </span>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h4 className="text-sm font-bold text-pdi-navy">Repair #{attempt.attempt_number}</h4>
-          <p className="mt-0.5 text-xs text-gray-500">{formatInjectorTestDateTime(attempt.repair_date)} · {attempt.technician}</p>
+          <h4 className="flex flex-wrap items-center gap-2 text-sm font-bold text-pdi-navy">
+            Repair #{attempt.attempt_number}
+            {onViewed && <span className="rounded-full bg-pdi-teal px-2 py-0.5 text-[11px] font-semibold text-white">Recorded on this result</span>}
+          </h4>
+          {attempt.before_test_datetime && (
+            <p className="mt-0.5 text-xs text-gray-600">
+              On the {formatInjectorTestDateTime(attempt.before_test_datetime)} result ({String(attempt.before_result_status || 'unknown').toUpperCase()})
+            </p>
+          )}
+          <p className="mt-0.5 text-xs text-gray-500">Entered {formatInjectorTestDateTime(attempt.repair_date)} · {attempt.technician}</p>
         </div>
         <span className={`rounded-full px-2 py-1 text-xs font-semibold ${attempt.status === 'COMPLETED' ? resultStyle(attempt.outcome) : 'text-blue-700'}`}>
           {attempt.status === 'COMPLETED' ? attempt.outcome : 'Waiting for retest'}
@@ -411,6 +436,7 @@ export function AttemptCard({ attempt }) {
           <CircleDot size={14} className={resultStyle(attempt.after_result_status)} />
           Retested {formatInjectorTestDateTime(attempt.after_test_datetime)}
           <strong className={resultStyle(attempt.after_result_status)}>{attempt.after_result_status}</strong>
+          {retestViewed && <span className="rounded-full bg-pdi-teal px-2 py-0.5 text-[11px] font-semibold text-white">This result</span>}
         </div>
       )}
       <DeltaTable deltas={attempt.deltas} />
@@ -418,7 +444,7 @@ export function AttemptCard({ attempt }) {
   )
 }
 
-function RepairCase({ repairCase, active, candidates, onRefresh, onAddAttempt }) {
+function RepairCase({ repairCase, active, candidates, viewedTest, onRefresh, onAddAttempt }) {
   const { showToast } = useToast()
   const [status, setStatus] = useState(repairCase.status)
   const [updating, setUpdating] = useState(false)
@@ -493,7 +519,7 @@ function RepairCase({ repairCase, active, candidates, onRefresh, onAddAttempt })
           <div className="text-xs font-semibold uppercase tracking-wide text-red-700">Initial failed test</div>
           <div className="mt-0.5 text-sm text-gray-700">{formatInjectorTestDateTime(repairCase.initial_test_datetime)}</div>
         </div>
-        {(repairCase.attempts || []).map((attempt) => <AttemptCard key={attempt.id} attempt={attempt} />)}
+        {(repairCase.attempts || []).map((attempt) => <AttemptCard key={attempt.id} attempt={attempt} viewedTest={viewedTest} />)}
         {repairCase.status === 'PASSED' && (
           <div className="relative ml-5 rounded-lg border border-green-200 bg-green-50 px-3 py-2.5">
             <span className="absolute -left-[1.85rem] top-3 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-green-600 text-white shadow"><CheckCircle2 size={13} /></span>
@@ -563,7 +589,7 @@ export default function InjectorRepairHistory({ testId }) {
               <Wrench size={16} /> Start Repair
             </button>
           ) : (
-            <p className="mt-3 text-xs text-gray-400">A repair case can be started from a failed test with a serial number.</p>
+            <p className="mt-3 text-xs text-gray-400">A repair case can be started from a failed test with a serial number that is newer than any repair already recorded for the injector.</p>
           )}
         </div>
       )}
@@ -572,6 +598,7 @@ export default function InjectorRepairHistory({ testId }) {
         <RepairCase key={repairCase.id} repairCase={repairCase}
           active={repairCase.id === data.active_case_id}
           candidates={repairCase.id === data.active_case_id ? data.candidate_retests : []}
+          viewedTest={data.test}
           onRefresh={refresh}
           onAddAttempt={(selectedCase) => { setFormCase(selectedCase); setFormMode('next') }} />
       ))}

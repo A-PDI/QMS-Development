@@ -50,6 +50,7 @@ router.get('/', (req, res, next) => {
       date_from,
       date_to,
       search,
+      exclude_disposition,
       sort_by,
       sort_dir,
       page = 1,
@@ -68,6 +69,17 @@ router.get('/', (req, res, next) => {
         " AND (part_number LIKE ? OR po_number LIKE ? OR inspector_name LIKE ? OR lot_serial_no LIKE ?)";
       const s = `%${search}%`;
       params.push(s, s, s, s);
+    }
+    // Comma-separated disposition codes to leave out (e.g. the NCR inspection
+    // picker skips PASS). Case-insensitive; inspections with no disposition yet
+    // are always kept.
+    if (exclude_disposition) {
+      const codes = String(exclude_disposition).split(',')
+        .map((code) => code.trim().toUpperCase()).filter(Boolean).slice(0, 10);
+      if (codes.length) {
+        sql += ` AND UPPER(TRIM(COALESCE(disposition, ''))) NOT IN (${codes.map(() => '?').join(', ')})`;
+        params.push(...codes);
+      }
     }
     // Sorting — whitelist columns to avoid SQL injection.
     const SORTABLE = {

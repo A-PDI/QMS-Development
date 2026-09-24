@@ -196,4 +196,12 @@ app.listen(PORT, () => {
   } catch (err) {
     console.error('[Startup] Migration error:', err.message);
   }
+  // Link any injector repair whose retest was synced before the repair was
+  // recorded (these were previously left waiting).
+  try {
+    const linked = require('./services/injectorRepairs').autoLinkRetests();
+    if (linked) console.log(`[Startup] Linked ${linked} injector repair(s) to their retest.`);
+  } catch (err) {
+    console.error('[Startup] Linking injector retests failed:', err.message);
+  }
 });
