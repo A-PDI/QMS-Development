@@ -596,3 +596,27 @@ test('the workbook and step routes are admin-only like every other injector rout
     });
   }
 });
+
+test('a serial filter also finds the same unit entered differently', async () => {
+  resetInjectorData();
+  const add = (id, part, serial) => carbonzapp.upsertReports([benchReport({
+    id, serial, part, datetime: '2026-09-20T10:00:00Z', flow: { IVM01: 235 },
+  })]);
+  add('unit-a', '4327147', '260521828A');
+  add('unit-b', '4327147', '828');
+  add('unit-c', '4327147', '260521828');
+  add('unit-other', '4327147', '260777000');
+  add('other-part', '9999999', '828');
+  await withUser(ADMIN, async (url) => {
+    const get = async (query) => (await fetch(`${url}/api/injector-tests${query}`)).json();
+    const rows = (await get('?serial_number=260521828A')).injectors;
+    assert.deepStrictEqual(
+      rows.map((r) => `${r.part_number}/${r.serial_number}`).sort(),
+      ['4327147/260521828', '4327147/260521828A', '4327147/828'],
+      "the unit's other spellings are included; another part's 828 is not"
+    );
+    const bySerial = Object.fromEntries(rows.map((r) => [r.serial_number, r.serial_unit_match]));
+    assert.deepStrictEqual(bySerial['828'], ['260521828A'], 'rows found as the same unit say which typed serial they matched');
+    assert.deepStrictEqual(bySerial['260521828'], ['260521828A']);
+  });
+});

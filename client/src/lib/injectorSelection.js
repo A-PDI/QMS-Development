@@ -85,6 +85,19 @@ function matchesAnyToken(value, tokens) {
  * not part of a list row, so the server resolves them (see buildInjectorQuery)
  * and returns rows that already satisfy them.
  */
+/**
+ * True when the server returned this row as the same unit as one of the typed
+ * serials, entered differently (260521828A = 260521828 = 828). The server
+ * names the typed serials it matched, so a row kept from an earlier search
+ * does not slip through a different one.
+ */
+function matchesAsSameUnit(injector, serials) {
+  const matched = Array.isArray(injector?.serial_unit_match) ? injector.serial_unit_match : []
+  if (!matched.length || !serials.length) return false
+  const typed = new Set(serials.map((s) => String(s).toLowerCase()))
+  return matched.some((s) => typed.has(String(s).toLowerCase()))
+}
+
 export function filterInjectors(injectors = [], {
   partNumber = '',
   serialNumber = '',
@@ -100,7 +113,7 @@ export function filterInjectors(injectors = [], {
 
   return sortByTestDate(injectors).filter((injector) => {
     if (!matchesAnyToken(injector?.part_number, parts)) return false
-    if (!matchesAnyToken(injector?.serial_number, serials)) return false
+    if (!matchesAnyToken(injector?.serial_number, serials) && !matchesAsSameUnit(injector, serials)) return false
     const date = testDate(injector?.test_datetime)
     if (from && (!date || date < from)) return false
     if (to && (!date || date > to)) return false

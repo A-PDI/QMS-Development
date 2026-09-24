@@ -4,9 +4,9 @@ const db = require('../db/adapter');
 const ExcelJS = require('exceljs');
 const { AppError } = require('../middleware/error');
 const { getSetting } = require('./carbonzapp');
+const { unitKeyer } = require('./injectorUnits');
 
 const clean = (value) => String(value ?? '').trim();
-const identity = (row) => JSON.stringify([clean(row.part_number).toUpperCase(), clean(row.serial_number).toUpperCase()]);
 const status = (value) => ['PASS', 'FAIL', 'DNF'].includes(String(value).toUpperCase()) ? String(value).toUpperCase() : 'UNKNOWN';
 const counts = () => ({ PASS: 0, FAIL: 0, DNF: 0, UNKNOWN: 0 });
 const pct = (n, d) => d ? n / d * 100 : null;
@@ -64,6 +64,11 @@ function changed(change) {
 /** One consistent cohort powers cards, charts, tables and the workbook. */
 function buildInjectorAnalytics(input = {}, includeDetails = false) {
   const config = filters(input);
+  // One injector per physical unit, however its serial was entered
+  // (260521828A = 260521828 = 828) — see services/injectorUnits.js.
+  const identity = unitKeyer(db.all(
+    `SELECT part_number, serial_number FROM injector_test_reports WHERE COALESCE(serial_number, '') != ''
+     UNION SELECT part_number, serial_number FROM injector_repair_cases`, []));
   const testScope = scope('t', 'test_datetime', config, true);
   const caseScope = scope('c', 'initial_test_datetime', config);
   const tests = db.all(`SELECT id, report_ext_id, slot_position, part_number, serial_number, test_datetime, result_status

@@ -333,3 +333,49 @@ test('a new repair case cannot start on a result older than the recorded history
   const laterFailure = importTest({ id: 'older-4', datetime: '2026-09-13T10:00:00Z', peakHp: 256 });
   assert.strictEqual(getQuickEntry(laterFailure.id).can_save, true);
 });
+
+// ── One unit, serial entered differently (260521828A = 260521828 = 828) ─────
+
+test('a repair follows the unit across different spellings of its serial', () => {
+  reset();
+  const first = importTest({ id: 'spell-1', serial: '260521828A', datetime: '2026-09-20T10:00:00-05:00', peakHp: 255 });
+  const second = importTest({ id: 'spell-2', serial: '828', datetime: '2026-09-20T11:00:00-05:00', peakHp: 245 });
+  const third = importTest({ id: 'spell-3', serial: '260521828', datetime: '2026-09-20T12:00:00-05:00', peakHp: 235 });
+  importTest({ id: 'spell-other', serial: '260777000', datetime: '2026-09-20T11:30:00-05:00', peakHp: 235 });
+
+  const opened = saveQuickEntry(first.id, quickPayload(), ADMIN);
+  assert.strictEqual(opened.attempts[0].after_test_id, second.id, '"828" is linked as the retest of 260521828A');
+  assert.strictEqual(opened.attempts[0].after_serial_number, '828');
+  assert.strictEqual(getRepairHistory(second.id).active_case_id, opened.id, 'the case shows from the "828" result');
+  assert.throws(
+    () => createRepairCase({ initial_test_id: second.id, attempt: attemptPayload('2026-09-21T09:00:00Z') }, ADMIN),
+    /already has an active repair case/,
+    'a second case cannot be opened for the same unit under another spelling'
+  );
+
+  const closed = saveQuickEntry(second.id, quickPayload(), ADMIN);
+  assert.strictEqual(closed.status, 'PASSED');
+  assert.strictEqual(closed.final_test_id, third.id);
+  assert.deepStrictEqual(
+    repairRolesForTests(db.all("SELECT * FROM injector_test_reports WHERE report_ext_id LIKE 'spell-%' ORDER BY test_datetime", []))
+      .map((row) => [row.serial_number, row.repair_attempt_number || null, row.retest_of_attempt || null]),
+    [['260521828A', 1, null], ['828', 2, 1], ['260777000', null, null], ['260521828', null, 2]]
+  );
+});
+
+test('a short serial two units could own is not linked to either', () => {
+  reset();
+  importTest({ id: 'amb-other', serial: '260777828', datetime: '2026-09-20T09:00:00-05:00', peakHp: 235 });
+  const failed = importTest({ id: 'amb-1', serial: '260521828', datetime: '2026-09-20T10:00:00-05:00', peakHp: 255 });
+  const repairCase = saveQuickEntry(failed.id, quickPayload(), ADMIN);
+  importTest({ id: 'amb-2', serial: '828', datetime: '2026-09-20T11:00:00-05:00', peakHp: 235 });
+
+  assert.strictEqual(autoLinkRetests(), 0, '"828" could be 260521828 or 260777828');
+  assert.deepStrictEqual(getRepairHistory(failed.id).candidate_retests, []);
+  assert.strictEqual(loadCase(repairCase.id).attempts[0].status, 'WAITING_RETEST');
+
+  // A spelling that can only be this unit still links.
+  const exact = importTest({ id: 'amb-3', serial: '260521828-A', datetime: '2026-09-20T12:00:00-05:00', peakHp: 235 });
+  assert.strictEqual(autoLinkRetests(), 1);
+  assert.strictEqual(loadCase(repairCase.id).final_test_id, exact.id);
+});

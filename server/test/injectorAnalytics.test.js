@@ -177,3 +177,16 @@ test('Excel export uses the same aggregates and includes definitions and raw evi
   assert.ok(workbook.getWorksheet('Measurements').rowCount > 4);
   assert.ok(workbook.getWorksheet('Test evidence').rowCount > 4);
 });
+
+test('an injector is counted once however its serial was entered', () => {
+  reset();
+  result('unit-1', '260521828A', '01');       // fails
+  result('unit-2', '828', '02', 235);         // same unit, passes
+  result('unit-3', '260521828', '03', 235);   // same unit, passes
+  result('other-1', '260777000', '01', 235);  // a different injector
+  const report = buildInjectorAnalytics(WINDOW);
+  assert.equal(report.testing.test_runs, 4);
+  assert.equal(report.testing.unique_injectors, 2);
+  assert.deepEqual(report.testing.first_outcomes, { PASS: 1, FAIL: 1, DNF: 0, UNKNOWN: 0 });
+  assert.deepEqual(report.testing.latest_outcomes, { PASS: 2, FAIL: 0, DNF: 0, UNKNOWN: 0 });
+});
