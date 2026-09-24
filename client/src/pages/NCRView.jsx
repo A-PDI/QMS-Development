@@ -161,7 +161,7 @@ export default function NCRView() {
         </div>
       </div>
 
-      <div className="max-w-[900px] mx-auto p-3 sm:p-6 print:p-0 print:max-w-none">
+      <div className="p-3 sm:p-6 print:p-0">
         <NcrReport ncr={ncr} onReadyChange={onReadyChange} />
         {ncr.inspection_id && (
           <p className="mt-3 text-xs text-gray-500 print:hidden">

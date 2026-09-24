@@ -34,7 +34,7 @@ export default function NcrImageEditor({ images, onChange, onRemove, onError, di
   return (
     <div className="space-y-3">
       {images.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
           {images.map((img, i) => (
             <div key={img.key} className="border border-gray-200 rounded-lg overflow-hidden bg-white flex flex-col">
               <div className="relative bg-gray-100 aspect-[4/3] overflow-hidden">

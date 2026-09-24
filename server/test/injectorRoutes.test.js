@@ -306,10 +306,13 @@ test('repair routes create a case, offer a matching retest and close on pass', a
     assert.strictEqual(history.active_case_id, created.id);
     assert.strictEqual(history.candidate_retests.length, 1);
     const listWithRetest = await (await fetch(`${url}/api/injector-tests`)).json();
-    const flagged = listWithRetest.injectors.find((row) => row.id === before.id);
-    assert.strictEqual(flagged.repair_status, 'OPEN');
-    assert.strictEqual(flagged.repair_attempt_count, 1);
-    assert.strictEqual(flagged.repair_retest_available, true);
+    const repairedRow = listWithRetest.injectors.find((row) => row.id === before.id);
+    assert.strictEqual(repairedRow.repair_attempt_number, 1, 'the repair shows on the result it was recorded on');
+    assert.strictEqual(repairedRow.repair_attempt_status, 'WAITING_RETEST');
+    assert.strictEqual(repairedRow.repair_case_status, 'OPEN');
+    const retestRow = listWithRetest.injectors.find((row) => row.id === history.candidate_retests[0].id);
+    assert.strictEqual(retestRow.repair_attempt_number, undefined, 'a later result does not inherit the repair');
+    assert.strictEqual(retestRow.retest_of_attempt, undefined, 'nor is it a retest until linked');
 
     const linkedResponse = await fetch(`${url}/api/injector-tests/repairs/attempts/${created.attempts[0].id}/retest`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -320,6 +323,12 @@ test('repair routes create a case, offer a matching retest and close on pass', a
     assert.strictEqual(linked.status, 'PASSED');
     assert.strictEqual(linked.attempts[0].outcome, 'PASS');
     assert.strictEqual(linked.attempts[0].deltas.find((row) => row.step_code === 'IVM01').absolute_delta, -15);
+
+    const listAfterPass = await (await fetch(`${url}/api/injector-tests`)).json();
+    const passRow = listAfterPass.injectors.find((row) => row.id === history.candidate_retests[0].id);
+    assert.strictEqual(passRow.retest_of_attempt, 1);
+    assert.strictEqual(passRow.retest_outcome, 'PASS');
+    assert.strictEqual(listAfterPass.injectors.find((row) => row.id === before.id).repair_attempt_status, 'COMPLETED');
   });
 });
 

@@ -11,6 +11,7 @@ import api from '../lib/api'
 import { useToast } from '../hooks/useToast'
 import { chooseSaveTarget, writeBlobToTarget, deriveFilename } from '../lib/download'
 import { describeConnectionResult, describeSyncResult } from '../lib/syncStatus'
+import { repairBadge, linkedRepairsMessage } from '../lib/injectorRepairBadge'
 import { formatInjectorTestDateTime } from '../lib/injectorDateTime'
 import InjectorRepairHistory from '../components/InjectorRepairHistory'
 import InjectorQuickEntry from '../components/InjectorQuickEntry'
@@ -285,13 +286,15 @@ export default function InjectorTests() {
       const { data: res } = await api.post('/injector-tests/sync', body)
 
       const outcome = describeSyncResult(res, { fullResync })
-      setStatusMsg({ type: outcome.type, text: outcome.text })
+      const linked = linkedRepairsMessage(res.repairs_linked)
+      setStatusMsg({ type: outcome.type, text: linked ? `${outcome.text} ${linked}` : outcome.text })
       // A held-back prune offers a confirm button below the banner.
       setPendingPrune(res.pruneSkipped?.reason === 'large_prune' ? res.pruneSkipped : null)
       showToast(outcome.toast, outcome.type === 'success' ? 'success' : 'info')
       qc.invalidateQueries({ queryKey: ['injector-tests'] })
       qc.invalidateQueries({ queryKey: ['injector-tests-steps'] })
       qc.invalidateQueries({ queryKey: ['injector-tests-settings'] })
+      if (res.repairs_linked) qc.invalidateQueries({ queryKey: ['injector-repair-history'] })
     } catch (err) {
       const msg = await errorMessageFrom(err, 'Sync failed.')
       if (err?.response?.data?.code === 'NO_API_KEY') {
@@ -1483,8 +1486,9 @@ function InjectorFlowBadge({ injector }) {
   const status = String(result_status || (overall_pass === 1 ? 'pass' : (overall_pass === 0 ? 'fail' : 'unknown'))).toLowerCase()
   if (!hasTestResults(injector) || status === 'unknown') {
     return (
-      <span className="inline-flex items-center gap-1 text-xs text-gray-500">
+      <span className="inline-flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
         <span className="text-gray-400">No result</span>
+        <RepairRoleBadge injector={injector} />
       </span>
     )
   }
@@ -1496,16 +1500,25 @@ function InjectorFlowBadge({ injector }) {
           ? <span className="inline-flex items-center gap-1 bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium"><AlertTriangle size={12} /> DNF</span>
           : <span className="inline-flex items-center gap-1 bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium"><XCircle size={12} /> Failed</span>}
       <span className="text-gray-500">{steps_passed}/{steps_total} steps</span>
-      {injector.repair_status && (
-        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium ${injector.repair_retest_available
-          ? 'bg-blue-100 text-blue-800'
-          : 'bg-purple-100 text-purple-800'}`}>
-          <Wrench size={11} />
-          {injector.repair_retest_available
-            ? `Retest ready · Repair #${injector.repair_attempt_count}`
-            : `${String(injector.repair_status).replaceAll('_', ' ')} · Repair #${injector.repair_attempt_count}`}
-        </span>
-      )}
+      <RepairRoleBadge injector={injector} />
+    </span>
+  )
+}
+
+const REPAIR_BADGE_STYLES = {
+  repair: 'bg-purple-100 text-purple-800',
+  retest: 'bg-blue-100 text-blue-800',
+  pass: 'bg-green-100 text-green-800',
+}
+
+/** This result's own part in a repair — never the injector's whole case. */
+function RepairRoleBadge({ injector }) {
+  const badge = repairBadge(injector)
+  if (!badge) return null
+  return (
+    <span title={badge.title} className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium ${REPAIR_BADGE_STYLES[badge.tone]}`}>
+      {badge.tone === 'pass' ? <CheckCircle2 size={11} /> : <Wrench size={11} />}
+      {badge.label}
     </span>
   )
 }

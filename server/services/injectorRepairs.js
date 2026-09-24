@@ -97,6 +97,31 @@ function activeCaseFor(test) {
   );
 }
 
+/**
+ * The newest test already in this injector's repair history (any case). A new
+ * repair case has to start on a later result, so repairs and retests always
+ * run forward in test order.
+ */
+function latestHistoryTestAt(test) {
+  const row = db.get(
+    `SELECT MAX(datetime(COALESCE(a.after_test_datetime, a.before_test_datetime))) AS latest
+       FROM injector_repair_attempts a
+       JOIN injector_repair_cases c ON c.id = a.repair_case_id
+      WHERE c.part_number = ? COLLATE NOCASE AND c.serial_number = ? COLLATE NOCASE`,
+    [test.part_number || '', test.serial_number || '']
+  );
+  return row && row.latest ? row.latest : null;
+}
+
+function isOlderThanHistory(test) {
+  const latest = latestHistoryTestAt(test);
+  if (!latest) return false;
+  // SQLite's datetime() is UTC without a zone marker.
+  return new Date(test.test_datetime || 0) <= new Date(`${latest.replace(' ', 'T')}Z`);
+}
+
+const OLDER_THAN_HISTORY = 'This result is not newer than the repair history already recorded for this injector. Start a new repair on a later result.';
+
 function normaliseCategories(values) {
   const source = Array.isArray(values) ? values : [];
   return [...new Set(source.map((value) => text(value, 100)).filter(Boolean))].slice(0, 20);
@@ -270,6 +295,9 @@ function createRepairCase(payload, user) {
   if (activeCaseFor(initialTest)) {
     throw new AppError('This injector already has an active repair case.', 409, 'ACTIVE_REPAIR_CASE');
   }
+  if (isOlderThanHistory(initialTest)) {
+    throw new AppError(OLDER_THAN_HISTORY, 409, 'OLDER_THAN_HISTORY');
+  }
 
   const attemptInput = normaliseAttemptInput(payload && payload.attempt, user);
   if (new Date(attemptInput.repairDate) < new Date(initialTest.test_datetime || 0)) {
@@ -293,6 +321,7 @@ function createRepairCase(payload, user) {
         now, user && user.id ? user.id : null, text(user && user.name, 120) || null, now]
     );
     createAttemptRecord(caseId, 1, initialTest, attemptInput, user);
+    autoLinkRetests({ caseId, user });
   });
   return loadCase(caseId);
 }
@@ -322,6 +351,7 @@ function addRepairAttempt(caseId, payload, user) {
   withTransaction(() => {
     createAttemptRecord(repairCase.id, Number(previous.attempt_number) + 1, beforeTest, input, user);
     db.run('UPDATE injector_repair_cases SET updated_at = ? WHERE id = ?', [now, repairCase.id]);
+    autoLinkRetests({ caseId: repairCase.id, user });
   });
   return loadCase(repairCase.id);
 }
@@ -354,8 +384,11 @@ function linkRetest(attemptId, payload, user) {
   if (!sameIdentity(repairCase, afterTest)) {
     throw new AppError('The selected retest does not match this injector part and serial number.', 400, 'IDENTITY_MISMATCH');
   }
-  if (new Date(afterTest.test_datetime || 0) <= new Date(attempt.repair_date)) {
-    throw new AppError('The retest must have occurred after the repair.', 400, 'INVALID_RETEST_DATE');
+  // A repair belongs to the result it was recorded on, so its retest is any
+  // later result. The entered repair date is not used here: it defaults to the
+  // time of data entry, which is often after the retest was already run.
+  if (new Date(afterTest.test_datetime || 0) <= new Date(repairedAt(attempt))) {
+    throw new AppError('The retest must be a later test than the result this repair was recorded on.', 400, 'INVALID_RETEST_DATE');
   }
   const alreadyUsed = db.get(
     'SELECT id FROM injector_repair_attempts WHERE after_test_id = ? AND id != ?',
@@ -498,23 +531,114 @@ function loadCase(caseId) {
   };
 }
 
+/** When the result a repair was recorded on was tested (the repair follows it). */
+function repairedAt(attempt) {
+  return attempt.before_test_datetime || attempt.repair_date;
+}
+
+/** Later results for the injector that are not already some repair's retest, oldest first. */
 function candidateRetests(repairCase, attempt) {
   if (!repairCase || !attempt || attempt.status !== 'WAITING_RETEST') return [];
   return db.all(
-    `SELECT id, report_ext_id, slot_position, part_number, serial_number,
-            test_datetime, result_status, steps_total, steps_passed, steps_failed
-       FROM injector_test_reports
-      WHERE part_number = ? COLLATE NOCASE
-        AND serial_number = ? COLLATE NOCASE
-        AND datetime(test_datetime) > datetime(?)
-        AND id != ?
-        AND id NOT IN (
-          SELECT after_test_id FROM injector_repair_attempts WHERE after_test_id IS NOT NULL
+    `SELECT r.id, r.report_ext_id, r.slot_position, r.part_number, r.serial_number,
+            r.test_datetime, r.result_status, r.steps_total, r.steps_passed, r.steps_failed
+       FROM injector_test_reports r
+      WHERE r.part_number = ? COLLATE NOCASE
+        AND r.serial_number = ? COLLATE NOCASE
+        AND datetime(r.test_datetime) > datetime(?)
+        AND r.id != ?
+        AND NOT EXISTS (
+          SELECT 1 FROM injector_repair_attempts used
+           WHERE used.after_test_id = r.id
+              OR (used.after_report_ext_id = r.report_ext_id AND used.after_slot_position = r.slot_position)
         )
-      ORDER BY datetime(test_datetime) ASC, report_ext_id ASC, slot_position ASC`,
+      ORDER BY datetime(r.test_datetime) ASC, r.report_ext_id ASC, r.slot_position ASC`,
     [repairCase.part_number || '', repairCase.serial_number || '',
-      attempt.repair_date, attempt.before_test_id || '']
+      repairedAt(attempt), attempt.before_test_id || '']
   );
+}
+
+/**
+ * Link every repair still waiting for a retest to the next result for that
+ * injector, when one has been synced. Runs after a repair is recorded, after a
+ * CarbonZapp sync and at startup. Returns how many repairs were linked.
+ */
+function autoLinkRetests({ caseId = null, user = null } = {}) {
+  const waiting = db.all(
+    `SELECT a.id FROM injector_repair_attempts a
+       JOIN injector_repair_cases c ON c.id = a.repair_case_id
+      WHERE a.status = 'WAITING_RETEST'
+        AND c.status IN ('OPEN', 'HOLD', 'ENGINEERING_REVIEW')
+        ${caseId ? 'AND c.id = ?' : ''}
+      ORDER BY datetime(a.repair_date) ASC`,
+    caseId ? [caseId] : []
+  );
+  let linked = 0;
+  for (const { id } of waiting) {
+    const attempt = db.get('SELECT * FROM injector_repair_attempts WHERE id = ?', [id]);
+    const repairCase = attempt && db.get('SELECT * FROM injector_repair_cases WHERE id = ?', [attempt.repair_case_id]);
+    const [retest] = candidateRetests(repairCase, attempt);
+    if (!retest) continue;
+    try {
+      linkRetest(attempt.id, { after_test_id: retest.id }, user);
+      linked += 1;
+    } catch (err) {
+      console.warn(`[Repairs] Could not link a retest to repair attempt ${attempt.id}:`, err.message);
+    }
+  }
+  return linked;
+}
+
+function identityKey(reportExtId, slotPosition) {
+  return reportExtId == null ? null : `${reportExtId}\u0000${Number(slotPosition) || 0}`;
+}
+
+/**
+ * Each result's own part in a repair, for the test list:
+ *   repair_attempt_number  the repair recorded on this result
+ *   retest_of_attempt      the repair this result is the retest of
+ * A result with neither gets nothing — a repair is never stamped onto every
+ * result for the injector. Matching falls back to report id + slot, so it
+ * survives Clear All and a re-import.
+ */
+function repairRolesForTests(rows) {
+  if (!rows.length) return rows;
+  const attempts = db.all(
+    `SELECT a.repair_case_id, a.attempt_number, a.status, a.outcome,
+            a.before_test_id, a.before_report_ext_id, a.before_slot_position,
+            a.after_test_id, a.after_report_ext_id, a.after_slot_position,
+            c.status AS case_status
+       FROM injector_repair_attempts a
+       JOIN injector_repair_cases c ON c.id = a.repair_case_id`,
+    []
+  );
+  const lookup = (prefix) => {
+    const byId = new Map();
+    const byIdentity = new Map();
+    for (const attempt of attempts) {
+      if (attempt[`${prefix}_test_id`]) byId.set(attempt[`${prefix}_test_id`], attempt);
+      const key = identityKey(attempt[`${prefix}_report_ext_id`], attempt[`${prefix}_slot_position`]);
+      if (key) byIdentity.set(key, attempt);
+    }
+    return (row) => byId.get(row.id) || byIdentity.get(identityKey(row.report_ext_id, row.slot_position)) || null;
+  };
+  const repairOn = lookup('before');
+  const retestOf = lookup('after');
+  return rows.map((row) => {
+    const repair = repairOn(row);
+    const retest = retestOf(row);
+    if (!repair && !retest) return row;
+    const owner = repair || retest;
+    return {
+      ...row,
+      repair_case_id: owner.repair_case_id,
+      repair_case_status: owner.case_status,
+      repair_attempt_number: repair ? Number(repair.attempt_number) : null,
+      repair_attempt_status: repair ? repair.status : null,
+      retest_of_attempt: retest ? Number(retest.attempt_number) : null,
+      retest_outcome: retest ? retest.outcome : null,
+    };
+  });
 }
 
 function getRepairHistory(testId) {
@@ -535,7 +659,7 @@ function getRepairHistory(testId) {
     cases,
     active_case_id: activeCase ? activeCase.id : null,
     candidate_retests: candidateRetests(activeCase, waitingAttempt),
-    can_start: statusOfTest(test) === 'FAIL' && !!test.serial_number && !activeCase,
+    can_start: statusOfTest(test) === 'FAIL' && !!test.serial_number && !activeCase && !isOlderThanHistory(test),
     options: { components: COMPONENT_OPTIONS, actions: ACTION_OPTIONS },
   };
 }
@@ -562,21 +686,18 @@ function quickEntryContext(testId) {
     reason = 'Quick Entry records repairs after an unsuccessful test. Use Repair History to link a passing retest.';
   } else if (previous) {
     if (previous.status === 'WAITING_RETEST') {
-      if (matchesSavedTest(test, previous, 'before') || !candidateRetests(repairCase, previous).some((row) => row.id === test.id)) {
-        reason = 'Measurements have already been recorded for this repair. Run and sync a new retest before recording the next repair.';
-      } else linkPrevious = true;
+      if (matchesSavedTest(test, previous, 'before')) {
+        reason = `Repair #${previous.attempt_number} is already recorded on this result. Run and sync the retest, then record the next repair on that result.`;
+      } else if (candidateRetests(repairCase, previous).some((row) => row.id === test.id)) {
+        linkPrevious = true;
+      } else {
+        reason = `This result is older than Repair #${previous.attempt_number}. Record repairs on the latest result for this injector.`;
+      }
     } else if (!matchesSavedTest(test, previous, 'after')) {
-      reason = 'Open Quick Entry on the latest linked retest to record the next repair.';
+      reason = `Record Repair #${Number(previous.attempt_number) + 1} on the retest of Repair #${previous.attempt_number}.`;
     }
-  } else {
-    const saved = db.all(
-      `SELECT a.* FROM injector_repair_attempts a JOIN injector_repair_cases c ON c.id = a.repair_case_id
-        WHERE c.part_number = ? COLLATE NOCASE AND c.serial_number = ? COLLATE NOCASE`,
-      [test.part_number || '', test.serial_number]
-    );
-    if (saved.some((attempt) => matchesSavedTest(test, attempt, 'before') || matchesSavedTest(test, attempt, 'after'))) {
-      reason = 'This test is already part of a repair history. Select a new failed test to start another case.';
-    }
+  } else if (isOlderThanHistory(test)) {
+    reason = OLDER_THAN_HISTORY;
   }
   return { test, repairCase, previous, reason, linkPrevious };
 }
@@ -652,4 +773,6 @@ module.exports = {
   loadCase,
   getQuickEntry,
   saveQuickEntry,
+  autoLinkRetests,
+  repairRolesForTests,
 };

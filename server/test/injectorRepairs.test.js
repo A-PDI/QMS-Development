@@ -15,6 +15,8 @@ const {
   getQuickEntry,
   saveQuickEntry,
   setCaseStatus,
+  autoLinkRetests,
+  repairRolesForTests,
 } = require('../services/injectorRepairs');
 
 const ADMIN = { id: 'u-admin', name: 'Alex Admin', role: 'admin' };
@@ -107,7 +109,7 @@ test('quick entry records six measurements, identity, and immutable repair round
   assert.strictEqual(first.attempts[0].changes[0].before_value, '0');
   assert.strictEqual(first.attempts[0].changes[0].action_type, 'No Change');
   assert.strictEqual(getQuickEntry(initial.id).can_save, false);
-  assert.throws(() => saveQuickEntry(initial.id, quickPayload('2026-09-11T11:30:00Z'), ADMIN), /already been recorded/);
+  assert.throws(() => saveQuickEntry(initial.id, quickPayload('2026-09-11T11:30:00Z'), ADMIN), /already recorded on this result/);
 
   const retest = importTest({ id: 'quick-second', datetime: '2026-09-11T12:00:00Z', peakHp: 245 });
   assert.strictEqual(getQuickEntry(retest.id).links_previous_retest, true);
@@ -227,4 +229,107 @@ test('repair history and calculated evidence survive clearing the CarbonZapp cac
   assert.strictEqual(delta.before_value, 250);
   assert.strictEqual(delta.after_value, 235);
   assert.strictEqual(delta.correction_effectiveness, 75);
+});
+
+// ── Repairs belong to the result they were recorded on ──────────────────────
+
+/** Each result's repair role, oldest test first, as the test list shows it. */
+function roles(serial = 'FIX001') {
+  return repairRolesForTests(db.all(
+    'SELECT * FROM injector_test_reports WHERE serial_number = ? ORDER BY datetime(test_datetime) ASC',
+    [serial]
+  )).map((row) => [row.report_ext_id, row.repair_attempt_number || null, row.retest_of_attempt || null, row.retest_outcome || null]);
+}
+
+test('a repair recorded after its retest was synced still links to that retest', () => {
+  reset();
+  const failed = importTest({ id: 'late-entry-before', datetime: '2026-09-11T10:00:00Z', peakHp: 255 });
+  const retest = importTest({ id: 'late-entry-retest', datetime: '2026-09-11T12:00:00Z', peakHp: 245 });
+
+  // The technician enters the repair the next day — after the retest ran.
+  const repairCase = createRepairCase({
+    initial_test_id: failed.id,
+    attempt: attemptPayload('2026-09-12T09:00:00Z'),
+  }, ADMIN);
+
+  assert.strictEqual(repairCase.attempts[0].status, 'COMPLETED', 'the synced retest is linked straight away');
+  assert.strictEqual(repairCase.attempts[0].after_test_id, retest.id);
+  assert.strictEqual(repairCase.attempts[0].outcome, 'FAIL');
+  assert.strictEqual(repairCase.attempts[0].deltas.find((d) => d.step_code === 'IVM01').absolute_delta, -10);
+});
+
+test('repairs chain through the results they were recorded on, ending in a pass', () => {
+  reset();
+  const results = [
+    importTest({ id: 'chain-1', datetime: '2026-09-20T08:00:00-05:00', peakHp: 256 }),
+    importTest({ id: 'chain-2', datetime: '2026-09-20T09:00:00-05:00', peakHp: 256 }),
+    importTest({ id: 'chain-3', datetime: '2026-09-20T10:00:00-05:00', peakHp: 255 }),
+    importTest({ id: 'chain-4', datetime: '2026-09-20T11:00:00-05:00', peakHp: 245 }),
+    importTest({ id: 'chain-5', datetime: '2026-09-20T12:00:00-05:00', peakHp: 235 }),
+  ];
+  assert.deepStrictEqual(results.map((r) => r.result_status), ['fail', 'fail', 'fail', 'fail', 'pass']);
+
+  saveQuickEntry(results[2].id, quickPayload(), ADMIN);          // Repair 1 on Result 3
+  assert.strictEqual(getQuickEntry(results[3].id).can_save, true, 'Result 4 takes the next repair');
+  const closed = saveQuickEntry(results[3].id, quickPayload(), ADMIN); // Repair 2 on Result 4
+
+  assert.strictEqual(closed.status, 'PASSED');
+  assert.strictEqual(closed.final_test_id, results[4].id);
+  assert.deepStrictEqual(roles(), [
+    ['chain-1', null, null, null],
+    ['chain-2', null, null, null],
+    ['chain-3', 1, null, null],
+    ['chain-4', 2, 1, 'FAIL'],
+    ['chain-5', null, 2, 'PASS'],
+  ]);
+
+  // The roles are matched by report and slot, so they survive a re-import.
+  carbonzapp.clearAllReports();
+  for (const [i, r] of results.entries()) {
+    importTest({ id: r.report_ext_id, datetime: r.test_datetime, peakHp: [256, 256, 255, 245, 235][i] });
+  }
+  assert.deepStrictEqual(roles().map((row) => row.slice(1)), [
+    [null, null, null], [null, null, null], [1, null, null], [2, 1, 'FAIL'], [null, 2, 'PASS'],
+  ]);
+});
+
+test('a sync links repairs waiting for a retest, but not scrapped ones', () => {
+  reset();
+  const open = importTest({ id: 'sync-open-before', serial: 'SYNC-1', datetime: '2026-09-11T10:00:00Z', peakHp: 255 });
+  const scrapped = importTest({ id: 'sync-scrap-before', serial: 'SYNC-2', datetime: '2026-09-11T10:00:00Z', peakHp: 255 });
+  const openCase = createRepairCase({ initial_test_id: open.id, attempt: attemptPayload('2026-09-11T11:00:00Z') }, ADMIN);
+  const scrappedCase = createRepairCase({ initial_test_id: scrapped.id, attempt: attemptPayload('2026-09-11T11:00:00Z') }, ADMIN);
+  setCaseStatus(scrappedCase.id, 'SCRAPPED', ADMIN);
+  assert.strictEqual(autoLinkRetests(), 0, 'nothing to link before the retests arrive');
+
+  const passed = importTest({ id: 'sync-open-after', serial: 'SYNC-1', datetime: '2026-09-11T12:00:00Z', peakHp: 235 });
+  importTest({ id: 'sync-scrap-after', serial: 'SYNC-2', datetime: '2026-09-11T12:00:00Z', peakHp: 235 });
+
+  assert.strictEqual(autoLinkRetests({ user: ADMIN }), 1);
+  const linked = loadCase(openCase.id);
+  assert.strictEqual(linked.status, 'PASSED');
+  assert.strictEqual(linked.final_test_id, passed.id);
+  assert.strictEqual(loadCase(scrappedCase.id).attempts[0].status, 'WAITING_RETEST');
+  assert.strictEqual(autoLinkRetests(), 0, 'linking is idempotent');
+});
+
+test('a new repair case cannot start on a result older than the recorded history', () => {
+  reset();
+  const first = importTest({ id: 'older-1', datetime: '2026-09-11T08:00:00Z', peakHp: 256 });
+  const repaired = importTest({ id: 'older-2', datetime: '2026-09-11T10:00:00Z', peakHp: 255 });
+  importTest({ id: 'older-3', datetime: '2026-09-11T12:00:00Z', peakHp: 235 });
+  const passedCase = saveQuickEntry(repaired.id, quickPayload(), ADMIN);
+  assert.strictEqual(passedCase.status, 'PASSED');
+
+  assert.strictEqual(getQuickEntry(first.id).can_save, false);
+  assert.match(getQuickEntry(first.id).reason, /not newer than the repair history/);
+  assert.strictEqual(getRepairHistory(first.id).can_start, false);
+  assert.throws(
+    () => createRepairCase({ initial_test_id: first.id, attempt: attemptPayload('2026-09-12T09:00:00Z') }, ADMIN),
+    /not newer than the repair history/
+  );
+
+  // A later failure starts a fresh case normally.
+  const laterFailure = importTest({ id: 'older-4', datetime: '2026-09-13T10:00:00Z', peakHp: 256 });
+  assert.strictEqual(getQuickEntry(laterFailure.id).can_save, true);
 });
