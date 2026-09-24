@@ -67,6 +67,7 @@ const {
   autoLinkRetests,
   repairRolesForTests,
 } = require('../services/injectorRepairs');
+const { sameUnitRows } = require('../services/injectorUnits');
 
 // Roles allowed to reach the Injector Tests feature: the ADMIN role only.
 // Matches the `roles` restriction on the sidebar item in client/src/lib/nav.js
@@ -120,7 +121,18 @@ function buildListFilters(criteria) {
     params.push(`%${criteria.search}%`, `%${criteria.search}%`);
   }
   anyLike('part_number', criteria.partNumbers);
-  anyLike('serial_number', criteria.serialNumbers);
+  // A serial filter also finds the same unit entered differently
+  // (260521828A = 260521828 = 828), judged within each part number.
+  const unitMatches = serialUnitMatches(criteria.serialNumbers);
+  if (criteria.serialNumbers.length) {
+    const clauses = criteria.serialNumbers.map(() => 'serial_number LIKE ?');
+    params.push(...criteria.serialNumbers.map((t) => `%${t}%`));
+    for (const { part_number: part, serial_number: serial } of unitMatches.rows) {
+      clauses.push('(part_number IS ? AND serial_number = ?)');
+      params.push(part, serial);
+    }
+    sql += ` AND (${clauses.join(' OR ')})`;
+  }
 
   if (criteria.statuses.length) {
     // 'unknown' covers both the literal value and rows that were never scored.
@@ -140,7 +152,40 @@ function buildListFilters(criteria) {
     sql += ' AND date(test_datetime) <= date(?)';
     params.push(criteria.dateTo);
   }
-  return { sql, params };
+  return { sql, params, unitMatches };
+}
+
+/**
+ * For each typed serial, the stored (part, serial) pairs that are the same
+ * unit. `tokensFor(row)` lists the typed serials a row matched as that unit,
+ * which the list sends back so the page's own filter keeps those rows.
+ */
+function serialUnitMatches(tokens = []) {
+  const empty = { rows: [], tokensFor: () => [] };
+  if (!tokens.length) return empty;
+  const pairs = db.all(
+    `SELECT DISTINCT part_number, serial_number FROM injector_test_reports WHERE COALESCE(serial_number, '') != ''`, []
+  );
+  const keyOf = (row) => `${row.part_number}\u0000${row.serial_number}`;
+  const byPair = new Map();
+  for (const token of tokens) {
+    for (const row of sameUnitRows([token], pairs)) {
+      if (!byPair.has(keyOf(row))) byPair.set(keyOf(row), { row, tokens: [] });
+      byPair.get(keyOf(row)).tokens.push(token);
+    }
+  }
+  return {
+    rows: [...byPair.values()].map((entry) => entry.row),
+    tokensFor: (row) => (byPair.get(keyOf(row)) || { tokens: [] }).tokens,
+  };
+}
+
+/** Tag rows that matched a typed serial as the same unit (see serialUnitMatches). */
+function withUnitMatches(rows, unitMatches) {
+  return rows.map((row) => {
+    const tokens = unitMatches.tokensFor(row);
+    return tokens.length ? { ...row, serial_unit_match: tokens } : row;
+  });
 }
 
 /**
@@ -151,14 +196,14 @@ function buildListFilters(criteria) {
  * so the UI can say "42 of 1,203".
  */
 function queryInjectors(criteria) {
-  const { sql: filterSql, params } = buildListFilters(criteria);
+  const { sql: filterSql, params, unitMatches } = buildListFilters(criteria);
   const withSteps = needsStepData(criteria);
   const columns = withSteps ? `${LIST_COLUMNS}, report_json` : LIST_COLUMNS;
 
-  const rows = repairRolesForTests(db.all(
+  const rows = withUnitMatches(repairRolesForTests(db.all(
     `SELECT ${columns} FROM injector_test_reports WHERE ${BASE_EXCLUSIONS}${filterSql}${LIST_ORDER}`,
     params
-  ));
+  )), unitMatches);
   const totalRow = db.get(`SELECT COUNT(*) AS c FROM injector_test_reports WHERE ${BASE_EXCLUSIONS}`, []);
 
   if (!withSteps) return { injectors: rows, total: totalRow ? totalRow.c : rows.length };

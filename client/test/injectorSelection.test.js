@@ -411,3 +411,19 @@ test('a row without an id is refused rather than sent as an empty selection', ()
     assert.match(request.message, /no injector id/i)
   }
 })
+
+test('the serial filter keeps rows the server matched as the same unit', () => {
+  const list = [
+    { id: 'a', serial_number: '260521828A', test_datetime: '2026-09-20T10:00:00Z' },
+    { id: 'b', serial_number: '828', test_datetime: '2026-09-20T11:00:00Z', serial_unit_match: ['260521828A'] },
+    { id: 'c', serial_number: '260521828', test_datetime: '2026-09-20T12:00:00Z', serial_unit_match: ['260521828A'] },
+    { id: 'd', serial_number: '260777000', test_datetime: '2026-09-20T13:00:00Z' },
+  ]
+  assert.deepStrictEqual(
+    filterInjectors(list, { serialNumber: '260521828a' }).map((i) => i.id).sort(),
+    ['a', 'b', 'c'],
+    'typed serial matches its other spellings'
+  )
+  // A tag from an earlier search does not let a row through a different one.
+  assert.deepStrictEqual(filterInjectors(list, { serialNumber: '260777000' }).map((i) => i.id), ['d'])
+})

@@ -12,6 +12,7 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db/adapter');
 const { AppError } = require('../middleware/error');
 const { hydrateInjectorRow } = require('./carbonzapp');
+const { partKey, sameUnitSerials, unitResolver } = require('./injectorUnits');
 const {
   isFlushStep,
   numericValue,
@@ -57,10 +58,37 @@ function isoDate(value, fallback = null) {
   return date.toISOString();
 }
 
+/** Every serial recorded for a part number, on tests and on repair cases. */
+function knownSerials(partNumber) {
+  return db.all(
+    `SELECT serial_number FROM injector_test_reports
+      WHERE part_number = ? COLLATE NOCASE AND serial_number IS NOT NULL AND serial_number != ''
+     UNION
+     SELECT serial_number FROM injector_repair_cases WHERE part_number = ? COLLATE NOCASE`,
+    [partNumber || '', partNumber || '']
+  ).map((row) => row.serial_number);
+}
+
+/**
+ * The stored spellings of this injector's serial number — the same unit
+ * entered differently, e.g. 260521828A / 260521828 / 828 (see
+ * services/injectorUnits.js). Empty when there is no serial.
+ */
+function unitSerials(partNumber, serialNumber) {
+  if (!text(serialNumber, 200)) return [];
+  return sameUnitSerials(serialNumber, knownSerials(partNumber));
+}
+
+function placeholders(values) {
+  return values.map(() => '?').join(', ');
+}
+
+/** Same part number and the same physical unit. */
 function sameIdentity(left, right) {
-  const clean = (value) => text(value, 200).toUpperCase();
-  return clean(left.part_number) === clean(right.part_number)
-    && clean(left.serial_number) === clean(right.serial_number);
+  if (partKey(left.part_number) !== partKey(right.part_number)) return false;
+  const resolve = unitResolver([...knownSerials(left.part_number), left.serial_number, right.serial_number]);
+  const key = resolve(left.serial_number);
+  return !!key && key === resolve(right.serial_number);
 }
 
 function getTest(testId) {
@@ -87,13 +115,15 @@ function statusOfTest(test) {
 }
 
 function activeCaseFor(test) {
+  const serials = unitSerials(test.part_number, test.serial_number);
+  if (!serials.length) return undefined;
   return db.get(
     `SELECT * FROM injector_repair_cases
       WHERE part_number = ? COLLATE NOCASE
-        AND serial_number = ? COLLATE NOCASE
+        AND serial_number IN (${placeholders(serials)})
         AND status IN ('OPEN', 'HOLD', 'ENGINEERING_REVIEW')
       ORDER BY datetime(opened_at) DESC LIMIT 1`,
-    [test.part_number || '', test.serial_number || '']
+    [test.part_number || '', ...serials]
   );
 }
 
@@ -103,12 +133,14 @@ function activeCaseFor(test) {
  * run forward in test order.
  */
 function latestHistoryTestAt(test) {
+  const serials = unitSerials(test.part_number, test.serial_number);
+  if (!serials.length) return null;
   const row = db.get(
     `SELECT MAX(datetime(COALESCE(a.after_test_datetime, a.before_test_datetime))) AS latest
        FROM injector_repair_attempts a
        JOIN injector_repair_cases c ON c.id = a.repair_case_id
-      WHERE c.part_number = ? COLLATE NOCASE AND c.serial_number = ? COLLATE NOCASE`,
-    [test.part_number || '', test.serial_number || '']
+      WHERE c.part_number = ? COLLATE NOCASE AND c.serial_number IN (${placeholders(serials)})`,
+    [test.part_number || '', ...serials]
   );
   return row && row.latest ? row.latest : null;
 }
@@ -505,6 +537,18 @@ function parseJsonArray(value) {
   }
 }
 
+/** The serial as entered on an attempt's before/after test (null once cleared). */
+function testSerial(attempt, prefix) {
+  const id = attempt[`${prefix}_test_id`];
+  const extId = attempt[`${prefix}_report_ext_id`];
+  const row = (id && db.get('SELECT serial_number FROM injector_test_reports WHERE id = ?', [id]))
+    || (extId != null && db.get(
+      'SELECT serial_number FROM injector_test_reports WHERE report_ext_id = ? AND slot_position = ?',
+      [extId, attempt[`${prefix}_slot_position`]]
+    ));
+  return row ? row.serial_number : null;
+}
+
 function loadCase(caseId) {
   const repairCase = db.get('SELECT * FROM injector_repair_cases WHERE id = ?', [caseId]);
   if (!repairCase) return null;
@@ -514,6 +558,8 @@ function loadCase(caseId) {
     [repairCase.id]
   ).map((attempt) => ({
     ...attempt,
+    before_serial_number: testSerial(attempt, 'before'),
+    after_serial_number: testSerial(attempt, 'after'),
     changes: db.all(
       'SELECT * FROM injector_repair_changes WHERE repair_attempt_id = ? ORDER BY sequence ASC',
       [attempt.id]
@@ -539,12 +585,14 @@ function repairedAt(attempt) {
 /** Later results for the injector that are not already some repair's retest, oldest first. */
 function candidateRetests(repairCase, attempt) {
   if (!repairCase || !attempt || attempt.status !== 'WAITING_RETEST') return [];
+  const serials = unitSerials(repairCase.part_number, repairCase.serial_number);
+  if (!serials.length) return [];
   return db.all(
     `SELECT r.id, r.report_ext_id, r.slot_position, r.part_number, r.serial_number,
             r.test_datetime, r.result_status, r.steps_total, r.steps_passed, r.steps_failed
        FROM injector_test_reports r
       WHERE r.part_number = ? COLLATE NOCASE
-        AND r.serial_number = ? COLLATE NOCASE
+        AND r.serial_number IN (${placeholders(serials)})
         AND datetime(r.test_datetime) > datetime(?)
         AND r.id != ?
         AND NOT EXISTS (
@@ -553,7 +601,7 @@ function candidateRetests(repairCase, attempt) {
               OR (used.after_report_ext_id = r.report_ext_id AND used.after_slot_position = r.slot_position)
         )
       ORDER BY datetime(r.test_datetime) ASC, r.report_ext_id ASC, r.slot_position ASC`,
-    [repairCase.part_number || '', repairCase.serial_number || '',
+    [repairCase.part_number || '', ...serials,
       repairedAt(attempt), attempt.before_test_id || '']
   );
 }
@@ -643,12 +691,15 @@ function repairRolesForTests(rows) {
 
 function getRepairHistory(testId) {
   const test = getTest(testId);
+  const serials = unitSerials(test.part_number, test.serial_number);
+  const sameUnit = serials.length
+    ? `(part_number = ? COLLATE NOCASE AND serial_number IN (${placeholders(serials)})) OR `
+    : '';
   const cases = db.all(
     `SELECT id FROM injector_repair_cases
-      WHERE (part_number = ? COLLATE NOCASE AND serial_number = ? COLLATE NOCASE)
-         OR initial_test_id = ? OR final_test_id = ?
+      WHERE ${sameUnit}initial_test_id = ? OR final_test_id = ?
       ORDER BY datetime(opened_at) DESC`,
-    [test.part_number || '', test.serial_number || '', test.id, test.id]
+    [...(serials.length ? [test.part_number || '', ...serials] : []), test.id, test.id]
   ).map((row) => loadCase(row.id));
   const activeCase = cases.find((repairCase) => ACTIVE_CASE_STATUSES.includes(repairCase.status)) || null;
   const waitingAttempt = activeCase

@@ -399,6 +399,7 @@ export function AttemptCard({ attempt, viewedTest = null }) {
           {attempt.before_test_datetime && (
             <p className="mt-0.5 text-xs text-gray-600">
               On the {formatInjectorTestDateTime(attempt.before_test_datetime)} result ({String(attempt.before_result_status || 'unknown').toUpperCase()})
+              {attempt.before_serial_number && <span className="font-mono"> · SN {attempt.before_serial_number}</span>}
             </p>
           )}
           <p className="mt-0.5 text-xs text-gray-500">Entered {formatInjectorTestDateTime(attempt.repair_date)} · {attempt.technician}</p>
@@ -435,6 +436,7 @@ export function AttemptCard({ attempt, viewedTest = null }) {
         <div className="mt-3 flex items-center gap-2 border-t border-gray-100 pt-3 text-xs text-gray-500">
           <CircleDot size={14} className={resultStyle(attempt.after_result_status)} />
           Retested {formatInjectorTestDateTime(attempt.after_test_datetime)}
+          {attempt.after_serial_number && <span className="font-mono">SN {attempt.after_serial_number}</span>}
           <strong className={resultStyle(attempt.after_result_status)}>{attempt.after_result_status}</strong>
           {retestViewed && <span className="rounded-full bg-pdi-teal px-2 py-0.5 text-[11px] font-semibold text-white">This result</span>}
         </div>
