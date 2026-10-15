@@ -27,6 +27,7 @@ const {
   stepCode,
   stepLabel,
 } = require('./injectorSteps');
+const { zonedTestDate } = require('./timeZone');
 const {
   PASS,
   FAIL,
@@ -102,13 +103,9 @@ function rowResultStatus(injector) {
 }
 
 /** The date part of a test timestamp ("2026-06-30"), or '' when unparseable. */
-function testDate(value) {
-  const raw = String(value == null ? '' : value).trim();
-  const iso = raw.match(/^(\d{4}-\d{2}-\d{2})/);
-  if (iso) return iso[1];
-  const parsed = Date.parse(raw);
-  return Number.isNaN(parsed) ? '' : new Date(parsed).toISOString().slice(0, 10);
-}
+// The day a test belongs to is its day on the shop's clock, so a date filter
+// selects exactly the rows the Tested column shows (see services/timeZone).
+const testDate = (value) => zonedTestDate(value);
 
 /**
  * Every measurement point of one injector, with the outcome the shared

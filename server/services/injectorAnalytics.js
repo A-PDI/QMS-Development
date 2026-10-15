@@ -5,6 +5,7 @@ const ExcelJS = require('exceljs');
 const { AppError } = require('../middleware/error');
 const { getSetting } = require('./carbonzapp');
 const { unitKeyer } = require('./injectorUnits');
+const { zonedTestDate, zonedDayRange } = require('./timeZone');
 
 const clean = (value) => String(value ?? '').trim();
 const status = (value) => ['PASS', 'FAIL', 'DNF'].includes(String(value).toUpperCase()) ? String(value).toUpperCase() : 'UNKNOWN';
@@ -36,17 +37,25 @@ function scope(alias, dateColumn, config, isTest = false) {
   const clauses = [`UPPER(TRIM(COALESCE(${alias}.serial_number, ''))) NOT LIKE 'R%'`];
   const params = [];
   if (isTest) clauses.push(`UPPER(COALESCE(${alias}.job_number, '')) NOT LIKE '%RMA%'`);
-  // Bench calendar dates match Injector Tests; do not shift an offset timestamp
-  // across a calendar boundary by converting it to UTC.
-  if (config.date_from) { clauses.push(`substr(${alias}.${dateColumn}, 1, 10) >= ?`); params.push(config.date_from); }
-  if (config.date_to) { clauses.push(`substr(${alias}.${dateColumn}, 1, 10) <= ?`); params.push(config.date_to); }
+  // A day is a day on the shop's clock, the same one the Injector Tests list
+  // filters and groups by, so each bound becomes the instant that day starts or
+  // ends in that zone. datetime() normalises the stored offsets before they are
+  // compared (see services/timeZone).
+  if (config.date_from) {
+    clauses.push(`datetime(${alias}.${dateColumn}) >= datetime(?)`);
+    params.push(zonedDayRange(config.date_from).from);
+  }
+  if (config.date_to) {
+    clauses.push(`datetime(${alias}.${dateColumn}) < datetime(?)`);
+    params.push(zonedDayRange(config.date_to).to);
+  }
   if (config.part_number) { clauses.push(`TRIM(COALESCE(${alias}.part_number, '')) = ? COLLATE NOCASE`); params.push(config.part_number); }
   clauses.push(`date(substr(${alias}.${dateColumn}, 1, 10)) IS NOT NULL`);
   return { sql: clauses.join(' AND '), params };
 }
 
 function bucket(value, interval) {
-  const day = value.slice(0, 10);
+  const day = zonedTestDate(value) || String(value).slice(0, 10);
   if (interval === 'month') return day.slice(0, 7);
   if (interval === 'day') return day;
   const date = new Date(`${day}T00:00:00Z`);
@@ -210,8 +219,14 @@ function buildInjectorAnalytics(input = {}, includeDetails = false) {
       multi_change: rows.filter((row) => row.multi_change).length };
   }).sort((a, b) => b.samples - a.samples || a.key.localeCompare(b.key));
   const coverageScope = scope('t', 'test_datetime', { part_number: config.part_number }, true);
-  const coverage = db.get(`SELECT MIN(substr(test_datetime,1,10)) AS first_test, MAX(substr(test_datetime,1,10)) AS last_test,
+  const span = db.get(`SELECT MIN(datetime(test_datetime)) AS first_test, MAX(datetime(test_datetime)) AS last_test,
     COUNT(*) AS available_tests FROM injector_test_reports t WHERE ${coverageScope.sql}`, coverageScope.params);
+  // Reported as the shop's calendar days, like every other date in the report.
+  const coverage = {
+    first_test: span && span.first_test ? zonedTestDate(span.first_test) : null,
+    last_test: span && span.last_test ? zonedTestDate(span.last_test) : null,
+    available_tests: span ? span.available_tests : 0,
+  };
   const parts = db.all(`SELECT DISTINCT TRIM(part_number) AS part FROM injector_test_reports
     WHERE part_number IS NOT NULL AND TRIM(part_number) != ''
     UNION SELECT DISTINCT TRIM(part_number) FROM injector_repair_cases WHERE part_number IS NOT NULL AND TRIM(part_number) != '' ORDER BY 1`);

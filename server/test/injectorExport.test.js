@@ -55,6 +55,26 @@ test('the export model carries one row per injector with its scored result', () 
   assert.strictEqual(rowFor(model, 'SN001').testDate, '2026-06-30');
 });
 
+test("the Test Date column is the test's day on the shop clock", () => {
+  resetInjectorData();
+  carbonzapp.upsertReports(benchBatch(1, {
+    job: 'Production',
+    prefix: 'EVE',
+    // 01:00 UTC on 1 July is 7pm Mountain on 30 June: the day the shop ran it.
+    customise: () => ({ datetime: '2026-07-01T01:00:00+00:00' }),
+  }));
+  const ids = db.all('SELECT id FROM injector_test_reports', []).map((r) => r.id);
+  const model = buildExportModel(loadSelectedInjectors(ids));
+
+  assert.strictEqual(model.rows[0].testDate, '2026-06-30');
+  assert.deepStrictEqual(
+    { from: model.summary.dateFrom, to: model.summary.dateTo },
+    { from: '2026-06-30', to: '2026-06-30' },
+    'the report header covers the same day',
+  );
+  assert.strictEqual(model.comparison.dateFrom, '2026-06-30', 'and so does the on-screen preview');
+});
+
 test('the model summarises the batch the exports print at the top', () => {
   const model = buildExportModel(seed());
   assert.deepStrictEqual(

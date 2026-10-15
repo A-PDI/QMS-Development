@@ -43,6 +43,7 @@ const { numericPartNumbers } = require('./pdf');
 // The report grid comes from the same builder the on-screen preview uses, so
 // the Comparison sheet cannot drift from the preview or the printed report.
 const { buildReportPreview } = require('./injectorReports');
+const { zonedTestDate } = require('./timeZone');
 
 // Displayed name for each overall result.
 const RESULT_LABELS = {
@@ -96,13 +97,8 @@ function timeOf(value) {
   return m ? m[1] : '';
 }
 
-/** Date part of a test timestamp ("2026-06-30"), or ''. */
-function dateOf(value) {
-  const m = /^(\d{4}-\d{2}-\d{2})/.exec(String(value == null ? '' : value).trim());
-  if (m) return m[1];
-  const parsed = Date.parse(String(value == null ? '' : value));
-  return Number.isNaN(parsed) ? '' : new Date(parsed).toISOString().slice(0, 10);
-}
+/** The day a test belongs to on the shop's clock ("2026-06-30"), or ''. */
+const dateOf = (value) => zonedTestDate(value);
 
 /** Distinct non-empty values, in first-seen order. */
 function distinct(values = []) {

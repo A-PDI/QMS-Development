@@ -10,6 +10,10 @@
  * sortSelectionBySerial available as a one-click reset.
  */
 
+// The .js extension keeps this resolvable by `node --test`, which runs these
+// modules straight from source (Vite resolves it either way).
+import { zonedTestDate } from './injectorDateTime.js'
+
 /** Newest test first, with stable identifiers breaking timestamp ties. */
 export function sortByTestDate(injectors = []) {
   return [...injectors].sort((a, b) => {
@@ -35,13 +39,9 @@ function resultStatus(injector) {
   return 'unknown'
 }
 
-function testDate(value) {
-  const raw = String(value ?? '').trim()
-  const isoDate = raw.match(/^(\d{4}-\d{2}-\d{2})/)
-  if (isoDate) return isoDate[1]
-  const parsed = Date.parse(raw)
-  return Number.isNaN(parsed) ? '' : new Date(parsed).toISOString().slice(0, 10)
-}
+// The day a test belongs to is its day on the shop's clock, so the date boxes
+// select the same rows the Tested column shows (see injectorDateTime).
+const testDate = (value) => zonedTestDate(value)
 
 /**
  * Split a filter box into individual values. Commas, semicolons, pipes and any

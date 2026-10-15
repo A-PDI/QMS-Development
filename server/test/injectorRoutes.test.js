@@ -132,6 +132,8 @@ test('qc_manager and inspector are refused by every injector route', async () =>
     ['POST', '/api/injector-tests/reports/inspection', { injector_ids: ids }],
     ['POST', '/api/injector-tests/reports/shipment-evaluation', { injector_ids: ids, vendor_name: 'Acme' }],
     ['POST', '/api/injector-tests/report', { injector_ids: ids }],
+    ['GET', '/api/injector-tests/exports/google-sheet', null],
+    ['POST', '/api/injector-tests/exports/google-sheet', { dry_run: true }],
     ['DELETE', '/api/injector-tests', null],
   ];
 
@@ -329,6 +331,73 @@ test('repair routes create a case, offer a matching retest and close on pass', a
     assert.strictEqual(passRow.retest_of_attempt, 1);
     assert.strictEqual(passRow.retest_outcome, 'PASS');
     assert.strictEqual(listAfterPass.injectors.find((row) => row.id === before.id).repair_attempt_status, 'COMPLETED');
+  });
+});
+
+// ── Daily Google Sheet export ───────────────────────────────────────────────
+test('the export status reports what is missing and what is waiting to be sent', async () => {
+  resetInjectorData();
+  carbonzapp.upsertReports([
+    benchReport({ id: 'sheet-pass', slot: 0, serial: 'SHEET-PASS', job: 'Production', datetime: '2026-06-30T14:00:00+00:00' }),
+    benchReport({ id: 'sheet-fail', slot: 0, serial: 'SHEET-FAIL', job: 'Production', datetime: '2026-06-30T15:00:00+00:00', flow: { IVM01: 40 } }),
+  ]);
+
+  await withUser(ADMIN, async (url) => {
+    const res = await fetch(`${url}/api/injector-tests/exports/google-sheet`);
+    assert.strictEqual(res.status, 200);
+    const body = await res.json();
+    assert.deepStrictEqual(body.columns, ['Test Date', 'Part Number', 'Serial Number']);
+    assert.strictEqual(body.configured, false, 'no Google credentials in the test environment');
+    assert.ok(body.missing.includes('GOOGLE_SHEETS_SPREADSHEET_ID'));
+    assert.strictEqual(body.timeZone, 'America/Denver');
+  });
+});
+
+test('a dry run counts the day\'s passed injectors without needing Google configured', async () => {
+  resetInjectorData();
+  carbonzapp.upsertReports([
+    benchReport({ id: 'dry-pass', slot: 0, serial: 'DRY-PASS', job: 'Production', datetime: '2026-06-30T14:00:00+00:00' }),
+    benchReport({ id: 'dry-fail', slot: 0, serial: 'DRY-FAIL', job: 'Production', datetime: '2026-06-30T16:00:00+00:00', flow: { IVM01: 40 } }),
+    // 7pm Mountain on the 30th, which is the next day in UTC.
+    benchReport({ id: 'dry-eve', slot: 0, serial: 'DRY-EVE', job: 'Production', datetime: '2026-07-01T01:00:00+00:00' }),
+  ]);
+
+  await withUser(ADMIN, async (url) => {
+    const res = await fetch(`${url}/api/injector-tests/exports/google-sheet`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ day: '2026-06-30', dry_run: true }),
+    });
+    assert.strictEqual(res.status, 200);
+    const body = await res.json();
+    assert.deepStrictEqual(
+      { day: body.day, rows: body.rows, skipped: body.skipped, reason: body.reason },
+      { day: '2026-06-30', rows: 2, skipped: true, reason: 'dry_run' },
+      'both passed injectors count, including the evening one; the failure does not',
+    );
+  });
+});
+
+test('a real run is refused while Google is unconfigured, and a bad day never reaches it', async () => {
+  resetInjectorData();
+  await withUser(ADMIN, async (url) => {
+    const unconfigured = await fetch(`${url}/api/injector-tests/exports/google-sheet`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ day: '2026-06-30' }),
+    });
+    assert.strictEqual(unconfigured.status, 400);
+    const error = await unconfigured.json();
+    assert.strictEqual(error.code, 'NOT_CONFIGURED');
+    assert.match(error.error, /GOOGLE_SHEETS_SPREADSHEET_ID/);
+
+    const badDay = await fetch(`${url}/api/injector-tests/exports/google-sheet`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ day: '30-06-2026', dry_run: true }),
+    });
+    assert.strictEqual(badDay.status, 400);
+    assert.match((await badDay.json()).error, /YYYY-MM-DD/);
   });
 });
 

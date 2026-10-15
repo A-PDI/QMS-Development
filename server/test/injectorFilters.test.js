@@ -186,3 +186,20 @@ test('result, date-range and step criteria combine into one selection', () => {
 test('several result statuses can be selected at once', () => {
   assert.deepStrictEqual(serials(filterInjectors(ALL, { status: 'fail,dnf' })), ['SN002', 'SN003', 'SN004']);
 });
+
+test('the date filter selects on the shop clock, so an evening test keeps its day', () => {
+  // 01:00 UTC on 2 June is 7pm Mountain on the 1st, which is the day the shop
+  // ran it and the day the Tested column shows.
+  const evening = injector({ serial: 'SN900', datetime: '2026-06-02T01:00:00+00:00' });
+  const list = [...ALL, evening];
+
+  assert.deepStrictEqual(
+    serials(filterInjectors(list, { date_from: '2026-06-01', date_to: '2026-06-01' })),
+    ['SN001', 'SN900'],
+  );
+  assert.deepStrictEqual(
+    serials(filterInjectors(list, { date_from: '2026-06-02', date_to: '2026-06-02' })),
+    ['SN002'],
+    'it is not counted under the following UTC day',
+  );
+});
