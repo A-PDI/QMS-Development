@@ -25,6 +25,7 @@ const {
   numericPartNumbers,
 } = require('./pdf');
 const { isFlushStep } = require('./injectorSteps');
+const { zonedTestDate } = require('./timeZone');
 
 const REPORT_TYPES = {
   CUSTOMER: 'customer',
@@ -160,7 +161,7 @@ function buildReportPreview(injectors = []) {
   const list = toReportInjectors(injectors);
   const model = buildInjectorComparisonModel(list);
   const bound = (value) => (Number.isInteger(value) ? value.toFixed(1) : String(value));
-  const dates = [...new Set(list.map((i) => String(i.test_datetime || '').slice(0, 10)).filter(Boolean))].sort();
+  const dates = [...new Set(list.map((i) => zonedTestDate(i.test_datetime)).filter(Boolean))].sort();
 
   return {
     title: 'Custom Report Preview',

@@ -21,6 +21,8 @@
  *   POST /reports/inspection            → create/refresh inspection record(s)
  *   POST /reports/shipment-evaluation   → Shipment Evaluation PDF (supplier_evaluation;
  *                                          requires vendor_name)
+ *   GET  /exports/google-sheet          → daily Google Sheet export status
+ *   POST /exports/google-sheet          → run that export now (a day, or yesterday)
  *   POST /reports/customer, /report     → legacy aliases of /reports/custom
  *
  * EVERY route in this file is restricted to the ADMIN role (see requireAdmin) —
@@ -55,6 +57,9 @@ const {
   buildInjectorWorkbook,
   exportFilename,
 } = require('../services/injectorExport');
+const injectorDailyExport = require('../services/injectorDailyExport');
+const googleSheets = require('../services/googleSheets');
+const { zonedDayRange } = require('../services/timeZone');
 const {
   getRepairHistory,
   loadCase,
@@ -144,13 +149,17 @@ function buildListFilters(criteria) {
     sql += ` AND (${clauses.join(' OR ')})`;
     params.push(...criteria.statuses.filter((s) => s !== 'unknown'));
   }
+  // A day is a day on the shop's clock, so each bound becomes the instant that
+  // day starts or ends in that zone (see services/timeZone). Comparing the
+  // stored timestamps through datetime() normalises their offsets first, so a
+  // bench "+00:00" value and a naive one are measured the same way.
   if (criteria.dateFrom) {
-    sql += ' AND date(test_datetime) >= date(?)';
-    params.push(criteria.dateFrom);
+    sql += ' AND datetime(test_datetime) >= datetime(?)';
+    params.push(zonedDayRange(criteria.dateFrom).from);
   }
   if (criteria.dateTo) {
-    sql += ' AND date(test_datetime) <= date(?)';
-    params.push(criteria.dateTo);
+    sql += ' AND datetime(test_datetime) < datetime(?)';
+    params.push(zonedDayRange(criteria.dateTo).to);
   }
   return { sql, params, unitMatches };
 }
@@ -289,6 +298,53 @@ router.post('/test-connection', requireAdmin, async (req, res, next) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     return mapCarbonzappError(err, next);
+  }
+});
+
+// ── Daily Google Sheet export ───────────────────────────────────────────────
+// Every passed injector of one shop day — Test Date, Part Number, Serial Number
+// — appended to the configured Google Sheet. The server runs this itself just
+// after midnight (see services/dailySchedule); these routes report on it and
+// let an admin run a day on demand, which is also how a missed day is filled in.
+router.get('/exports/google-sheet', requireAdmin, (req, res, next) => {
+  try {
+    const day = injectorDailyExport.defaultExportDay();
+    res.json({
+      ...injectorDailyExport.exportStatus(),
+      columns: injectorDailyExport.COLUMNS,
+      nextDay: day,
+      pendingRows: injectorDailyExport.buildExportRows(injectorDailyExport.testsForDay(day)).length,
+    });
+  } catch (err) { next(err); }
+});
+
+router.post('/exports/google-sheet', requireAdmin, async (req, res, next) => {
+  const body = req.body || {};
+  const day = body.day == null || body.day === '' ? null : String(body.day);
+  if (day && !injectorDailyExport.isDay(day)) {
+    return next(new AppError('Give the day as YYYY-MM-DD.', 400, 'VALIDATION_ERROR'));
+  }
+  const dryRun = body.dry_run === true || body.dry_run === 'true';
+  if (!dryRun && !googleSheets.isConfigured()) {
+    return next(new AppError(
+      `Google Sheets export is not configured. Set ${googleSheets.missingConfig().join(', ')} on the server.`,
+      400, 'NOT_CONFIGURED'
+    ));
+  }
+
+  try {
+    const result = await injectorDailyExport.exportDay(day, {
+      force: body.force === true || body.force === 'true',
+      dryRun,
+    });
+    console.log(`[InjectorSheetExport] ${result.day}: ${result.rows} passed injector(s), ` +
+      `${result.skipped ? `skipped (${result.reason})` : `appended ${result.appended}`} (user=${req.user?.id})`);
+    res.json(result);
+  } catch (err) {
+    return next(new AppError(
+      `The Google Sheet could not be updated: ${err && err.message ? err.message : 'unknown error'}`,
+      502, 'SHEET_EXPORT_FAILED'
+    ));
   }
 });
 

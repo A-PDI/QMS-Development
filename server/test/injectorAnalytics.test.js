@@ -42,6 +42,32 @@ function seed() {
   return { a, b, c };
 }
 
+test('the analytics window selects on the shop clock, like the tests list', () => {
+  reset();
+  // A passing test (235 is inside the 220-240 Peak HP band) stored at 01:00 UTC
+  // on 2 September, which is 7pm Mountain on the 1st.
+  const evening = result('eve', 'EVE-1', '02', 235);
+  db.run('UPDATE injector_test_reports SET test_datetime = ? WHERE id = ?', ['2026-09-02T01:00:00Z', evening.id]);
+  // And one safely inside the 2nd.
+  result('mid', 'MID-1', '02', 235);
+
+  const firstDay = buildInjectorAnalytics({ date_from: '2026-09-01', date_to: '2026-09-01', interval: 'day' });
+  assert.equal(firstDay.testing.test_runs, 1, 'the evening test belongs to the day it was run');
+
+  const secondDay = buildInjectorAnalytics({ date_from: '2026-09-02', date_to: '2026-09-02', interval: 'day' });
+  assert.equal(secondDay.testing.test_runs, 1, 'and is not counted again under the next UTC day');
+
+  // Coverage spans everything synced, whatever the window, and is reported in
+  // shop days: the 2 September 01:00Z test reads as 1 September.
+  assert.deepEqual(firstDay.coverage, { first_test: '2026-09-01', last_test: '2026-09-02', available_tests: 2 });
+  assert.deepEqual(secondDay.coverage, firstDay.coverage);
+
+  // The daily trend buckets it the same way.
+  const both = buildInjectorAnalytics({ date_from: '2026-09-01', date_to: '2026-09-02', interval: 'day' });
+  assert.deepEqual(both.trend.map((row) => row.period), ['2026-09-01', '2026-09-02']);
+  assert.deepEqual(both.trend.map((row) => row.PASS), [1, 1], 'one passing test in each shop day');
+});
+
 test('test-window counts, distinct injectors and failure-date repair cohorts reconcile', () => {
   seed();
   const report = buildInjectorAnalytics(WINDOW);

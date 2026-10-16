@@ -204,4 +204,49 @@ app.listen(PORT, () => {
   } catch (err) {
     console.error('[Startup] Linking injector retests failed:', err.message);
   }
+  // Append yesterday's passed injectors to the Google Sheet, once a day.
+  startDailyInjectorSheetExport();
 });
+
+/**
+ * Schedule the daily Google Sheet export of passed injectors.
+ *
+ * It only starts when a spreadsheet and service account are configured, so a
+ * deployment that does not use the export runs exactly as before. The job never
+ * takes the server down with it: a failed run is logged and the next day is
+ * still scheduled.
+ */
+function startDailyInjectorSheetExport() {
+  const googleSheets = require('./services/googleSheets');
+  const injectorDailyExport = require('./services/injectorDailyExport');
+  const { startDailyJob } = require('./services/dailySchedule');
+  const { testTimeZone } = require('./services/timeZone');
+
+  if (String(process.env.INJECTOR_SHEET_EXPORT_ENABLED || '').toLowerCase() === 'false') {
+    console.log('[InjectorSheetExport] Disabled by INJECTOR_SHEET_EXPORT_ENABLED=false.');
+    return null;
+  }
+  if (!googleSheets.isConfigured()) {
+    console.log(`[InjectorSheetExport] Not scheduled — missing ${googleSheets.missingConfig().join(', ')}.`);
+    return null;
+  }
+
+  const time = process.env.INJECTOR_SHEET_EXPORT_AT || '00:05';
+  try {
+    const job = startDailyJob({
+      time,
+      timeZone: testTimeZone(),
+      task: async () => {
+        const result = await injectorDailyExport.exportDay();
+        console.log(`[InjectorSheetExport] ${result.day}: ${result.rows} passed injector(s), ` +
+          `${result.skipped ? `skipped (${result.reason})` : `appended ${result.appended}`}.`);
+      },
+      onError: (err) => console.error('[InjectorSheetExport] Run failed:', err && err.message ? err.message : err),
+    });
+    console.log(`[InjectorSheetExport] Scheduled daily at ${time} ${testTimeZone()} — next run ${job.nextRun.toISOString()}.`);
+    return job;
+  } catch (err) {
+    console.error('[InjectorSheetExport] Not scheduled:', err.message);
+    return null;
+  }
+}

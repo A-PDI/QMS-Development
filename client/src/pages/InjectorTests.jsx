@@ -1188,7 +1188,9 @@ function InjectorList({ injectors, selected, onToggle, onPreview, onQuickEntry }
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-gray-200 bg-gray-50 px-3 py-3 sm:px-4">
         <div>
           <div className="text-sm font-semibold text-pdi-navy">Test Results</div>
-          <div className="text-xs text-gray-500">{injectors.length} result{injectors.length === 1 ? '' : 's'} · newest first</div>
+          <div className="text-xs text-gray-500">
+            {injectors.length} result{injectors.length === 1 ? '' : 's'} · newest first · times in Mountain Time
+          </div>
         </div>
         <span className="text-xs text-gray-400">Tick a row to build a report · tap a serial number to preview it</span>
       </div>

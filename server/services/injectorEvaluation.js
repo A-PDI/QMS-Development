@@ -30,6 +30,7 @@ const {
   measurementOutcome,
   stepHasExplicitFailure,
 } = require('./injectorResult');
+const { zonedTestDate } = require('./timeZone');
 
 /** Customer-facing test steps for one injector (excludes the internal flush). */
 function testPointsOf(injector) {
@@ -71,7 +72,7 @@ function summarise(injectors = []) {
   const total = list.length;
 
   const partNumbers = distinct(list.map((i) => i.part_number));
-  const testDates = distinct(list.map((i) => String(i.test_datetime || '').slice(0, 10))).sort();
+  const testDates = distinct(list.map((i) => zonedTestDate(i.test_datetime))).sort();
 
   return {
     total,
