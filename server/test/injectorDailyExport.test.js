@@ -409,20 +409,24 @@ test("exported rows carry PDI's part number, not the bench's", async () => {
 test('a bench part with no PDI number goes through as it came, and is reported', async () => {
   resetInjectorData();
   seedTest({ id: 'known', serial: 'KNOWN-1', part: '2872405', datetime: '2026-10-03T15:00:00+00:00' });
-  seedTest({ id: 'unknown', serial: 'UNKNOWN-1', part: 'P4327147-Dev', datetime: '2026-10-03T16:00:00+00:00' });
+  // A variant of a known part translates however the bench spelled it; only a
+  // part with no known core in it is left alone.
+  seedTest({ id: 'variant', serial: 'VARIANT-1', part: 'P4327147 - Dev', datetime: '2026-10-03T16:00:00+00:00' });
+  seedTest({ id: 'unknown', serial: 'UNKNOWN-1', part: '6513589PX', datetime: '2026-10-03T16:30:00+00:00' });
   // A failing injector's part is not reported: it never reaches the sheet.
   seedTest({ id: 'failed', serial: 'FAILED-1', part: 'OTHER-PART', datetime: '2026-10-03T17:00:00+00:00', pass: false });
 
   const tests = testsForDay('2026-10-03');
   assert.deepStrictEqual(buildExportRows(tests), [
     ['2026-10-03', '7159417', 'KNOWN-1'],
-    ['2026-10-03', 'P4327147-Dev', 'UNKNOWN-1'],
+    ['2026-10-03', '7159421', 'VARIANT-1'],
+    ['2026-10-03', '6513589PX', 'UNKNOWN-1'],
   ]);
-  assert.deepStrictEqual(unmappedPartsIn(tests), ['P4327147-Dev']);
+  assert.deepStrictEqual(unmappedPartsIn(tests), ['6513589PX']);
 
   const sheet = recordingAppender();
   const result = await exportDay('2026-10-03', { appendRows: sheet.appendRows });
-  assert.deepStrictEqual(result.unmappedParts, ['P4327147-Dev'], 'the run says what it could not translate');
+  assert.deepStrictEqual(result.unmappedParts, ['6513589PX'], 'the run says what it could not translate');
 });
 
 test('a backfill reports every untranslated part across the span, once each', async () => {
