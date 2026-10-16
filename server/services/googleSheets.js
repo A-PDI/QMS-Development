@@ -18,6 +18,7 @@
  */
 
 const fs = require('fs');
+const crypto = require('crypto');
 const { auth, sheets } = require('@googleapis/sheets');
 
 // Write access to the spreadsheets the account has been given, and nothing else.
@@ -68,14 +69,44 @@ function target() {
 }
 
 /**
- * What is still missing before rows can be written, as a list of environment
- * variable names. Empty means the export is ready to run.
+ * A private key that is present but cannot be loaded is worse than one that is
+ * absent: everything looks configured and every nightly run dies at the token
+ * exchange with a message about grants. Pasting a key through a form that eats
+ * line breaks is the usual cause, so the key is parsed once, here, where the
+ * answer can name the problem.
+ */
+function privateKeyProblem(privateKey) {
+  try {
+    crypto.createPrivateKey(privateKey);
+    return '';
+  } catch (_) {
+    return 'is not a usable private key — its line breaks were most likely lost when it was pasted. '
+      + 'Paste it with its \\n escapes intact, use a multi-line value, or point '
+      + 'GOOGLE_SERVICE_ACCOUNT_KEY_FILE at the JSON key file instead';
+  }
+}
+
+/**
+ * What is still missing or wrong before rows can be written, as a list of
+ * environment variable names with the reason. Empty means the export is ready
+ * to run.
  */
 function missingConfig() {
   const missing = [];
   if (!target().spreadsheetId) missing.push('GOOGLE_SHEETS_SPREADSHEET_ID');
   try {
-    if (!credentials()) missing.push('GOOGLE_SERVICE_ACCOUNT_KEY_FILE (or GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY)');
+    const creds = credentials();
+    if (!creds) {
+      missing.push('GOOGLE_SERVICE_ACCOUNT_KEY_FILE (or GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY)');
+    } else {
+      const problem = privateKeyProblem(creds.privateKey);
+      if (problem) {
+        const source = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_FILE
+          ? 'GOOGLE_SERVICE_ACCOUNT_KEY_FILE'
+          : 'GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY';
+        missing.push(`${source} ${problem}`);
+      }
+    }
   } catch (err) {
     missing.push(`GOOGLE_SERVICE_ACCOUNT_KEY_FILE (${err.message})`);
   }
@@ -161,6 +192,7 @@ async function appendRows(rows, { header = null, spreadsheetId = null, range = n
 module.exports = {
   SCOPES,
   client,
+  privateKeyProblem,
   DEFAULT_RANGE,
   normalisePrivateKey,
   credentials,

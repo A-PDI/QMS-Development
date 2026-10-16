@@ -11,6 +11,9 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const express = require('express');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const { auth } = require('@googleapis/sheets');
 const googleSheets = require('../services/googleSheets');
@@ -157,6 +160,91 @@ test('an error from Google is raised rather than silently losing the rows', asyn
     );
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// ── Configuration the operator gets wrong ───────────────────────────────────
+// A private key reaches the server through a .env file, a Render environment
+// variable or a mounted JSON key, and the line breaks are what survive or do
+// not. These are the forms each of those produces.
+const { generateKeyPairSync } = require('node:crypto');
+const PEM = generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+}).privateKey;
+
+function withEnv(values, fn) {
+  const names = [
+    'GOOGLE_SHEETS_SPREADSHEET_ID', 'GOOGLE_SERVICE_ACCOUNT_EMAIL',
+    'GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY', 'GOOGLE_SERVICE_ACCOUNT_KEY_FILE',
+  ];
+  const saved = Object.fromEntries(names.map((n) => [n, process.env[n]]));
+  try {
+    for (const name of names) delete process.env[name];
+    Object.assign(process.env, values);
+    return fn();
+  } finally {
+    for (const name of names) {
+      if (saved[name] == null) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  }
+}
+
+test('every form a key arrives in is accepted, however its newlines are written', () => {
+  const forms = {
+    'escaped \\n, unquoted': PEM.replace(/\n/g, '\\n'),
+    'escaped \\n, quoted': `"${PEM.replace(/\n/g, '\\n')}"`,
+    'real newlines': PEM,
+  };
+  for (const [name, value] of Object.entries(forms)) {
+    withEnv({
+      GOOGLE_SHEETS_SPREADSHEET_ID: 'sheet-id',
+      GOOGLE_SERVICE_ACCOUNT_EMAIL: 'svc@example.iam.gserviceaccount.com',
+      GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: value,
+    }, () => {
+      assert.deepStrictEqual(googleSheets.missingConfig(), [], `${name} should be accepted`);
+      assert.strictEqual(googleSheets.privateKeyProblem(googleSheets.credentials().privateKey), '');
+    });
+  }
+});
+
+test('a key whose line breaks were lost is refused, by name, instead of failing nightly', () => {
+  withEnv({
+    GOOGLE_SHEETS_SPREADSHEET_ID: 'sheet-id',
+    GOOGLE_SERVICE_ACCOUNT_EMAIL: 'svc@example.iam.gserviceaccount.com',
+    GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: PEM.replace(/\n/g, ' '),
+  }, () => {
+    assert.strictEqual(googleSheets.isConfigured(), false, 'a key that cannot be loaded is not configuration');
+    const [problem] = googleSheets.missingConfig();
+    assert.match(problem, /^GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY/);
+    assert.match(problem, /line breaks/);
+  });
+});
+
+test('a mounted JSON key file is read whole, with no escaping to get wrong', () => {
+  const file = path.join(os.tmpdir(), `qms-sa-key-${process.pid}.json`);
+  fs.writeFileSync(file, JSON.stringify({
+    type: 'service_account',
+    client_email: 'svc@example.iam.gserviceaccount.com',
+    private_key: PEM,
+  }));
+  try {
+    withEnv({ GOOGLE_SHEETS_SPREADSHEET_ID: 'sheet-id', GOOGLE_SERVICE_ACCOUNT_KEY_FILE: file }, () => {
+      assert.deepStrictEqual(googleSheets.missingConfig(), []);
+      assert.strictEqual(googleSheets.credentials().clientEmail, 'svc@example.iam.gserviceaccount.com');
+      assert.strictEqual(googleSheets.privateKeyProblem(googleSheets.credentials().privateKey), '');
+    });
+
+    // A JSON file that is not a service account key says so, rather than
+    // failing later with a missing-field error.
+    fs.writeFileSync(file, JSON.stringify({ installed: { client_id: 'oauth-client' } }));
+    withEnv({ GOOGLE_SHEETS_SPREADSHEET_ID: 'sheet-id', GOOGLE_SERVICE_ACCOUNT_KEY_FILE: file }, () => {
+      assert.match(googleSheets.missingConfig()[0], /not a service account key/);
+    });
+  } finally {
+    fs.unlinkSync(file);
   }
 });
 
