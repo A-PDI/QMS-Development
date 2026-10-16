@@ -401,6 +401,56 @@ test('a real run is refused while Google is unconfigured, and a bad day never re
   });
 });
 
+test('a month-to-date backfill is counted over the route, day by day', async () => {
+  resetInjectorData();
+  carbonzapp.upsertReports([
+    benchReport({ id: 'mtd-a', slot: 0, serial: 'MTD-A', job: 'Production', datetime: '2026-10-02T15:00:00+00:00' }),
+    benchReport({ id: 'mtd-b', slot: 0, serial: 'MTD-B', job: 'Production', datetime: '2026-10-05T15:00:00+00:00' }),
+    benchReport({ id: 'mtd-f', slot: 0, serial: 'MTD-F', job: 'Production', datetime: '2026-10-05T16:00:00+00:00', flow: { IVM01: 40 } }),
+  ]);
+
+  await withUser(ADMIN, async (url) => {
+    const res = await fetch(`${url}/api/injector-tests/exports/google-sheet`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: '2026-10-01', to: '2026-10-10', dry_run: true }),
+    });
+    assert.strictEqual(res.status, 200);
+    const body = await res.json();
+    assert.deepStrictEqual(
+      { from: body.from, to: body.to, days: body.days, rows: body.rows, reason: body.reason },
+      { from: '2026-10-01', to: '2026-10-10', days: 10, rows: 2, reason: 'dry_run' },
+      'the failing injector is not counted',
+    );
+    assert.deepStrictEqual(
+      body.perDay.filter((d) => d.rows).map((d) => d.day),
+      ['2026-10-02', '2026-10-05'],
+    );
+  });
+});
+
+test('a malformed range is refused with a message that says what to fix', async () => {
+  resetInjectorData();
+  await withUser(ADMIN, async (url) => {
+    const cases = [
+      [{ from: '2026-10-01', dry_run: true }, /both from and to/i],
+      [{ from: '2026-10-10', to: '2026-10-01', dry_run: true }, /ends before it starts/i],
+      [{ from: '2020-01-01', to: '2026-10-01', dry_run: true }, /at most 366 days/i],
+      [{ from: '10-01-2026', to: '2026-10-05', dry_run: true }, /YYYY-MM-DD/],
+      [{ day: '2026-10-01', from: '2026-10-01', to: '2026-10-05', dry_run: true }, /not both/i],
+    ];
+    for (const [body, expected] of cases) {
+      const res = await fetch(`${url}/api/injector-tests/exports/google-sheet`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      assert.strictEqual(res.status, 400, `${JSON.stringify(body)} should be refused`);
+      assert.match((await res.json()).error, expected);
+    }
+  });
+});
+
 test('a custom report is streamed as a PDF with a filename header', async () => {
   const ids = await seedInjectors(3);
   await withUser(ADMIN, async (url) => {

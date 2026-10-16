@@ -43,3 +43,24 @@ services:
         generateValue: true          # Render generates a strong random value on first deploy
       - key: ADMIN_PASSWORD
         sync: false                  # you'll set this manually in the Render UI
+
+      # ── Injector tests ───────────────────────────────────────────────────
+      # The shop's clock: test times are shown, filtered and grouped in this
+      # zone. Keep it the same as the client's VITE_INJECTOR_TIME_ZONE.
+      - key: INJECTOR_TIME_ZONE
+        value: America/Denver
+
+      # Daily export of passed injectors to a Google Sheet. The three values
+      # marked sync:false are set in the Render UI (Environment tab) and never
+      # committed — a service account key in this file would be published with
+      # the repository. The export stays off until they are set.
+      - key: GOOGLE_SHEETS_SPREADSHEET_ID
+        sync: false                  # from the sheet's URL, between /d/ and /edit
+      - key: GOOGLE_SHEETS_RANGE
+        value: Sheet1!A:C            # a tab name with a space needs single quotes
+      - key: GOOGLE_SERVICE_ACCOUNT_EMAIL
+        sync: false                  # client_email from the service account's JSON key
+      - key: GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY
+        sync: false                  # private_key from the same file, newlines intact
+      - key: INJECTOR_SHEET_EXPORT_AT
+        value: "00:05"

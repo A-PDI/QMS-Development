@@ -22,7 +22,8 @@
  *   POST /reports/shipment-evaluation   → Shipment Evaluation PDF (supplier_evaluation;
  *                                          requires vendor_name)
  *   GET  /exports/google-sheet          → daily Google Sheet export status
- *   POST /exports/google-sheet          → run that export now (a day, or yesterday)
+ *   POST /exports/google-sheet          → run that export now: yesterday, one day,
+ *                                          a from/to range, or this month to date
  *   POST /reports/customer, /report     → legacy aliases of /reports/custom
  *
  * EVERY route in this file is restricted to the ADMIN role (see requireAdmin) —
@@ -318,13 +319,35 @@ router.get('/exports/google-sheet', requireAdmin, (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Body: one of
+//   {}                                → yesterday, the same day the nightly run covers
+//   { day: "2026-10-14" }             → that one day
+//   { from: "2026-10-01", to: "…" }   → every day in the span, appended in one request
+//   { month: true }                   → the 1st of this month through yesterday
+// plus { dry_run: true } to count without writing and { force: true } to send
+// days that have already been sent.
 router.post('/exports/google-sheet', requireAdmin, async (req, res, next) => {
   const body = req.body || {};
-  const day = body.day == null || body.day === '' ? null : String(body.day);
-  if (day && !injectorDailyExport.isDay(day)) {
-    return next(new AppError('Give the day as YYYY-MM-DD.', 400, 'VALIDATION_ERROR'));
+  const text = (value) => (value == null || value === '' ? null : String(value));
+  const day = text(body.day);
+  const from = text(body.from);
+  const to = text(body.to);
+  const month = body.month === true || body.month === 'true';
+
+  for (const [name, value] of [['day', day], ['from', from], ['to', to]]) {
+    if (value && !injectorDailyExport.isDay(value)) {
+      return next(new AppError(`Give ${name} as YYYY-MM-DD.`, 400, 'VALIDATION_ERROR'));
+    }
   }
+  if ((from && !to) || (to && !from)) {
+    return next(new AppError('A range needs both from and to.', 400, 'VALIDATION_ERROR'));
+  }
+  if (from && day) {
+    return next(new AppError('Ask for a single day or a range, not both.', 400, 'VALIDATION_ERROR'));
+  }
+
   const dryRun = body.dry_run === true || body.dry_run === 'true';
+  const force = body.force === true || body.force === 'true';
   if (!dryRun && !googleSheets.isConfigured()) {
     return next(new AppError(
       `Google Sheets export is not configured. Set ${googleSheets.missingConfig().join(', ')} on the server.`,
@@ -333,12 +356,17 @@ router.post('/exports/google-sheet', requireAdmin, async (req, res, next) => {
   }
 
   try {
-    const result = await injectorDailyExport.exportDay(day, {
-      force: body.force === true || body.force === 'true',
-      dryRun,
-    });
-    console.log(`[InjectorSheetExport] ${result.day}: ${result.rows} passed injector(s), ` +
+    let result;
+    if (month) result = await injectorDailyExport.exportMonthToDate({ force, dryRun });
+    else if (from) result = await injectorDailyExport.exportRange(from, to, { force, dryRun });
+    else result = await injectorDailyExport.exportDay(day, { force, dryRun });
+
+    const span = result.from ? `${result.from}..${result.to} (${result.days} day(s))` : result.day;
+    console.log(`[InjectorSheetExport] ${span}: ${result.rows} passed injector(s), ` +
       `${result.skipped ? `skipped (${result.reason})` : `appended ${result.appended}`} (user=${req.user?.id})`);
+    if (!result.ok) {
+      return next(new AppError(exportRefusal(result), 400, 'VALIDATION_ERROR'));
+    }
     res.json(result);
   } catch (err) {
     return next(new AppError(
@@ -347,6 +375,18 @@ router.post('/exports/google-sheet', requireAdmin, async (req, res, next) => {
     ));
   }
 });
+
+/** Why a range was refused, in words the caller can act on. */
+function exportRefusal(result) {
+  if (result.reason === 'backwards_range') return 'The range ends before it starts.';
+  if (result.reason === 'range_too_long') {
+    return `A range covers at most ${injectorDailyExport.MAX_RANGE_DAYS} days.`;
+  }
+  if (result.reason === 'too_many_rows') {
+    return `That range holds ${result.rows} rows, more than the ${injectorDailyExport.MAX_RANGE_ROWS} one request sends. Export it in smaller spans.`;
+  }
+  return 'Give the day as YYYY-MM-DD.';
+}
 
 // ── Sync Now ──────────────────────────────────────────────────────────────
 router.post('/sync', requireAdmin, async (req, res, next) => {
