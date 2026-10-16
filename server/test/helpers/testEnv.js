@@ -68,7 +68,10 @@ function resetInjectorData() {
   // Delete them first so repeated tests cannot trip the one-active-case rule.
   try { db.run('DELETE FROM injector_repair_cases', []); } catch (_) {}
   db.run('DELETE FROM injector_test_reports', []);
-  db.run("DELETE FROM app_settings WHERE key IN ('carbonzapp_last_sync', 'carbonzapp_api_key')", []);
+  db.run(`DELETE FROM app_settings WHERE key IN (
+    'carbonzapp_last_sync', 'carbonzapp_api_key',
+    'injector_sheet_export_last_day', 'injector_sheet_export_last_run', 'injector_sheet_export_days'
+  )`, []);
   const ids = db.all("SELECT id FROM inspections WHERE inspector_name IN ('Injector Test Bench', 'Test User')", [])
     .map((r) => r.id);
   for (const id of ids) {

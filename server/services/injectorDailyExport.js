@@ -37,6 +37,14 @@ const EXPORT_COLUMNS = `id, part_number, serial_number, test_datetime,
 /** Settings keys recording what has already been sent, so a day is not sent twice. */
 const LAST_DAY_KEY = 'injector_sheet_export_last_day';
 const LAST_RUN_KEY = 'injector_sheet_export_last_run';
+// Every day sent so far, as a JSON array. The nightly run only ever asks about
+// yesterday, but a backfill covers arbitrary days in any order, and a watermark
+// cannot express "Monday and Wednesday are done, Tuesday is not". One string of
+// a few kilobytes a year is a fair price for getting re-runs right.
+const SENT_DAYS_KEY = 'injector_sheet_export_days';
+// A backfill is bounded so one request cannot try to send years of history.
+const MAX_RANGE_DAYS = 366;
+const MAX_RANGE_ROWS = 5000;
 
 function getSetting(key) {
   const row = db.get('SELECT value FROM app_settings WHERE key = ?', [key]);
@@ -48,6 +56,26 @@ function setSetting(key, value) {
   const existing = db.get('SELECT key FROM app_settings WHERE key = ?', [key]);
   if (existing) db.run('UPDATE app_settings SET value = ?, updated_at = ? WHERE key = ?', [value, now, key]);
   else db.run('INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)', [key, value, now]);
+}
+
+/** The days already written to the sheet. */
+function sentDays() {
+  try {
+    const parsed = JSON.parse(getSetting(SENT_DAYS_KEY) || '[]');
+    return new Set(Array.isArray(parsed) ? parsed.filter((day) => typeof day === 'string') : []);
+  } catch (_) {
+    return new Set();   // a corrupted setting must not block the export
+  }
+}
+
+/** Record days as written, and move the "last day" marker to the newest. */
+function markSent(days = []) {
+  const all = sentDays();
+  for (const day of days) all.add(day);
+  const sorted = [...all].sort();
+  setSetting(SENT_DAYS_KEY, JSON.stringify(sorted));
+  setSetting(LAST_DAY_KEY, sorted[sorted.length - 1] || '');
+  setSetting(LAST_RUN_KEY, new Date().toISOString());
 }
 
 /** True for a well-formed calendar day. */
@@ -107,6 +135,10 @@ function exportStatus() {
     missing: googleSheets.missingConfig(),
     spreadsheetId: googleSheets.target().spreadsheetId || null,
     range: googleSheets.target().range,
+    // Which account the rows are written as. It is an identifier, not a
+    // secret, and seeing it here is how an operator confirms that a replaced
+    // key actually reached the server.
+    serviceAccount: googleSheets.serviceAccountEmail(),
     timeZone: testTimeZone(),
     lastExportedDay: getSetting(LAST_DAY_KEY),
     lastRunAt: getSetting(LAST_RUN_KEY),
@@ -139,21 +171,19 @@ async function exportDay(day = null, opts = {}) {
   const rows = buildExportRows(testsForDay(target, timeZone), timeZone);
   const result = { ok: true, day: target, rows: rows.length, appended: 0, skipped: false, reason: '', updatedRange: '' };
 
-  if (!force && getSetting(LAST_DAY_KEY) === target) {
+  if (!force && sentDays().has(target)) {
     return { ...result, skipped: true, reason: 'already_exported' };
   }
   if (dryRun) return { ...result, skipped: true, reason: 'dry_run' };
   if (!rows.length) {
     // Nothing to write, but the day is still done — a quiet day must not make
     // tomorrow's run resend it.
-    setSetting(LAST_DAY_KEY, target);
-    setSetting(LAST_RUN_KEY, new Date().toISOString());
+    markSent([target]);
     return { ...result, skipped: true, reason: 'no_passed_injectors' };
   }
 
   const appended = await appendRows(rows, { header: COLUMNS });
-  setSetting(LAST_DAY_KEY, target);
-  setSetting(LAST_RUN_KEY, new Date().toISOString());
+  markSent([target]);
   return {
     ...result,
     appended: Number(appended && appended.appended) || rows.length,
@@ -161,10 +191,135 @@ async function exportDay(day = null, opts = {}) {
   };
 }
 
+/** Every day from `from` to `to` inclusive, ascending. */
+function daysBetween(from, to) {
+  const days = [];
+  const [year, month, day] = String(from).split('-').map(Number);
+  for (let cursor = Date.UTC(year, month - 1, day); ; cursor += 86400000) {
+    const date = new Date(cursor);
+    const iso = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+    if (iso > String(to)) break;
+    days.push(iso);
+    if (days.length > MAX_RANGE_DAYS) break;
+  }
+  return days;
+}
+
+/** The first and last day of the month `day` falls in. */
+function monthOf(day) {
+  const [year, month] = String(day).split('-').map(Number);
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const pad = (value) => String(value).padStart(2, '0');
+  return { from: `${year}-${pad(month)}-01`, to: `${year}-${pad(month)}-${pad(last)}` };
+}
+
+/**
+ * Export a span of days in one go — the backfill a new sheet starts with, and
+ * the way a run missed while the server was down is caught up.
+ *
+ * Every day in the span is collected first and appended in ONE request, in
+ * date order, so a month lands as one block rather than thirty appends that
+ * can half-fail. Days already sent are left out unless `force` says otherwise,
+ * which is what makes running the same backfill twice harmless.
+ *
+ * Days are only marked as sent once the append has succeeded.
+ *
+ * @returns { ok, from, to, days, rows, appended, skipped, reason, perDay }
+ */
+async function exportRange(from, to, opts = {}) {
+  const {
+    force = false,
+    dryRun = false,
+    appendRows = googleSheets.appendRows,
+    timeZone = testTimeZone(),
+    now = new Date(),
+  } = opts;
+
+  const start = String(from);
+  const asked = String(to);
+  const base = { ok: true, from: start, to: asked, days: 0, rows: 0, appended: 0, skipped: false, reason: '', perDay: [] };
+
+  if (!isDay(start) || !isDay(asked)) {
+    return { ...base, ok: false, skipped: true, reason: 'invalid_day' };
+  }
+  if (start > asked) {
+    return { ...base, ok: false, skipped: true, reason: 'backwards_range' };
+  }
+
+  // A day is exported once, when it is over. Including today would send the
+  // morning's tests and mark the day done, so everything tested after the
+  // backfill ran would never reach the sheet — so the span stops at yesterday
+  // and says so.
+  const yesterday = previousDay(currentZonedDay(now, timeZone));
+  const end = asked > yesterday ? yesterday : asked;
+  base.to = end;
+  if (end !== asked) base.askedTo = asked;
+  if (start > end) {
+    return { ...base, ok: true, skipped: true, reason: 'no_complete_days' };
+  }
+
+  const span = daysBetween(start, end);
+  if (span.length > MAX_RANGE_DAYS) {
+    return { ...base, ok: false, skipped: true, reason: 'range_too_long' };
+  }
+
+  const already = force ? new Set() : sentDays();
+  const perDay = [];
+  const rows = [];
+  const covered = [];
+  for (const day of span) {
+    if (already.has(day)) {
+      perDay.push({ day, rows: 0, skipped: true, reason: 'already_exported' });
+      continue;
+    }
+    const dayRows = buildExportRows(testsForDay(day, timeZone), timeZone);
+    perDay.push({ day, rows: dayRows.length, skipped: false, reason: '' });
+    rows.push(...dayRows);
+    covered.push(day);
+  }
+
+  const result = { ...base, days: covered.length, rows: rows.length, perDay };
+  if (rows.length > MAX_RANGE_ROWS) {
+    return { ...result, ok: false, skipped: true, reason: 'too_many_rows' };
+  }
+  if (dryRun) return { ...result, skipped: true, reason: 'dry_run' };
+  if (!covered.length) return { ...result, skipped: true, reason: 'already_exported' };
+  if (!rows.length) {
+    // The span held no passing tests at all. The days are still done.
+    markSent(covered);
+    return { ...result, skipped: true, reason: 'no_passed_injectors' };
+  }
+
+  const appended = await appendRows(rows, { header: COLUMNS });
+  markSent(covered);
+  return {
+    ...result,
+    appended: Number(appended && appended.appended) || rows.length,
+    updatedRange: (appended && appended.updatedRange) || '',
+  };
+}
+
+/** The month-to-date backfill: the 1st of this month through yesterday. */
+async function exportMonthToDate(opts = {}) {
+  const timeZone = opts.timeZone || testTimeZone();
+  const today = currentZonedDay(opts.now || new Date(), timeZone);
+  const { from, to } = monthOf(today);
+  // The month's last day may be in the future; exportRange stops at yesterday.
+  return exportRange(from, to, { ...opts, timeZone });
+}
+
 module.exports = {
   COLUMNS,
   LAST_DAY_KEY,
   LAST_RUN_KEY,
+  SENT_DAYS_KEY,
+  MAX_RANGE_DAYS,
+  MAX_RANGE_ROWS,
+  daysBetween,
+  monthOf,
+  sentDays,
+  exportRange,
+  exportMonthToDate,
   isDay,
   defaultExportDay,
   testsForDay,

@@ -117,6 +117,16 @@ function isConfigured() {
   return missingConfig().length === 0;
 }
 
+/** The service account the rows are written as, or null when none is set. */
+function serviceAccountEmail() {
+  try {
+    const creds = credentials();
+    return creds ? creds.clientEmail : null;
+  } catch (_) {
+    return null;   // an unreadable key file is already reported by missingConfig
+  }
+}
+
 /**
  * An authenticated Sheets client for this service account.
  *
@@ -199,5 +209,6 @@ module.exports = {
   target,
   missingConfig,
   isConfigured,
+  serviceAccountEmail,
   appendRows,
 };
