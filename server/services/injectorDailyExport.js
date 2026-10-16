@@ -21,6 +21,7 @@ const db = require('../db/adapter');
 const { PASS, injectorOutcome } = require('./injectorResult');
 const { zonedDayRange, zonedTestDate, currentZonedDay, previousDay, testTimeZone } = require('./timeZone');
 const googleSheets = require('./googleSheets');
+const { displayPartNumber, unmappedPartNumbers } = require('./injectorPartNumbers');
 
 /** The sheet's columns, in order. */
 const COLUMNS = ['Test Date', 'Part Number', 'Serial Number'];
@@ -117,15 +118,25 @@ function passedTests(tests = []) {
 /**
  * Sheet rows for a day's passed injectors: [Test Date, Part Number, Serial Number].
  *
+ * The part number is PDI's, not the bench's: the bench records evaluation and
+ * pre-production spellings of the same part, and the sheet is read as a record
+ * of PDI parts (see injectorPartNumbers). A bench part with no PDI number
+ * passes through as it came, and is listed by `unmappedParts` on the result.
+ *
  * A missing part or serial is written as an empty cell rather than a dash, so
  * the column stays usable as data.
  */
 function buildExportRows(tests = [], timeZone = testTimeZone()) {
   return passedTests(tests).map((test) => [
     zonedTestDate(test.test_datetime, timeZone),
-    String(test.part_number || '').trim(),
+    displayPartNumber(test.part_number),
     String(test.serial_number || '').trim(),
   ]);
+}
+
+/** The bench part numbers among these tests that have no PDI number. */
+function unmappedPartsIn(tests = []) {
+  return unmappedPartNumbers(passedTests(tests).map((test) => test.part_number));
 }
 
 /** What the last run did, for the settings endpoint and the manual trigger. */
@@ -168,8 +179,12 @@ async function exportDay(day = null, opts = {}) {
     return { ok: false, day: target, rows: 0, appended: 0, skipped: true, reason: 'invalid_day' };
   }
 
-  const rows = buildExportRows(testsForDay(target, timeZone), timeZone);
-  const result = { ok: true, day: target, rows: rows.length, appended: 0, skipped: false, reason: '', updatedRange: '' };
+  const tests = testsForDay(target, timeZone);
+  const rows = buildExportRows(tests, timeZone);
+  const result = {
+    ok: true, day: target, rows: rows.length, appended: 0, skipped: false, reason: '', updatedRange: '',
+    unmappedParts: unmappedPartsIn(tests),
+  };
 
   if (!force && sentDays().has(target)) {
     return { ...result, skipped: true, reason: 'already_exported' };
@@ -267,18 +282,24 @@ async function exportRange(from, to, opts = {}) {
   const perDay = [];
   const rows = [];
   const covered = [];
+  const benchParts = [];
   for (const day of span) {
     if (already.has(day)) {
       perDay.push({ day, rows: 0, skipped: true, reason: 'already_exported' });
       continue;
     }
-    const dayRows = buildExportRows(testsForDay(day, timeZone), timeZone);
+    const dayTests = testsForDay(day, timeZone);
+    const dayRows = buildExportRows(dayTests, timeZone);
     perDay.push({ day, rows: dayRows.length, skipped: false, reason: '' });
     rows.push(...dayRows);
+    benchParts.push(...passedTests(dayTests).map((test) => test.part_number));
     covered.push(day);
   }
 
-  const result = { ...base, days: covered.length, rows: rows.length, perDay };
+  const result = {
+    ...base, days: covered.length, rows: rows.length, perDay,
+    unmappedParts: unmappedPartNumbers(benchParts),
+  };
   if (rows.length > MAX_RANGE_ROWS) {
     return { ...result, ok: false, skipped: true, reason: 'too_many_rows' };
   }
@@ -325,6 +346,7 @@ module.exports = {
   testsForDay,
   passedTests,
   buildExportRows,
+  unmappedPartsIn,
   exportStatus,
   exportDay,
 };

@@ -27,6 +27,7 @@ const {
   testsForDay,
   passedTests,
   buildExportRows,
+  unmappedPartsIn,
   exportStatus,
   exportDay,
 } = require('../services/injectorDailyExport');
@@ -389,4 +390,49 @@ test('a range entirely in the future has no complete day to send', async () => {
     { ok: true, skipped: true, reason: 'no_complete_days', rows: 0 },
   );
   assert.strictEqual(sheet.calls.length, 0);
+});
+
+// ── The part number the sheet shows ─────────────────────────────────────────
+test("exported rows carry PDI's part number, not the bench's", async () => {
+  resetInjectorData();
+  seedTest({ id: 'map-a', serial: 'MAP-A', part: '2872405', datetime: '2026-10-02T15:00:00+00:00' });
+  seedTest({ id: 'map-b', serial: 'MAP-B', part: '2897320 (Beta)', datetime: '2026-10-02T16:00:00+00:00' });
+  seedTest({ id: 'map-c', serial: 'MAP-C', part: 'P4327147-QC', datetime: '2026-10-02T17:00:00+00:00' });
+
+  assert.deepStrictEqual(buildExportRows(testsForDay('2026-10-02')), [
+    ['2026-10-02', '7159417', 'MAP-A'],
+    ['2026-10-02', '7159419', 'MAP-B'],
+    ['2026-10-02', '7159421', 'MAP-C'],
+  ]);
+});
+
+test('a bench part with no PDI number goes through as it came, and is reported', async () => {
+  resetInjectorData();
+  seedTest({ id: 'known', serial: 'KNOWN-1', part: '2872405', datetime: '2026-10-03T15:00:00+00:00' });
+  seedTest({ id: 'unknown', serial: 'UNKNOWN-1', part: 'P4327147-Dev', datetime: '2026-10-03T16:00:00+00:00' });
+  // A failing injector's part is not reported: it never reaches the sheet.
+  seedTest({ id: 'failed', serial: 'FAILED-1', part: 'OTHER-PART', datetime: '2026-10-03T17:00:00+00:00', pass: false });
+
+  const tests = testsForDay('2026-10-03');
+  assert.deepStrictEqual(buildExportRows(tests), [
+    ['2026-10-03', '7159417', 'KNOWN-1'],
+    ['2026-10-03', 'P4327147-Dev', 'UNKNOWN-1'],
+  ]);
+  assert.deepStrictEqual(unmappedPartsIn(tests), ['P4327147-Dev']);
+
+  const sheet = recordingAppender();
+  const result = await exportDay('2026-10-03', { appendRows: sheet.appendRows });
+  assert.deepStrictEqual(result.unmappedParts, ['P4327147-Dev'], 'the run says what it could not translate');
+});
+
+test('a backfill reports every untranslated part across the span, once each', async () => {
+  resetInjectorData();
+  seedTest({ id: 'r1', serial: 'SPAN-1', part: '2897320', datetime: '2026-10-02T15:00:00+00:00' });
+  seedTest({ id: 'r2', serial: 'SPAN-2', part: 'MYSTERY-9', datetime: '2026-10-04T15:00:00+00:00' });
+  seedTest({ id: 'r3', serial: 'SPAN-3', part: 'MYSTERY-9', datetime: '2026-10-06T15:00:00+00:00' });
+
+  const sheet = recordingAppender();
+  const result = await exportRange('2026-10-01', '2026-10-08', { appendRows: sheet.appendRows });
+  assert.deepStrictEqual(result.unmappedParts, ['MYSTERY-9']);
+  assert.deepStrictEqual(sheet.calls[0].rows.map((row) => row[1]), ['7159419', 'MYSTERY-9', 'MYSTERY-9']);
 });
