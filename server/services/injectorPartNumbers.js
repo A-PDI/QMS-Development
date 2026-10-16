@@ -2,89 +2,85 @@
 /**
  * The part number the shop uses, for a part number the test bench reports.
  *
- * The CarbonZapp bench records the part as it was set up for testing, which
- * includes evaluation and pre-production variants of the same part — "(Beta)",
- * "-Eval", "-QC". PDI's own part number is what belongs on anything that leaves
- * the test bench, so the Google Sheet export translates through this table.
+ * The bench records the part as it was set up for testing, and the spelling
+ * varies: "P4327147", "P4327147 (Beta)", "P4327147-Eval", "P4327147 - QC".
+ * PDI's own part number is what belongs on anything that leaves the bench, so
+ * the Google Sheet export translates through the rules below.
  *
- * The table is deliberately EXPLICIT: every bench spelling is listed, including
- * each variant. Guessing a base part from a suffix would silently file a
- * genuinely new part under an existing number, which on a quality record is a
- * worse failure than not translating at all. A bench part that is not listed
- * passes through unchanged, so it shows up in the sheet looking like a bench
- * number — visible, and easily added here.
+ * A rule matches when its CORE NUMBER appears anywhere in the bench part. That
+ * is deliberately broad: a prefix, a suffix, a bracketed variant, or spaces
+ * around a hyphen all still match, so a new spelling of a known part does not
+ * silently reach the sheet untranslated. The cost is that a different part
+ * whose number happens to contain one of these cores would be translated too
+ * — the cores are seven digits, so that is unlikely, but it is the trade.
  *
- * To add a part: add every bench spelling of it, left, with PDI's number right.
+ * To add a part: add a rule with its core number and PDI's number.
  */
 
-// Bench part number → PDI part number.
-const PART_NUMBER_DISPLAY_MAP = {
-  '2872405': '7159417',
-
-  '2897320': '7159419',
-  '2897320 (Beta)': '7159419',
-
-  'P4327147': '7159421',
-  'P4327147 (Beta)': '7159421',
-  'P4327147-Eval': '7159421',
-  'P4327147-QC': '7159421',
-};
+// Checked in order; the first core found in the bench part wins. Cores must not
+// contain one another — the test suite asserts that, because overlapping cores
+// would make the result depend on the order of this list rather than the data.
+const PART_NUMBER_RULES = [
+  { core: '2872405', display: '7159417' },
+  { core: '2897320', display: '7159419' },
+  { core: '4327147', display: '7159421' },
+];
 
 /**
- * The lookup key for a bench part number.
+ * The two forms a bench part is matched against.
  *
- * Case and surrounding or repeated whitespace are not meaningful — the bench
- * has been seen to write "P4327147 (Beta)" and " p4327147  (beta) " for the
- * same setup — so they are normalised away. Nothing else is: a hyphen or a
- * suffix is part of the identity.
+ * The first is the value itself, upper-cased with whitespace collapsed. The
+ * second also has every separator removed, so a core broken up by a stray
+ * space or hyphen — "P4327 147", "4327-147" — is still found.
  */
-function lookupKey(partNumber) {
-  return String(partNumber == null ? '' : partNumber)
-    .trim()
-    .replace(/\s+/g, ' ')
-    .toUpperCase();
+function matchForms(partNumber) {
+  const text = String(partNumber == null ? '' : partNumber).trim().replace(/\s+/g, ' ').toUpperCase();
+  return [text, text.replace(/[^A-Z0-9]/g, '')];
 }
 
-// Built once, so a lookup is a single hash hit however the bench spelled it.
-const BY_KEY = new Map(
-  Object.entries(PART_NUMBER_DISPLAY_MAP).map(([bench, display]) => [lookupKey(bench), display])
-);
+/** The rule covering this bench part, or null. */
+function ruleFor(partNumber) {
+  const forms = matchForms(partNumber);
+  if (!forms[0]) return null;
+  return PART_NUMBER_RULES.find((rule) => forms.some((form) => form.includes(rule.core))) || null;
+}
 
 /** True when the bench part number has a PDI number to show instead. */
 function isMapped(partNumber) {
-  return BY_KEY.has(lookupKey(partNumber));
+  return ruleFor(partNumber) !== null;
 }
 
 /**
- * PDI's part number for a bench part number, or the bench's own value when it
- * is not in the table. An empty part stays empty.
+ * PDI's part number for a bench part number, or the bench's own value when no
+ * rule covers it. An empty part stays empty.
  */
 function displayPartNumber(partNumber) {
-  const key = lookupKey(partNumber);
-  if (!key) return '';
-  return BY_KEY.get(key) || String(partNumber).trim();
+  const rule = ruleFor(partNumber);
+  if (rule) return rule.display;
+  return String(partNumber == null ? '' : partNumber).trim();
 }
 
 /**
- * The bench part numbers in `partNumbers` that have no PDI number, once each,
- * in the order first seen. The export reports these so a part the bench starts
+ * The bench part numbers in `partNumbers` that no rule covers, once each, in
+ * the order first seen. The export reports these so a part the bench starts
  * using is noticed rather than quietly written through.
  */
 function unmappedPartNumbers(partNumbers = []) {
   const seen = new Set();
   const out = [];
   for (const partNumber of partNumbers) {
-    const key = lookupKey(partNumber);
-    if (!key || seen.has(key) || BY_KEY.has(key)) continue;
-    seen.add(key);
+    const [text] = matchForms(partNumber);
+    if (!text || seen.has(text) || ruleFor(partNumber)) continue;
+    seen.add(text);
     out.push(String(partNumber).trim());
   }
   return out;
 }
 
 module.exports = {
-  PART_NUMBER_DISPLAY_MAP,
-  lookupKey,
+  PART_NUMBER_RULES,
+  matchForms,
+  ruleFor,
   isMapped,
   displayPartNumber,
   unmappedPartNumbers,
