@@ -2,11 +2,12 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import pdfjsAssets from './vite-plugin-pdfjs-assets.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), pdfjsAssets()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),

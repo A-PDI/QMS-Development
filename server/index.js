@@ -46,6 +46,8 @@ const drawingsRoutes = require('./routes/drawings');
 const qualityAlertsRoutes = require('./routes/quality-alerts');
 const reportsRoutes = require('./routes/reports');
 const injectorTestsRoutes = require('./routes/injector-tests');
+const esignRoutes = require('./routes/esign');
+const esignPublicRoutes = require('./routes/esign-public');
 
 const app        = express();
 const PORT       = process.env.PORT || 3001;
@@ -132,6 +134,18 @@ app.use('/api/drawings', authMiddleware, drawingsRoutes);
 app.use('/api/quality-alerts', authMiddleware, qualityAlertsRoutes);
 app.use('/api/reports', authMiddleware, reportsRoutes);
 app.use('/api/injector-tests', authMiddleware, injectorTestsRoutes);
+
+// E-sign. The signer endpoints are public (the link token is the credential),
+// rate-limited per IP, and must be mounted before the authenticated router.
+const esignPublicRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please wait a few minutes and try again.', code: 'RATE_LIMITED' },
+});
+app.use('/api/esign/public', esignPublicRateLimit, esignPublicRoutes);
+app.use('/api/esign', authMiddleware, esignRoutes);
 
 // Users list
 app.get('/api/users', authMiddleware, (req, res, next) => {

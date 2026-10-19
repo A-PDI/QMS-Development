@@ -1,0 +1,15 @@
+# E-sign field detector (Python 3.12). Install into esign-detector/.venv:
+#
+#   cd esign-detector
+#   py -3.12 -m venv .venv                 (Linux/macOS: python3.12 -m venv .venv)
+#   .venv\Scripts\python -m pip install -r requirements.txt
+#
+# The first run downloads the FFDNet-L model weights from huggingface.co into
+# HF_HOME (default: %USERPROFILE%\.cache\huggingface). After that it runs offline.
+#
+# Licensing: commonforms pulls in ultralytics, which is AGPL-3.0. This service
+# runs it unmodified, internally, behind the Node app.
+commonforms==0.2.1
+fastapi==0.148.0
+uvicorn==0.54.0
+python-multipart==0.0.32

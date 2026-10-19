@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Outlet, useLocation } from 'react-router-dom'
+import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Menu } from 'lucide-react'
 import Sidebar from './Sidebar'
 import { ToastContainer } from './ui/toast'
@@ -9,6 +9,18 @@ export default function Layout() {
   const { toasts, dismiss } = useToast()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const location = useLocation()
+  const navigate = useNavigate()
+
+  // A signing link that needed a Microsoft sign-in sends the user to /login and
+  // remembers where they were; after login they land here, so send them back.
+  useEffect(() => {
+    let target = null
+    try {
+      target = sessionStorage.getItem('pdi_return_to')
+      if (target) sessionStorage.removeItem('pdi_return_to')
+    } catch (_) { /* storage unavailable */ }
+    if (target && target.startsWith('/sign/')) navigate(target, { replace: true })
+  }, [navigate])
 
   // Close the drawer whenever the route changes — belt-and-suspenders in case
   // a nav path doesn't flow through the Sidebar's onClick handler.

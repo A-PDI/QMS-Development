@@ -1389,6 +1389,7 @@ function UsersTab({ showToast }) {
     { key: 'ncrs',           label: 'NCRs' },
     { key: 'quality_alerts', label: 'Quality Alerts' },
     { key: 'drawings',       label: 'Drawings' },
+    { key: 'esign',          label: 'E-Sign' },
   ]
 
   function startEdit(user) {

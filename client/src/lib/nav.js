@@ -19,6 +19,7 @@ export const NAV_ITEMS = [
   { to: '/ncrs',            icon: 'alert',         label: 'NCRs',                       permKey: 'ncrs' },
   { to: '/quality-alerts',  icon: 'bell',          label: 'Quality Alerts', alertKey: 'qualityAlerts', permKey: 'quality_alerts' },
   { to: '/drawings',        icon: 'drawing',       label: 'Drawings',                   permKey: 'drawings' },
+  { to: '/esign',           icon: 'signature',     label: 'E-Sign',         alertKey: 'esignInbox', permKey: 'esign' },
   { to: '/reports',         icon: 'chart',         label: 'Reports',        adminOnly: true },
   { to: '/admin',           icon: 'settings',      label: 'Admin',          adminOnly: true },
   // Injector Tests sits directly below Admin and is restricted to the ADMIN

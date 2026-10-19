@@ -36,3 +36,9 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 .vscod
+
+# ── E-sign field detector (Python) ───────────────────────────────────────────
+esign-detector/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

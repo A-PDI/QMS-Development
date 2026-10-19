@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, ClipboardList, PlusCircle, LogOut, Shield, AlertTriangle, Settings, X, Bell, User, BarChart2, FileImage, KeyRound, Gauge } from 'lucide-react'
+import { LayoutDashboard, ClipboardList, PlusCircle, LogOut, Shield, AlertTriangle, Settings, X, Bell, User, BarChart2, FileImage, KeyRound, Gauge, FileSignature } from 'lucide-react'
 import { useMsal } from '@azure/msal-react'
 import { isEntraConfigured } from '../lib/msalConfig'
 import { getUser, clearAuth } from '../lib/auth'
 import { useQualityAlertCount } from '../hooks/useQualityAlerts'
+import { useEsignInbox } from '../hooks/useEsign'
 import { useToast } from '../hooks/useToast'
 import api from '../lib/api'
 import { NAV_ITEMS, visibleNavItems } from '../lib/nav'
@@ -22,6 +23,7 @@ const NAV_ICONS = {
   chart: BarChart2,
   settings: Settings,
   gauge: Gauge,
+  signature: FileSignature,
 }
 
 function ChangePasswordModal({ onClose }) {
@@ -155,6 +157,14 @@ export default function Sidebar({ open = false, onClose }) {
   // so the sidebar and the route guards can never disagree.
   const navItems = visibleNavItems(user, NAV_ITEMS)
 
+  // Documents waiting for this user's signature. Someone whose page
+  // permissions hide E-Sign still gets a way to reach them.
+  const { data: esignInbox = [] } = useEsignInbox()
+  const esignCount = esignInbox.length
+  if (esignCount > 0 && !navItems.some((i) => i.to === '/esign')) {
+    navItems.push({ to: '/esign/inbox', icon: 'signature', label: 'To Sign', alertKey: 'esignInbox' })
+  }
+
   return (
     <>
       {open && (
@@ -215,6 +225,11 @@ export default function Sidebar({ open = false, onClose }) {
             >
               <Icon size={16} className="flex-shrink-0" />
               <span className="flex-1">{label}</span>
+              {alertKey === 'esignInbox' && esignCount > 0 && (
+                <span className="bg-pdi-amber text-white text-xs font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1" title={`${esignCount} to sign`}>
+                  {esignCount > 99 ? '99+' : esignCount}
+                </span>
+              )}
               {alertKey === 'qualityAlerts' && qualityAlertCount > 0 && (
                 <span className="bg-red-500 text-white text-xs font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
                   {qualityAlertCount > 99 ? '99+' : qualityAlertCount}

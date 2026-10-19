@@ -10,9 +10,40 @@
 //   pm2 logs pdi-inspection           ← tail logs
 //   pm2 restart pdi-inspection        ← restart after .env change
 //   pm2 reload pdi-inspection         ← zero-downtime reload
+//   pm2 logs pdi-esign-detector       ← e-sign field detector (Python)
+
+const path = require('path')
+
+// The e-sign field detector runs from its own virtual environment
+// (see esign-detector/requirements.txt for setup).
+const DETECTOR_PYTHON = path.join(
+  __dirname, 'esign-detector', '.venv',
+  process.platform === 'win32' ? 'Scripts\\python.exe' : 'bin/python'
+)
 
 module.exports = {
   apps: [
+    {
+      name: 'pdi-esign-detector',
+      script: 'app.py',
+      cwd: './esign-detector',
+      interpreter: DETECTOR_PYTHON,
+      instances: 1,
+      exec_mode: 'fork',
+      autorestart: true,
+      watch: false,
+      // The model and PDF rendering need more headroom than the Node app.
+      max_memory_restart: '2G',
+      env: {
+        DETECTOR_HOST: '127.0.0.1',
+        DETECTOR_PORT: 8765,
+        PYTHONUNBUFFERED: '1',
+      },
+      out_file: './logs/detector-out.log',
+      error_file: './logs/detector-error.log',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+      merge_logs: true,
+    },
     {
       name: 'pdi-inspection',
       script: 'index.js',

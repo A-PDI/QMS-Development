@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { getToken, getUser } from './lib/auth'
 import { canAccessRoute } from './lib/nav'
@@ -20,6 +21,22 @@ import Admin from './pages/Admin'
 import InjectorTests from './pages/InjectorTests'
 import InjectorReports from './pages/InjectorReports'
 import Drawings from './pages/Drawings'
+
+// E-sign pages pull in pdf.js (~400 kB), so they load on first use only.
+const EsignList = lazy(() => import('./pages/esign/EsignList'))
+const EsignNew = lazy(() => import('./pages/esign/EsignNew'))
+const EsignEditor = lazy(() => import('./pages/esign/EsignEditor'))
+const EsignDetail = lazy(() => import('./pages/esign/EsignDetail'))
+const EsignInbox = lazy(() => import('./pages/esign/EsignInbox'))
+const SignDocument = lazy(() => import('./pages/SignDocument'))
+
+function Lazy({ children }) {
+  return (
+    <Suspense fallback={<div className="py-24 text-center text-sm text-gray-400">Loading…</div>}>
+      {children}
+    </Suspense>
+  )
+}
 import NotFound from './pages/NotFound'
 
 // Guards protected routes: requires a valid app JWT (obtained after Entra sign-in).
@@ -55,6 +72,8 @@ export default function App() {
             </PublicRoute>
           }
         />
+        {/* Public: signers open this from their e-mail without an account. */}
+        <Route path="/sign/:token" element={<Lazy><SignDocument /></Lazy>} />
         <Route
           path="/"
           element={
@@ -77,6 +96,11 @@ export default function App() {
           <Route path="ncrs/:id/edit" element={<NCREditor />} />
           <Route path="quality-alerts" element={<QualityAlerts />} />
           <Route path="drawings" element={<Drawings />} />
+          <Route path="esign" element={<RoleRoute path="/esign"><Lazy><EsignList /></Lazy></RoleRoute>} />
+          <Route path="esign/new" element={<RoleRoute path="/esign"><Lazy><EsignNew /></Lazy></RoleRoute>} />
+          <Route path="esign/inbox" element={<Lazy><EsignInbox /></Lazy>} />
+          <Route path="esign/:id" element={<RoleRoute path="/esign"><Lazy><EsignDetail /></Lazy></RoleRoute>} />
+          <Route path="esign/:id/edit" element={<RoleRoute path="/esign"><Lazy><EsignEditor /></Lazy></RoleRoute>} />
           <Route path="reports" element={<Reports />} />
           <Route path="admin" element={<Admin />} />
           <Route
