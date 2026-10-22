@@ -2,7 +2,7 @@
 
 **Document date:** 2026-10-22
 **Code baseline:** `main` at commit `9e53417` ("Match a bench part by the core number it contains")
-**Scope:** Everything in the PDI QMS app that concerns fuel-injector testing: retrieving results from the CarbonZapp test bench, storing and classifying them, showing them to the user, every report/export generated from them, repair tracking, analytics, the daily Google Sheet export, configuration, tests and deployment.
+**Scope:** Everything in the application that concerns fuel-injector testing: retrieving results from the CarbonZapp test bench, storing and classifying them, showing them to the user, every report/export generated from them, repair tracking, analytics, the daily Google Sheet export, configuration, tests and deployment.
 
 Each rule below points to the source file that implements it (`path:line` where useful), so a copy can be checked against the original.
 
@@ -39,7 +39,7 @@ Each rule below points to the source file that implements it (`path:line` where 
 
 ## 1. Overview
 
-The feature is an **admin-only** module of the PDI QMS app (Express + SQLite server, React/Vite SPA). It works like this:
+The feature is an **admin-only** module of a web application (Express + SQLite server, React/Vite SPA). It works like this:
 
 ```
 CarbonZapp cloud (cloudx.carbonzapp.com)
@@ -992,7 +992,7 @@ Filename: `CustomReport_<sanitised first part>_<count>.pdf`.
 
 ### 16.4 Custom Report — Excel workbook
 
-`services/injectorExport.js`: `buildExportModel(injectors, { vendorName })` → `buildInjectorWorkbook(model)` (exceljs, `creator = 'PDI Quality Management System'`). The page filters never appear in or change the file.
+`services/injectorExport.js`: `buildExportModel(injectors, { vendorName })` → `buildInjectorWorkbook(model)` (exceljs; the workbook's `creator` metadata is set to the application's name). The page filters never appear in or change the file.
 
 | Sheet | Content |
 |---|---|
