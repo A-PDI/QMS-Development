@@ -419,7 +419,8 @@ test('a month-to-date backfill is counted over the route, day by day', async () 
     const body = await res.json();
     assert.deepStrictEqual(
       { from: body.from, to: body.to, days: body.days, rows: body.rows, reason: body.reason },
-      { from: '2026-10-01', to: '2026-10-10', days: 10, rows: 2, reason: 'dry_run' },
+      // `days` counts the days that have something outstanding, not the span.
+      { from: '2026-10-01', to: '2026-10-10', days: 2, rows: 2, reason: 'dry_run' },
       'the failing injector is not counted',
     );
     assert.deepStrictEqual(

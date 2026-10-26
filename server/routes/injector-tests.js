@@ -320,7 +320,8 @@ router.get('/exports/google-sheet', requireAdmin, (req, res, next) => {
 });
 
 // Body: one of
-//   {}                                → yesterday, the same day the nightly run covers
+//   {}                                → everything not yet sent, through yesterday
+//                                        (what the nightly run does)
 //   { day: "2026-10-14" }             → that one day
 //   { from: "2026-10-01", to: "…" }   → every day in the span, appended in one request
 //   { month: true }                   → the 1st of this month through yesterday
@@ -359,9 +360,14 @@ router.post('/exports/google-sheet', requireAdmin, async (req, res, next) => {
     let result;
     if (month) result = await injectorDailyExport.exportMonthToDate({ force, dryRun });
     else if (from) result = await injectorDailyExport.exportRange(from, to, { force, dryRun });
-    else result = await injectorDailyExport.exportDay(day, { force, dryRun });
+    else if (day) result = await injectorDailyExport.exportDay(day, { force, dryRun });
+    // With no day named, send everything still outstanding rather than only
+    // yesterday: bench data is synced by hand and routinely arrives late.
+    else result = await injectorDailyExport.exportOutstanding({ force, dryRun });
 
-    const span = result.from ? `${result.from}..${result.to} (${result.days} day(s))` : result.day;
+    const span = result.from
+      ? `${result.from}..${result.to} (${result.days} day(s))`
+      : (result.through ? `outstanding through ${result.through} (${result.days} day(s))` : result.day);
     console.log(`[InjectorSheetExport] ${span}: ${result.rows} passed injector(s), ` +
       `${result.skipped ? `skipped (${result.reason})` : `appended ${result.appended}`} (user=${req.user?.id})`);
     if (!result.ok) {
