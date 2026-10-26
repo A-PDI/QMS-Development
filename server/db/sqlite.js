@@ -284,12 +284,17 @@ function migrateSchema() {
       steps_failed INTEGER DEFAULT 0,
       report_json TEXT NOT NULL DEFAULT '{}',
       inspection_id TEXT REFERENCES inspections(id) ON DELETE SET NULL,
+      -- When this test's row was appended to the daily Google Sheet; NULL
+      -- until it has been. Marking the row rather than the day means a test
+      -- synced after its day closed is still exported (see injectorDailyExport).
+      sheet_exported_at TEXT,
       synced_at TEXT NOT NULL DEFAULT (datetime('now')),
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_injector_reports_unique ON injector_test_reports(report_ext_id, slot_position)`,
     `CREATE INDEX IF NOT EXISTS idx_injector_reports_datetime ON injector_test_reports(test_datetime DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_injector_reports_serial ON injector_test_reports(serial_number)`,
+    `CREATE INDEX IF NOT EXISTS idx_injector_reports_sheet_export ON injector_test_reports(sheet_exported_at)`,
     // Selection on the Injector Tests page groups/filters by job number.
     `CREATE INDEX IF NOT EXISTS idx_injector_reports_job ON injector_test_reports(job_number)`,
     // Repair history is permanent engineering data. CarbonZapp rows are only

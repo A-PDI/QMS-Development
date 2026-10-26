@@ -33,7 +33,8 @@ const BASE_EXCLUSIONS = `(serial_number IS NULL OR UPPER(TRIM(serial_number)) NO
 
 // Enough of a row to classify its result; the step JSON is never needed here.
 const EXPORT_COLUMNS = `id, part_number, serial_number, test_datetime,
-                        overall_pass, result_status, steps_total, steps_passed, steps_failed`;
+                        overall_pass, result_status, steps_total, steps_passed, steps_failed,
+                        sheet_exported_at`;
 
 /** Settings keys recording what has already been sent, so a day is not sent twice. */
 const LAST_DAY_KEY = 'injector_sheet_export_last_day';
@@ -42,6 +43,10 @@ const LAST_RUN_KEY = 'injector_sheet_export_last_run';
 // yesterday, but a backfill covers arbitrary days in any order, and a watermark
 // cannot express "Monday and Wednesday are done, Tuesday is not". One string of
 // a few kilobytes a year is a fair price for getting re-runs right.
+// Retired: the export used to record which DAYS it had sent, which closed a
+// day before its tests had been synced. The record is now sheet_exported_at on
+// each test row. The key is still cleared on reset so an old deployment's
+// leftovers cannot be mistaken for current state.
 const SENT_DAYS_KEY = 'injector_sheet_export_days';
 // A backfill is bounded so one request cannot try to send years of history.
 const MAX_RANGE_DAYS = 366;
@@ -57,26 +62,6 @@ function setSetting(key, value) {
   const existing = db.get('SELECT key FROM app_settings WHERE key = ?', [key]);
   if (existing) db.run('UPDATE app_settings SET value = ?, updated_at = ? WHERE key = ?', [value, now, key]);
   else db.run('INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)', [key, value, now]);
-}
-
-/** The days already written to the sheet. */
-function sentDays() {
-  try {
-    const parsed = JSON.parse(getSetting(SENT_DAYS_KEY) || '[]');
-    return new Set(Array.isArray(parsed) ? parsed.filter((day) => typeof day === 'string') : []);
-  } catch (_) {
-    return new Set();   // a corrupted setting must not block the export
-  }
-}
-
-/** Record days as written, and move the "last day" marker to the newest. */
-function markSent(days = []) {
-  const all = sentDays();
-  for (const day of days) all.add(day);
-  const sorted = [...all].sort();
-  setSetting(SENT_DAYS_KEY, JSON.stringify(sorted));
-  setSetting(LAST_DAY_KEY, sorted[sorted.length - 1] || '');
-  setSetting(LAST_RUN_KEY, new Date().toISOString());
 }
 
 /** True for a well-formed calendar day. */
@@ -108,6 +93,54 @@ function testsForDay(day, timeZone = testTimeZone()) {
       ORDER BY datetime(test_datetime) ASC, part_number ASC, serial_number ASC`,
     [from, to]
   );
+}
+
+/**
+ * Every test recorded up to `until` that has not been written to the sheet.
+ *
+ * This is what a scheduled run sends. Bench data arrives through a manual
+ * sync, often days after the tests were run, so "yesterday's tests" is not a
+ * set that is complete at midnight — but "tests not yet sent" always is. A
+ * test synced a week late is picked up by the next run and lands under the day
+ * it was actually run.
+ */
+function unsentTests(until, timeZone = testTimeZone()) {
+  const { to } = zonedDayRange(until, timeZone);
+  return db.all(
+    `SELECT ${EXPORT_COLUMNS} FROM injector_test_reports
+      WHERE ${BASE_EXCLUSIONS}
+        AND test_datetime IS NOT NULL
+        AND sheet_exported_at IS NULL
+        AND datetime(test_datetime) < datetime(?)
+      ORDER BY datetime(test_datetime) ASC, part_number ASC, serial_number ASC`,
+    [to]
+  );
+}
+
+/** Mark these tests as written, so no later run sends them again. */
+function markTestsExported(tests = []) {
+  const now = new Date().toISOString();
+  for (const test of tests) {
+    if (test && test.id) {
+      db.run('UPDATE injector_test_reports SET sheet_exported_at = ? WHERE id = ?', [now, test.id]);
+    }
+  }
+  setSetting(LAST_RUN_KEY, now);
+}
+
+/** The newest test day that has been written to the sheet, or null. */
+function newestExportedDay(timeZone = testTimeZone()) {
+  const row = db.get(
+    `SELECT MAX(datetime(test_datetime)) AS newest FROM injector_test_reports
+      WHERE sheet_exported_at IS NOT NULL AND test_datetime IS NOT NULL`, []);
+  return row && row.newest ? zonedTestDate(row.newest, timeZone) : null;
+}
+
+/** How many passed tests are waiting to be sent, and the oldest day among them. */
+function pendingSummary(until, timeZone = testTimeZone()) {
+  const pending = passedTests(unsentTests(until, timeZone));
+  const days = [...new Set(pending.map((test) => zonedTestDate(test.test_datetime, timeZone)))].sort();
+  return { rows: pending.length, days: days.length, oldestDay: days[0] || null, newestDay: days[days.length - 1] || null };
 }
 
 /** The passed ones, using the same classifier as every other injector view. */
@@ -151,19 +184,29 @@ function exportStatus() {
     // key actually reached the server.
     serviceAccount: googleSheets.serviceAccountEmail(),
     timeZone: testTimeZone(),
-    lastExportedDay: getSetting(LAST_DAY_KEY),
+    // The newest test day that has actually reached the sheet, read from the
+    // rows themselves rather than from a marker a run might have moved without
+    // sending anything.
+    lastExportedDay: newestExportedDay(),
     lastRunAt: getSetting(LAST_RUN_KEY),
+    // What is waiting to go up, through the end of yesterday. A number that
+    // keeps growing means tests are being synced but not exported.
+    pending: pendingSummary(previousDay(currentZonedDay(new Date(), testTimeZone()))),
   };
 }
 
 /**
  * Export one day's passed injectors.
  *
+ * Only tests that have not already been written are sent, so running this for
+ * a day that was partly exported sends the remainder rather than a duplicate
+ * of the lot. `force` ignores the marks and sends the day's passes again.
+ *
  * @param day        calendar day on the shop's clock; defaults to yesterday
- * @param opts.force send a day that has already been sent (it appends again)
+ * @param opts.force send tests that have already been sent
  * @param opts.dryRun build the rows and report them without writing
  * @param opts.appendRows injector for tests; defaults to the Google Sheets client
- * @returns { ok, day, rows, appended, skipped, reason, updatedRange }
+ * @returns { ok, day, rows, appended, skipped, reason, unmappedParts }
  */
 async function exportDay(day = null, opts = {}) {
   const {
@@ -176,34 +219,84 @@ async function exportDay(day = null, opts = {}) {
 
   const target = day ? String(day) : defaultExportDay(now, timeZone);
   if (!isDay(target)) {
-    return { ok: false, day: target, rows: 0, appended: 0, skipped: true, reason: 'invalid_day' };
+    return { ok: false, day: target, rows: 0, appended: 0, skipped: true, reason: 'invalid_day', unmappedParts: [] };
   }
 
-  const tests = testsForDay(target, timeZone);
+  const all = testsForDay(target, timeZone);
+  const tests = passedTests(force ? all : all.filter((test) => !test.sheet_exported_at));
   const rows = buildExportRows(tests, timeZone);
   const result = {
     ok: true, day: target, rows: rows.length, appended: 0, skipped: false, reason: '', updatedRange: '',
     unmappedParts: unmappedPartsIn(tests),
   };
 
-  if (!force && sentDays().has(target)) {
-    return { ...result, skipped: true, reason: 'already_exported' };
-  }
   if (dryRun) return { ...result, skipped: true, reason: 'dry_run' };
   if (!rows.length) {
-    // Nothing to write, but the day is still done — a quiet day must not make
-    // tomorrow's run resend it.
-    markSent([target]);
-    return { ...result, skipped: true, reason: 'no_passed_injectors' };
+    // Nothing outstanding. The day is NOT closed: tests synced later still go
+    // up on a future run, because what is tracked is the test, not the day.
+    return { ...result, skipped: true, reason: all.length ? 'already_exported' : 'no_passed_injectors' };
   }
 
   const appended = await appendRows(rows, { header: COLUMNS });
-  markSent([target]);
+  markTestsExported(tests);
   return {
     ...result,
     appended: Number(appended && appended.appended) || rows.length,
     updatedRange: (appended && appended.updatedRange) || '',
   };
+}
+
+/**
+ * Send everything outstanding up to the end of yesterday — the scheduled run.
+ *
+ * Deliberately not "yesterday's tests": the bench data is imported by a manual
+ * sync, so a day's tests are often not in the database at midnight. Sweeping
+ * every unsent test instead means a late sync is picked up by the next run,
+ * under the day the test was actually run.
+ */
+async function exportOutstanding(opts = {}) {
+  const {
+    force = false,
+    dryRun = false,
+    appendRows = googleSheets.appendRows,
+    timeZone = testTimeZone(),
+    now = new Date(),
+  } = opts;
+
+  const through = previousDay(currentZonedDay(now, timeZone));
+  const tests = passedTests(force ? allTestsThrough(through, timeZone) : unsentTests(through, timeZone));
+  const rows = buildExportRows(tests, timeZone);
+  const days = [...new Set(tests.map((test) => zonedTestDate(test.test_datetime, timeZone)))].sort();
+  const result = {
+    ok: true, through, days: days.length, rows: rows.length, appended: 0,
+    skipped: false, reason: '', updatedRange: '',
+    oldestDay: days[0] || null, newestDay: days[days.length - 1] || null,
+    unmappedParts: unmappedPartsIn(tests),
+  };
+
+  if (dryRun) return { ...result, skipped: true, reason: 'dry_run' };
+  if (!rows.length) return { ...result, skipped: true, reason: 'nothing_outstanding' };
+
+  const appended = await appendRows(rows, { header: COLUMNS });
+  markTestsExported(tests);
+  return {
+    ...result,
+    appended: Number(appended && appended.appended) || rows.length,
+    updatedRange: (appended && appended.updatedRange) || '',
+  };
+}
+
+/** Every test up to the end of `through`, sent or not — what `force` resends. */
+function allTestsThrough(through, timeZone = testTimeZone()) {
+  const { to } = zonedDayRange(through, timeZone);
+  return db.all(
+    `SELECT ${EXPORT_COLUMNS} FROM injector_test_reports
+      WHERE ${BASE_EXCLUSIONS}
+        AND test_datetime IS NOT NULL
+        AND datetime(test_datetime) < datetime(?)
+      ORDER BY datetime(test_datetime) ASC, part_number ASC, serial_number ASC`,
+    [to]
+  );
 }
 
 /** Every day from `from` to `to` inclusive, ascending. */
@@ -278,41 +371,43 @@ async function exportRange(from, to, opts = {}) {
     return { ...base, ok: false, skipped: true, reason: 'range_too_long' };
   }
 
-  const already = force ? new Set() : sentDays();
+  // Per day: what is still outstanding. A day whose tests have all been sent
+  // contributes nothing, which is what makes re-running a backfill harmless —
+  // the marks are on the tests, so a day that gains tests later is not closed.
   const perDay = [];
   const rows = [];
-  const covered = [];
+  const sent = [];
+  const daysWithRows = [];
   const benchParts = [];
   for (const day of span) {
-    if (already.has(day)) {
-      perDay.push({ day, rows: 0, skipped: true, reason: 'already_exported' });
-      continue;
-    }
     const dayTests = testsForDay(day, timeZone);
-    const dayRows = buildExportRows(dayTests, timeZone);
-    perDay.push({ day, rows: dayRows.length, skipped: false, reason: '' });
+    const outstanding = passedTests(force ? dayTests : dayTests.filter((test) => !test.sheet_exported_at));
+    const dayRows = buildExportRows(outstanding, timeZone);
+    perDay.push({
+      day,
+      rows: dayRows.length,
+      skipped: dayRows.length === 0,
+      reason: dayRows.length ? '' : (dayTests.length ? 'already_exported' : 'no_passed_injectors'),
+    });
+    if (!dayRows.length) continue;
     rows.push(...dayRows);
-    benchParts.push(...passedTests(dayTests).map((test) => test.part_number));
-    covered.push(day);
+    sent.push(...outstanding);
+    benchParts.push(...outstanding.map((test) => test.part_number));
+    daysWithRows.push(day);
   }
 
   const result = {
-    ...base, days: covered.length, rows: rows.length, perDay,
+    ...base, days: daysWithRows.length, rows: rows.length, perDay,
     unmappedParts: unmappedPartNumbers(benchParts),
   };
   if (rows.length > MAX_RANGE_ROWS) {
     return { ...result, ok: false, skipped: true, reason: 'too_many_rows' };
   }
   if (dryRun) return { ...result, skipped: true, reason: 'dry_run' };
-  if (!covered.length) return { ...result, skipped: true, reason: 'already_exported' };
-  if (!rows.length) {
-    // The span held no passing tests at all. The days are still done.
-    markSent(covered);
-    return { ...result, skipped: true, reason: 'no_passed_injectors' };
-  }
+  if (!rows.length) return { ...result, skipped: true, reason: 'nothing_outstanding' };
 
   const appended = await appendRows(rows, { header: COLUMNS });
-  markSent(covered);
+  markTestsExported(sent);
   return {
     ...result,
     appended: Number(appended && appended.appended) || rows.length,
@@ -338,12 +433,17 @@ module.exports = {
   MAX_RANGE_ROWS,
   daysBetween,
   monthOf,
-  sentDays,
   exportRange,
   exportMonthToDate,
   isDay,
   defaultExportDay,
   testsForDay,
+  unsentTests,
+  allTestsThrough,
+  markTestsExported,
+  pendingSummary,
+  newestExportedDay,
+  exportOutstanding,
   passedTests,
   buildExportRows,
   unmappedPartsIn,

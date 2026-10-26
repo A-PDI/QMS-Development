@@ -543,6 +543,21 @@ function applyMigrations(db) {
     db.exec('CREATE INDEX IF NOT EXISTS idx_injector_reports_job ON injector_test_reports(job_number)');
   });
 
+  // ── Migration: mark which injector tests reached the Google Sheet ────────
+  // The daily export used to record which DAYS it had sent. Bench data is
+  // imported by a manual sync, so a day was routinely closed before its tests
+  // had been imported, and anything synced afterwards was never sent. Marking
+  // the ROW instead means a test is exported once, whenever it arrives.
+  once('injector_sheet_exported_at', () => {
+    const info = db.all('PRAGMA table_info(injector_test_reports)', []);
+    if (!info || info.length === 0) return;   // table created later by sqlite.js
+    if (!info.some((c) => c.name === 'sheet_exported_at')) {
+      db.exec('ALTER TABLE injector_test_reports ADD COLUMN sheet_exported_at TEXT');
+    }
+    // Finding the unsent rows is the export's one query, on every run.
+    db.exec('CREATE INDEX IF NOT EXISTS idx_injector_reports_sheet_export ON injector_test_reports(sheet_exported_at)');
+  });
+
   // ── Migration: persistent injector repair lifecycle ─────────────────────
   // The tables and indexes are created by sqlite.js during schema startup.
   // Recording this feature migration gives deployed databases an auditable

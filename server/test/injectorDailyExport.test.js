@@ -19,7 +19,8 @@ const {
   MAX_RANGE_DAYS,
   daysBetween,
   monthOf,
-  sentDays,
+  pendingSummary,
+  exportOutstanding,
   exportRange,
   exportMonthToDate,
   isDay,
@@ -176,7 +177,7 @@ test('a dry run reports the rows without writing them', async () => {
   assert.notStrictEqual(exportStatus().lastExportedDay, '2026-06-30', 'a dry run does not close the day');
 });
 
-test('a day with no passed injectors is closed without writing an empty row', async () => {
+test('a day with nothing to send writes no row, and is NOT closed', async () => {
   resetInjectorData();
   seedTest({ id: 'bad', serial: 'FAIL-2', datetime: '2026-06-30T14:00:00+00:00', pass: false });
   const sheet = recordingAppender();
@@ -184,10 +185,18 @@ test('a day with no passed injectors is closed without writing an empty row', as
   const result = await exportDay('2026-06-30', { appendRows: sheet.appendRows });
   assert.deepStrictEqual(
     { rows: result.rows, skipped: result.skipped, reason: result.reason },
-    { rows: 0, skipped: true, reason: 'no_passed_injectors' },
+    { rows: 0, skipped: true, reason: 'already_exported' },
+    'the day held only a failure, so there was nothing to send',
   );
   assert.strictEqual(sheet.calls.length, 0);
-  assert.strictEqual(exportStatus().lastExportedDay, '2026-06-30', 'a quiet day is still done');
+
+  // The bench data is synced by hand and arrives late. A pass imported after
+  // the day was first exported must still go up — which is exactly what the
+  // old day-marking got wrong.
+  seedTest({ id: 'late', serial: 'LATE-1', datetime: '2026-06-30T15:00:00+00:00' });
+  const second = await exportDay('2026-06-30', { appendRows: sheet.appendRows });
+  assert.strictEqual(second.appended, 1, 'the late arrival is sent');
+  assert.deepStrictEqual(sheet.calls[0].rows.map((row) => row[2]), ['LATE-1']);
 });
 
 test('a day that is not a day is refused before anything is written', async () => {
@@ -252,9 +261,9 @@ test('a month of passed injectors goes up in one request, in date order', async 
   ], 'passes only, in date order, with the evening test on the day it was run');
   assert.deepStrictEqual(
     { ok: result.ok, from: result.from, to: result.to, days: result.days, rows: result.rows, appended: result.appended },
-    { ok: true, from: '2026-10-01', to: '2026-10-10', days: 10, rows: 4, appended: 4 },
+    { ok: true, from: '2026-10-01', to: '2026-10-10', days: 3, rows: 4, appended: 4 },
   );
-  assert.strictEqual(result.perDay.length, 10, 'every day in the span is accounted for');
+  assert.strictEqual(result.perDay.length, 10, 'every day in the span is still accounted for');
   assert.deepStrictEqual(
     result.perDay.filter((d) => d.rows).map((d) => [d.day, d.rows]),
     [['2026-10-02', 1], ['2026-10-05', 2], ['2026-10-07', 1]],
@@ -272,27 +281,32 @@ test('running the same backfill twice writes nothing the second time', async () 
   const second = await exportRange('2026-10-01', '2026-10-05', { appendRows: sheet.appendRows });
   assert.deepStrictEqual(
     { days: second.days, rows: second.rows, skipped: second.skipped, reason: second.reason },
-    { days: 0, rows: 0, skipped: true, reason: 'already_exported' },
+    { days: 0, rows: 0, skipped: true, reason: 'nothing_outstanding' },
   );
   assert.strictEqual(sheet.calls.length, 1, 'the sheet was written once');
 
   // An overlapping span only sends the days the first run did not cover.
   seedTest({ id: 'oct-07', serial: 'OCT-7', datetime: '2026-10-07T15:00:00+00:00' });
   const extended = await exportRange('2026-10-01', '2026-10-08', { appendRows: sheet.appendRows });
-  assert.strictEqual(extended.days, 3, 'only the 6th, 7th and 8th were still outstanding');
+  assert.strictEqual(extended.days, 1, 'only the 7th had anything still outstanding');
   assert.deepStrictEqual(sheet.calls[1].rows, [['2026-10-07', '6513589PX', 'OCT-7']]);
 });
 
-test('every day in a quiet span is still closed, without writing an empty row', async () => {
+test('a quiet span writes nothing and closes nothing, so late data still goes up', async () => {
   resetInjectorData();
   const sheet = recordingAppender();
   const result = await exportRange('2026-10-01', '2026-10-03', { appendRows: sheet.appendRows });
   assert.deepStrictEqual(
     { rows: result.rows, skipped: result.skipped, reason: result.reason },
-    { rows: 0, skipped: true, reason: 'no_passed_injectors' },
+    { rows: 0, skipped: true, reason: 'nothing_outstanding' },
   );
   assert.strictEqual(sheet.calls.length, 0);
-  assert.deepStrictEqual([...sentDays()].sort(), ['2026-10-01', '2026-10-02', '2026-10-03']);
+
+  // Tests for those days are synced afterwards; the same span now sends them.
+  seedTest({ id: 'late-a', serial: 'LATE-A', datetime: '2026-10-02T15:00:00+00:00' });
+  const again = await exportRange('2026-10-01', '2026-10-03', { appendRows: sheet.appendRows });
+  assert.strictEqual(again.appended, 1);
+  assert.deepStrictEqual(sheet.calls[0].rows.map((row) => row[2]), ['LATE-A']);
 });
 
 test('a dry run over a span counts every day and writes nothing', async () => {
@@ -303,10 +317,11 @@ test('a dry run over a span counts every day and writes nothing', async () => {
   const result = await exportRange('2026-10-01', '2026-10-05', { appendRows: sheet.appendRows, dryRun: true });
   assert.deepStrictEqual(
     { rows: result.rows, days: result.days, skipped: result.skipped, reason: result.reason },
-    { rows: 1, days: 5, skipped: true, reason: 'dry_run' },
+    { rows: 1, days: 1, skipped: true, reason: 'dry_run' },
+    'days counts the days that actually have something to send',
   );
   assert.strictEqual(sheet.calls.length, 0);
-  assert.strictEqual(sentDays().size, 0, 'a dry run closes nothing');
+  assert.strictEqual(pendingSummary('2026-10-05').rows, 1, 'a dry run marks nothing');
 });
 
 test('a backwards or over-long span is refused before any work', async () => {
@@ -370,7 +385,7 @@ test('a range stops at the last complete day, so today is never half-sent', asyn
   );
   assert.deepStrictEqual(sheet.calls[0].rows.map((row) => row[2]), ['YEST-1'],
     "today's tests are left for tonight, when the day is over");
-  assert.strictEqual(sentDays().has('2026-10-16'), false, 'today is not marked done');
+  assert.strictEqual(pendingSummary('2026-10-16').rows, 1, "today's test is still waiting");
 
   // Tonight's run then sends the whole of today, nothing missing.
   const tonight = await exportDay('2026-10-16', { appendRows: sheet.appendRows });
@@ -439,4 +454,106 @@ test('a backfill reports every untranslated part across the span, once each', as
   const result = await exportRange('2026-10-01', '2026-10-08', { appendRows: sheet.appendRows });
   assert.deepStrictEqual(result.unmappedParts, ['MYSTERY-9']);
   assert.deepStrictEqual(sheet.calls[0].rows.map((row) => row[1]), ['7159419', 'MYSTERY-9', 'MYSTERY-9']);
+});
+
+// ── Late-arriving bench data ────────────────────────────────────────────────
+// The failure this model exists to prevent: the bench data is imported by a
+// manual sync, so a scheduled run at 00:05 routinely sees a day that has no
+// tests in it yet. Closing that day lost everything synced afterwards.
+test('a scheduled run sends everything outstanding, not just yesterday', async () => {
+  resetInjectorData();
+  const sheet = recordingAppender();
+  const midday = (day) => new Date(`2026-10-${day}T18:00:00Z`);
+
+  // Nights 17-22: the run fires, the database is still empty, nothing is sent.
+  for (const day of ['17', '18', '19', '20', '21', '22']) {
+    const nightly = await exportOutstanding({ appendRows: sheet.appendRows, now: midday(day) });
+    assert.strictEqual(nightly.rows, 0, `nothing to send on the ${day}th`);
+    assert.strictEqual(nightly.reason, 'nothing_outstanding');
+  }
+  assert.strictEqual(sheet.calls.length, 0);
+
+  // Someone finally presses Sync, and a week of tests arrives at once.
+  seedTest({ id: 'late-16', serial: 'LATE-16', datetime: '2026-10-16T15:00:00+00:00' });
+  seedTest({ id: 'late-19', serial: 'LATE-19', datetime: '2026-10-19T15:00:00+00:00' });
+  seedTest({ id: 'late-21', serial: 'LATE-21', datetime: '2026-10-21T15:00:00+00:00' });
+  seedTest({ id: 'late-21f', serial: 'LATE-21F', datetime: '2026-10-21T16:00:00+00:00', pass: false });
+
+  // The next run sweeps all of it up, each row under the day it was run.
+  const sweep = await exportOutstanding({ appendRows: sheet.appendRows, now: midday('23') });
+  assert.deepStrictEqual(
+    { through: sweep.through, rows: sweep.rows, days: sweep.days, appended: sweep.appended },
+    { through: '2026-10-22', rows: 3, days: 3, appended: 3 },
+  );
+  assert.deepStrictEqual(sheet.calls[0].rows.map((row) => [row[0], row[2]]), [
+    ['2026-10-16', 'LATE-16'],
+    ['2026-10-19', 'LATE-19'],
+    ['2026-10-21', 'LATE-21'],
+  ], 'every late test lands under the day it was actually run');
+
+  // And the run after that has nothing left to do.
+  const quiet = await exportOutstanding({ appendRows: sheet.appendRows, now: midday('24') });
+  assert.strictEqual(quiet.reason, 'nothing_outstanding');
+  assert.strictEqual(sheet.calls.length, 1, 'nothing was sent twice');
+});
+
+test('a test synced after its day was exported still goes up, exactly once', async () => {
+  resetInjectorData();
+  const sheet = recordingAppender();
+  seedTest({ id: 'first', serial: 'ONTIME-1', datetime: '2026-10-20T15:00:00+00:00' });
+
+  const first = await exportOutstanding({ appendRows: sheet.appendRows, now: new Date('2026-10-21T18:00:00Z') });
+  assert.strictEqual(first.appended, 1);
+
+  // A second test for the SAME day arrives on a later sync.
+  seedTest({ id: 'straggler', serial: 'LATE-1', datetime: '2026-10-20T16:00:00+00:00' });
+  const second = await exportOutstanding({ appendRows: sheet.appendRows, now: new Date('2026-10-22T18:00:00Z') });
+  assert.strictEqual(second.appended, 1, 'the straggler is sent');
+  assert.deepStrictEqual(sheet.calls[1].rows.map((row) => row[2]), ['LATE-1']);
+
+  // The one already sent is not sent again.
+  const third = await exportOutstanding({ appendRows: sheet.appendRows, now: new Date('2026-10-23T18:00:00Z') });
+  assert.strictEqual(third.reason, 'nothing_outstanding');
+  assert.strictEqual(sheet.calls.length, 2);
+});
+
+test("a scheduled run never sends today's tests, which are still being run", async () => {
+  resetInjectorData();
+  const sheet = recordingAppender();
+  seedTest({ id: 'yesterday', serial: 'YEST-9', datetime: '2026-10-20T15:00:00+00:00' });
+  seedTest({ id: 'today', serial: 'TODAY-9', datetime: '2026-10-21T15:00:00+00:00' });
+
+  const run = await exportOutstanding({ appendRows: sheet.appendRows, now: new Date('2026-10-21T18:00:00Z') });
+  assert.strictEqual(run.through, '2026-10-20');
+  assert.deepStrictEqual(sheet.calls[0].rows.map((row) => row[2]), ['YEST-9']);
+  assert.strictEqual(pendingSummary('2026-10-21').rows, 1, "today's test is still waiting its turn");
+});
+
+test('the status reports what is waiting, so a stalled export is visible', async () => {
+  resetInjectorData();
+  seedTest({ id: 'p1', serial: 'PEND-1', datetime: '2026-10-02T15:00:00+00:00' });
+  seedTest({ id: 'p2', serial: 'PEND-2', datetime: '2026-10-09T15:00:00+00:00' });
+  seedTest({ id: 'p3', serial: 'PEND-3', datetime: '2026-10-09T16:00:00+00:00' });
+
+  assert.deepStrictEqual(pendingSummary('2026-10-15'), {
+    rows: 3, days: 2, oldestDay: '2026-10-02', newestDay: '2026-10-09',
+  });
+
+  const sheet = recordingAppender();
+  await exportRange('2026-10-01', '2026-10-15', { appendRows: sheet.appendRows });
+  assert.deepStrictEqual(pendingSummary('2026-10-15'), {
+    rows: 0, days: 0, oldestDay: null, newestDay: null,
+  });
+  assert.strictEqual(exportStatus().lastExportedDay, '2026-10-09', 'read from the rows that were sent');
+});
+
+test('force resends tests that have already been written', async () => {
+  resetInjectorData();
+  const sheet = recordingAppender();
+  seedTest({ id: 'once', serial: 'ONCE-1', datetime: '2026-10-20T15:00:00+00:00' });
+
+  await exportOutstanding({ appendRows: sheet.appendRows, now: new Date('2026-10-21T18:00:00Z') });
+  const forced = await exportOutstanding({ appendRows: sheet.appendRows, force: true, now: new Date('2026-10-21T18:00:00Z') });
+  assert.strictEqual(forced.appended, 1, 'force ignores the marks');
+  assert.deepStrictEqual(sheet.calls[1].rows.map((row) => row[2]), ['ONCE-1']);
 });

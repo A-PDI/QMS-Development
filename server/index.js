@@ -237,8 +237,12 @@ function startDailyInjectorSheetExport() {
       time,
       timeZone: testTimeZone(),
       task: async () => {
-        const result = await injectorDailyExport.exportDay();
-        console.log(`[InjectorSheetExport] ${result.day}: ${result.rows} passed injector(s), ` +
+        // Everything still outstanding, not just yesterday: the bench data is
+        // imported by a manual sync and routinely lands days late, so a run
+        // scoped to one day silently drops whatever had not arrived yet.
+        const result = await injectorDailyExport.exportOutstanding();
+        console.log(`[InjectorSheetExport] outstanding through ${result.through}: ` +
+          `${result.rows} passed injector(s) over ${result.days} day(s), ` +
           `${result.skipped ? `skipped (${result.reason})` : `appended ${result.appended}`}.`);
       },
       onError: (err) => console.error('[InjectorSheetExport] Run failed:', err && err.message ? err.message : err),
