@@ -27,10 +27,14 @@ const IQI_005_V2_SECTIONS = {
   visual: {
     title: 'B. VISUAL INSPECTION',
     section_type: 'pfn_checklist',
+    // Items are listed in form order. Answers and photos are stored against the
+    // item id, so ids never change once issued: an added point takes the next
+    // free id (Threaded Plug Torque is 12) wherever it sits in the list.
     items: [
       { id: 1,  name: 'Oxidation / Markings',           requirement: 'Should be free of rust, pitting, or other material oxidation' },
       { id: 2,  name: 'Edge Debur',                      requirement: 'Check machined edges for sharp edges' },
       { id: 3,  name: 'Block-off Plugs',                 requirement: 'Confirm all required plugs are in place and torqued to spec' },
+      { id: 12, name: 'Threaded Plug Torque',            requirement: 'Verify all installed threaded plugs are torqued to specification.' },
       { id: 4,  name: 'Heat Tab',                        requirement: 'Confirm Heat Tab in installed appropriately' },
       { id: 5,  name: 'Casting Quality',                 requirement: 'Using bore-scope verify casting quality in all intake and exhaust ports' },
       { id: 6,  name: 'Finish',                          requirement: 'Confirm machining finish and casting quality' },
@@ -294,6 +298,47 @@ function applyMigrations(db) {
           row.id,
         ]);
       }
+    }
+  });
+
+  // ── Migration: PDI-IQI-005 Threaded Plug Torque ───────────────────────────
+  // Adds the "Threaded Plug Torque" point to Section B (Visual Inspection) of
+  // the active PDI-IQI-005 revision, directly below Block-off Plugs. Existing
+  // items keep their ids (saved answers and photos are keyed by id), so the new
+  // point takes the next free id instead of renumbering the section.
+  once('iqi_005_threaded_plug_torque', () => {
+    const NEW_ITEM = IQI_005_V2_SECTIONS.visual.items.find(it => it.name === 'Threaded Plug Torque');
+    const rows = db.all(
+      "SELECT id, revision, sections FROM inspection_templates WHERE form_no = 'PDI-IQI-005' AND active = 1",
+      []
+    );
+
+    // Work out every change before writing any, so a template that can't be
+    // patched leaves the others untouched and the migration is retried.
+    const updates = [];
+    for (const row of rows) {
+      const label = `PDI-IQI-005 Rev ${row.revision || '(blank)'}`;
+      let sections;
+      try {
+        sections = JSON.parse(row.sections || '{}');
+      } catch (err) {
+        throw new Error(`${label}: sections JSON is unreadable (${err.message})`);
+      }
+      const items = sections.visual && sections.visual.items;
+      if (!Array.isArray(items)) throw new Error(`${label}: no Section B item list`);
+
+      const sameName = (it) => String(it.name || '').trim().toLowerCase();
+      if (items.some(it => sameName(it) === NEW_ITEM.name.toLowerCase())) continue;   // already there
+
+      const anchor = items.findIndex(it => /^block[- ]?off plugs?$/.test(sameName(it)));
+      if (anchor === -1) throw new Error(`${label}: no Block-off Plugs item to insert below`);
+
+      const nextId = Math.max(0, ...items.map(it => Number(it.id) || 0)) + 1;
+      items.splice(anchor + 1, 0, { id: nextId, name: NEW_ITEM.name, requirement: NEW_ITEM.requirement });
+      updates.push([JSON.stringify(sections), row.id]);
+    }
+    for (const params of updates) {
+      db.run('UPDATE inspection_templates SET sections = ? WHERE id = ?', params);
     }
   });
 

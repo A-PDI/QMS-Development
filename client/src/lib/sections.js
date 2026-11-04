@@ -32,6 +32,19 @@ const RESULT_FIELD_BY_TYPE = {
   pass_fail_checklist: 'result',
 }
 
+/**
+ * A section's rows with one item's row changed by `patch`. An item added to the
+ * form after the inspection was saved has no row yet, so one is created for it
+ * from `blank` rather than the answer being dropped.
+ */
+export function updateItemRow(rows, itemId, patch, blank = {}) {
+  const list = Array.isArray(rows) ? rows : []
+  if (list.some(row => row?.id === itemId)) {
+    return list.map(row => (row?.id === itemId ? { ...row, ...patch } : row))
+  }
+  return [...list, { ...blank, id: itemId, ...patch }]
+}
+
 /** True when a "Pass All" action applies to this section. */
 export function supportsPassAll(section) {
   return !!RESULT_FIELD_BY_TYPE[section?.section_type] && (section?.items || []).length > 0
