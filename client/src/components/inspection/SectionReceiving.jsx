@@ -2,7 +2,7 @@ import { useState } from 'react'
 import PFNToggle from './PFNToggle'
 import ItemAttachment from './ItemAttachment'
 import { Pencil, Trash2, Check, X } from 'lucide-react'
-import { NA_STATUS, PFN_OPTIONS_WITH_NA } from '../../lib/sections'
+import { NA_STATUS, PFN_OPTIONS_WITH_NA, updateItemRow } from '../../lib/sections'
 
 const PFN_OPTIONS = ['P', 'F', 'A']
 
@@ -24,8 +24,7 @@ export default function SectionReceiving({
   const [editReq, setEditReq] = useState('')
 
   function update(id, field, value) {
-    const next = data.map(row => row.id === id ? { ...row, [field]: value } : row)
-    onChange(next)
+    onChange(updateItemRow(data, id, { [field]: value }, { finding: '', status: '' }))
   }
 
   function startEdit(item) {

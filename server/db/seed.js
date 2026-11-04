@@ -920,10 +920,14 @@ const PDI_IQI_005_V2_SECTIONS = {
   visual: {
     title: 'B. VISUAL INSPECTION',
     section_type: 'pfn_checklist',
+    // Items are listed in form order. Answers and photos are stored against the
+    // item id, so ids never change once issued: an added point takes the next
+    // free id (Threaded Plug Torque is 12) wherever it sits in the list.
     items: [
       { id: 1,  name: 'Oxidation / Markings',            requirement: 'Should be free of rust, pitting, or other material oxidation' },
       { id: 2,  name: 'Edge Debur',                       requirement: 'Check machined edges for sharp edges' },
       { id: 3,  name: 'Block-off Plugs',                  requirement: 'Confirm all required plugs are in place and torqued to spec' },
+      { id: 12, name: 'Threaded Plug Torque',             requirement: 'Verify all installed threaded plugs are torqued to specification.' },
       { id: 4,  name: 'Heat Tab',                         requirement: 'Confirm Heat Tab in installed appropriately' },
       { id: 5,  name: 'Casting Quality',                  requirement: 'Using bore-scope verify casting quality in all intake and exhaust ports' },
       { id: 6,  name: 'Finish',                           requirement: 'Confirm machining finish and casting quality' },

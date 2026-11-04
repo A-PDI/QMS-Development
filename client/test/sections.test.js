@@ -21,6 +21,7 @@ import {
   supportsPassAll,
   hasNonPassRows,
   passAllRows,
+  updateItemRow,
 } from '../src/lib/sections.js'
 
 const receiving = {
@@ -96,6 +97,33 @@ test('Pass All only warns when it would overwrite a result', () => {
   assert.ok(hasNonPassRows(visual, [{ id: 1, result: 'A' }]))
   assert.ok(hasNonPassRows(visual, [{ id: 1, pass: false, fail: true }]), 'legacy rows count too')
   assert.ok(hasNonPassRows(receiving, [{ id: 1, status: 'N' }]), 'N/A is a result to protect')
+})
+
+// ── Answering one item ──────────────────────────────────────────────────────
+test('answering an item changes only that item\'s row', () => {
+  const rows = [
+    { id: 1, finding: '', status: 'P' },
+    { id: 2, finding: 'scuffed', status: '' },
+  ]
+  const next = updateItemRow(rows, 2, { status: 'A' }, { finding: '', status: '' })
+  assert.deepStrictEqual(next, [
+    { id: 1, finding: '', status: 'P' },
+    { id: 2, finding: 'scuffed', status: 'A' },
+  ])
+  assert.strictEqual(rows[1].status, '', 'the saved rows are not mutated')
+})
+
+test('an item added to the form after the inspection was saved can still be answered', () => {
+  // Rows saved before point 12 existed on the form.
+  const rows = [{ id: 3, finding: '', status: 'P' }, { id: 4, finding: '', status: 'F' }]
+  const next = updateItemRow(rows, 12, { status: 'P' }, { finding: '', status: '' })
+  assert.deepStrictEqual(next, [
+    { id: 3, finding: '', status: 'P' },
+    { id: 4, finding: '', status: 'F' },
+    { id: 12, finding: '', status: 'P' },
+  ])
+  assert.deepStrictEqual(updateItemRow(undefined, 1, { finding: 'x' }), [{ id: 1, finding: 'x' }],
+    'a section with no saved rows at all gets one')
 })
 
 // ── Section scope ───────────────────────────────────────────────────────────
