@@ -2,6 +2,8 @@ import PFNToggle from './PFNToggle'
 import ItemAttachment from './ItemAttachment'
 import { Trash2 } from 'lucide-react'
 import { PFN_COLORS } from '../../lib/constants'
+import { SpecInfo, EvaluationBadge, InvalidEntryMessage, readingTone, readingTitle } from './DimensionalSpec'
+import { pointKey, evaluateMeasurements, allowedStatusOptions } from '../../lib/dimensional'
 
 export default function SectionGeneralMeasurements({
   section,
@@ -14,6 +16,8 @@ export default function SectionGeneralMeasurements({
   onDeleteItem,
   uploadingKey,
   onRemoveItem, // (itemId) — remove one measurement row from this inspection
+  specIndex,      // configured specs by point key (automatic Pass/Fail)
+  specSectionKey, // this section's key in the form (for spec lookup)
 }) {
   function update(id, field, value) {
     const next = data.map(row => row.id === id ? { ...row, [field]: value } : row)
@@ -24,6 +28,13 @@ export default function SectionGeneralMeasurements({
   // A measurement that doesn't apply to the part in front of the inspector can
   // be taken off the form.
   const showRemove = !readOnly && !!onRemoveItem
+
+  // A configured numeric spec makes the row's Pass/Fail automatic.
+  const autoSpecFor = (item) => {
+    if (readOnly || !specIndex || !specSectionKey) return null
+    const spec = specIndex[pointKey(specSectionKey, item.id)]
+    return spec && spec.evaluable ? spec : null
+  }
 
   return (
     <>
@@ -49,6 +60,8 @@ export default function SectionGeneralMeasurements({
           <tbody>
             {section.items.map(item => {
               const row = data.find(r => r.id === item.id) || { id: item.id, specification: '', actual_value: '', notes: '', result: '' }
+              const autoSpec = autoSpecFor(item)
+              const evaluation = autoSpec ? evaluateMeasurements(autoSpec, [row.actual_value]) : null
               const isAccepted = row.result === 'A'
               const isFail = row.result === 'F'
               const needsNotes = isAccepted && !row.notes?.trim()
@@ -60,14 +73,20 @@ export default function SectionGeneralMeasurements({
                     <td key={field} className="px-3 py-2">
                       {readOnly ? (
                         <span className="text-xs font-mono">{row[field] || '\u2014'}</span>
+                      ) : field === 'specification' && autoSpec ? (
+                        <SpecInfo spec={autoSpec} />
                       ) : (
                         <input
                           type="text"
-                          className="w-full text-xs border border-gray-200 rounded px-2 py-1 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+                          inputMode={field === 'actual_value' ? 'decimal' : undefined}
+                          className={`w-full text-xs border border-gray-200 rounded px-2 py-1 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy ${field === 'actual_value' ? readingTone(autoSpec, row[field]) : ''}`}
                           value={row[field] || ''}
                           onChange={e => update(item.id, field, e.target.value)}
+                          title={field === 'actual_value' ? readingTitle(autoSpec, row[field]) : undefined}
+                          aria-label={`${item.measurement || `Item ${item.id}`} ${field === 'actual_value' ? 'actual value' : 'specification'}`}
                         />
                       )}
+                      {field === 'actual_value' && <InvalidEntryMessage evaluation={evaluation} />}
                     </td>
                   ))}
                   <td className="px-3 py-2">
@@ -94,7 +113,10 @@ export default function SectionGeneralMeasurements({
                       onChange={v => update(item.id, 'result', v)}
                       readOnly={readOnly}
                       options={['P', 'F', 'A']}
+                      allowed={evaluation ? allowedStatusOptions(evaluation) : undefined}
+                      lockedTitle="set automatically from the measurement"
                     />
+                    {evaluation && <div className="mt-1"><EvaluationBadge evaluation={evaluation} accepted={isAccepted} /></div>}
                   </td>
                   {showImages && (
                     <td className="px-3 py-2">
@@ -134,6 +156,9 @@ export default function SectionGeneralMeasurements({
       <div className="md:hidden space-y-3">
         {section.items.map(item => {
           const row = data.find(r => r.id === item.id) || { id: item.id, specification: '', actual_value: '', result: '', notes: '' }
+          const autoSpec = autoSpecFor(item)
+          const evaluation = autoSpec ? evaluateMeasurements(autoSpec, [row.actual_value]) : null
+          const allowed = evaluation ? allowedStatusOptions(evaluation) : null
           const isAccepted = row.result === 'A'
           const needsNotes = isAccepted && !row.notes?.trim()
           const isFail = row.result === 'F'
@@ -170,6 +195,8 @@ export default function SectionGeneralMeasurements({
                   <label className="block text-xs text-gray-400 mb-0.5">Specification</label>
                   {readOnly ? (
                     <span className="text-xs font-mono">{row.specification || '—'}</span>
+                  ) : autoSpec ? (
+                    <SpecInfo spec={autoSpec} />
                   ) : (
                     <input type="text" value={row.specification || ''} onChange={e => update(item.id, 'specification', e.target.value)}
                       className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[36px]" />
@@ -181,19 +208,26 @@ export default function SectionGeneralMeasurements({
                     <span className="text-xs font-mono">{row.actual_value || '—'}</span>
                   ) : (
                     <input type="text" inputMode="decimal" value={row.actual_value || ''} onChange={e => update(item.id, 'actual_value', e.target.value)}
-                      className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[36px]" />
+                      title={readingTitle(autoSpec, row.actual_value)}
+                      aria-label={`${item.measurement || `Item ${item.id}`} actual value`}
+                      className={`w-full text-xs border border-gray-200 rounded px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[36px] ${readingTone(autoSpec, row.actual_value)}`} />
                   )}
+                  <InvalidEntryMessage evaluation={evaluation} />
                 </div>
               </div>
               {!readOnly && (
-                <div className="flex gap-1.5 mb-1.5">
-                  {['P','F','A'].map(v => (
-                    <button key={v} type="button"
-                      onClick={() => update(item.id, 'result', row.result === v ? '' : v)}
-                      className={`px-2.5 py-1 text-xs font-semibold rounded border min-h-[32px] ${row.result === v ? PFN_COLORS[v] : 'bg-white text-gray-400 border-gray-200'}`}>
-                      {v === 'P' ? 'Pass' : v === 'F' ? 'Fail' : 'Acc'}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
+                  {['P','F','A'].map(v => {
+                    const locked = !!allowed && !allowed.includes(v)
+                    return (
+                      <button key={v} type="button" disabled={locked}
+                        onClick={() => !locked && update(item.id, 'result', row.result === v ? '' : v)}
+                        className={`px-2.5 py-1 text-xs font-semibold rounded border min-h-[32px] ${row.result === v ? PFN_COLORS[v] : locked ? 'bg-gray-50 text-gray-200 border-gray-100' : 'bg-white text-gray-400 border-gray-200'}`}>
+                        {v === 'P' ? 'Pass' : v === 'F' ? 'Fail' : 'Acc'}
+                      </button>
+                    )
+                  })}
+                  <EvaluationBadge evaluation={evaluation} accepted={isAccepted} />
                 </div>
               )}
               {(isAccepted || isFail) && (

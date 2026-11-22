@@ -4,7 +4,7 @@ import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Search, Sav
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '../lib/api'
 import { useInspections, useDeleteInspection, useCreateInspection, useAssignInspection, useReopenInspection } from '../hooks/useInspections'
-import { usePartSpecs, useAllPartSpecs, useCreatePartSpec, useUpdatePartSpec, useDeletePartSpec, useImportPartSpecs, useImportPartsFromInspections } from '../hooks/usePartSpecs'
+import { usePartSpecs, useAllPartSpecs, useCreatePartSpec, useUpdatePartSpec, useDeletePartSpec, useImportPartSpecs, useImportPartsFromInspections, fetchPartFamily } from '../hooks/usePartSpecs'
 import { useDrawings, useUploadDrawing, useSetCurrentDrawing, useDeleteDrawing } from '../hooks/useDrawings'
 import { useToast } from '../hooks/useToast'
 import { getUser } from '../lib/auth'
@@ -13,6 +13,10 @@ import { formatDate } from '../lib/utils'
 import { COMPONENT_TYPE_LABELS, STATUS_LABELS, STATUS_COLORS, isReopenable } from '../lib/constants'
 import { isAdminUser } from '../lib/nav'
 import StatusBadge from '../components/StatusBadge'
+import DimensionalSpecEditor from '../components/admin/DimensionalSpecEditor'
+import PartFamilyDialog from '../components/admin/PartFamilyDialog'
+import { listDimensionalPoints, SPEC_ERROR_MESSAGES } from '../lib/dimensional'
+import { toEditorEntry, buildSpecPayload, countSpecified, entryErrors } from '../lib/specEditor'
 
 const TABS = [
   { id: 'forms',    label: 'Inspection Forms', shortLabel: 'Forms',    icon: FileText },
@@ -30,6 +34,7 @@ const SECTION_TYPES = [
   { value: 'pfn_visual',          label: 'Visual Inspection' },
   { value: 'dimensional',         label: 'Dimensional Measurements' },
   { value: 'general_measurements',label: 'General Measurements' },
+  { value: 'groove_specs',        label: 'Fire Ring (per-cylinder measurements)' },
   { value: 'camshaft_bore',       label: 'Camshaft Bore' },
   { value: 'fire_ring_protrusion',label: 'Fire Ring Protrusion' },
   { value: 'valve_recession',     label: 'Valve Recession' },
@@ -42,6 +47,7 @@ const ITEM_FIELDS_BY_TYPE = {
   pfn_visual:           ['ctq_area', 'failure_mode', 'criteria', 'method'],
   dimensional:          ['measurement', 'location', 'spec'],
   general_measurements: ['measurement'],
+  groove_specs:         ['measurement', 'spec'],
 }
 
 // ── Inspection Forms Tab ──────────────────────────────────────────────────────
@@ -175,7 +181,10 @@ function InspectionFormsTab({ showToast }) {
     const section = editForm.sections[sectionKey]
     const items = section.items || []
     const nextId = (Math.max(0, ...items.map(i => i.id || 0)) + 1)
-    const blankItem = { id: nextId, name: '', requirement: '' }
+    // A Fire Ring item is a per-cylinder measurement point, so it gets an entry chart.
+    const blankItem = section.section_type === 'groove_specs'
+      ? { id: nextId, measurement: '', spec: '', entry: true }
+      : { id: nextId, name: '', requirement: '' }
     updateSection(sectionKey, 'items', [...items, blankItem])
   }
 
@@ -459,7 +468,7 @@ function productTypeLabel(template) {
   return compLabel ? `${compLabel} (${template.form_no})` : template.form_no
 }
 
-const BLANK_PART = { part_number: '', description: '', template_id: '' }
+const BLANK_PART = { part_number: '', description: '', template_id: '', product_family: '' }
 
 function PartNumbersTab({ showToast }) {
   const { data: templatesData } = useTemplates()
@@ -524,6 +533,7 @@ function PartNumbersTab({ showToast }) {
       return (
         (s.part_number || '').toLowerCase().includes(q) ||
         (s.description || '').toLowerCase().includes(q) ||
+        (s.product_family || '').toLowerCase().includes(q) ||
         productTypeLabel(t).toLowerCase().includes(q)
       )
     })
@@ -539,6 +549,7 @@ function PartNumbersTab({ showToast }) {
       part_number: spec.part_number || '',
       description: spec.description || '',
       template_id: spec.template_id || '',
+      product_family: spec.product_family || '',
     })
   }
   function cancelEdit() { setEditingId(null); setForm(BLANK_PART) }
@@ -553,6 +564,7 @@ function PartNumbersTab({ showToast }) {
           template_id: form.template_id,
           part_number: form.part_number.trim(),
           description: form.description.trim(),
+          product_family: form.product_family.trim(),
         })
         showToast('Part number added', 'success')
       } else {
@@ -561,6 +573,7 @@ function PartNumbersTab({ showToast }) {
           part_number: form.part_number.trim(),
           description: form.description.trim(),
           template_id: form.template_id,
+          product_family: form.product_family.trim(),
         })
         showToast('Part number updated', 'success')
       }
@@ -591,7 +604,7 @@ function PartNumbersTab({ showToast }) {
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search part #, description, product type…"
+            placeholder="Search part #, description, product type, family…"
             className="w-full border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]"
           />
         </div>
@@ -609,7 +622,7 @@ function PartNumbersTab({ showToast }) {
         <div className="flex items-center gap-1.5 text-xs text-gray-600 flex-1 min-w-0">
           <FileSpreadsheet size={15} className="text-pdi-navy/60 flex-shrink-0" />
           <span className="truncate">
-            Bulk import from Excel/CSV with columns <b>Part Number</b>, <b>Description</b>, <b>Product Type</b>.
+            Bulk import from Excel/CSV with columns <b>Part Number</b>, <b>Description</b>, <b>Product Type</b> (optional <b>Product Family</b>).
           </span>
         </div>
         <input
@@ -680,7 +693,7 @@ function PartNumbersTab({ showToast }) {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    {['Part Number', 'Description', 'Product Type', ''].map(h => (
+                    {['Part Number', 'Description', 'Product Type', 'Product Family', ''].map(h => (
                       <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
                     ))}
                   </tr>
@@ -693,7 +706,7 @@ function PartNumbersTab({ showToast }) {
                     />
                   )}
                   {filtered.length === 0 && !showEditorRow ? (
-                    <tr><td colSpan={4} className="text-center text-gray-400 py-10 text-sm">
+                    <tr><td colSpan={5} className="text-center text-gray-400 py-10 text-sm">
                       {q ? 'No parts match your search' : 'No part numbers yet — click “Add Part Number”.'}
                     </td></tr>
                   ) : filtered.map(spec => (
@@ -708,6 +721,7 @@ function PartNumbersTab({ showToast }) {
                         <td className="px-4 py-3 font-mono text-sm font-semibold text-pdi-navy">{spec.part_number}</td>
                         <td className="px-4 py-3 text-sm text-gray-600">{spec.description || '—'}</td>
                         <td className="px-4 py-3 text-sm text-gray-600">{productTypeLabel(templateById[spec.template_id])}</td>
+                        <td className="px-4 py-3 text-sm text-gray-500">{spec.product_family || <span className="text-gray-300">From description</span>}</td>
                         <td className="px-4 py-3">
                           {confirmDeleteId === spec.id ? (
                             <div className="flex items-center gap-2">
@@ -746,6 +760,7 @@ function PartNumbersTab({ showToast }) {
                     <div className="font-mono text-sm font-semibold text-pdi-navy break-words">{spec.part_number}</div>
                     <div className="text-xs text-gray-600 mt-0.5 break-words">{spec.description || '—'}</div>
                     <div className="text-xs text-gray-500 mt-1">{productTypeLabel(templateById[spec.template_id])}</div>
+                    {spec.product_family && <div className="text-xs text-gray-500 mt-0.5">Family: {spec.product_family}</div>}
                     <div className="flex items-center gap-4 mt-2">
                       <button onClick={() => startEdit(spec)} className="text-sm text-pdi-navy hover:underline flex items-center gap-1 min-h-[36px]"><Edit2 size={13} /> Edit</button>
                       {confirmDeleteId === spec.id ? (
@@ -800,6 +815,16 @@ function PartEditorRow({ form, setForm, templates, onSave, onCancel, saving }) {
         </select>
       </td>
       <td className="px-4 py-2">
+        <input
+          value={form.product_family}
+          onChange={e => setForm(f => ({ ...f, product_family: e.target.value }))}
+          placeholder="Optional"
+          title="Groups this part with the other part numbers of the same product (e.g. Stage 1 / Stage 2). Leave blank to group by description."
+          maxLength={120}
+          className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+        />
+      </td>
+      <td className="px-4 py-2">
         <div className="flex items-center gap-2">
           <button onClick={onSave} disabled={saving} className="flex items-center gap-1 px-2.5 py-1.5 text-xs bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50"><Save size={12} /> {saving ? 'Saving…' : 'Save'}</button>
           <button onClick={onCancel} className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-700"><X size={14} /></button>
@@ -831,6 +856,12 @@ function PartEditorCard({ form, setForm, templates, onSave, onCancel, saving }) 
           {templates.map(t => <option key={t.id} value={t.id}>{productTypeLabel(t)}</option>)}
         </select>
       </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">Product Family (optional)</label>
+        <input value={form.product_family} onChange={e => setForm(f => ({ ...f, product_family: e.target.value }))} maxLength={120}
+          placeholder="Blank = grouped by description"
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+      </div>
       <div className="flex justify-end gap-2 pt-1">
         <button onClick={onCancel} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
         <button onClick={onSave} disabled={saving} className="flex items-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px]"><Save size={14} /> {saving ? 'Saving…' : 'Save'}</button>
@@ -840,16 +871,37 @@ function PartEditorCard({ form, setForm, templates, onSave, onCancel, saving }) 
 }
 
 // ── Part Specifications Tab ───────────────────────────────────────────────────
+// Dimensional specifications per part number. Every dimensional inspection
+// point the selected form defines is listed — the point list comes from the
+// shared listDimensionalPoints(), the same definition the inspection form and
+// the server evaluate against, so a point added to a form appears here too.
+// After saving, the administrator is offered the other part numbers in the
+// product family to copy the specs to.
+
+function templateOptionLabel(t) {
+  return `${t.form_no}${t.revision ? ` Rev ${t.revision}` : ''} — ${t.title}${t.active ? '' : ' (inactive)'}`
+}
 
 function PartSpecsTab({ showToast }) {
-  const { data: templatesData } = useTemplates()
-  const templates = templatesData || []
+  const { data: allTemplates = [] } = useQuery({
+    queryKey: ['admin-templates'],
+    queryFn: async () => { const { data } = await api.get('/admin/templates'); return data.templates },
+  })
+  // Active forms first; inactive ones stay reachable for parts still on them.
+  const templates = useMemo(() => [...allTemplates].sort((a, b) =>
+    (b.active ? 1 : 0) - (a.active ? 1 : 0) || String(a.form_no).localeCompare(String(b.form_no))
+  ), [allTemplates])
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
-  const [editingSpec, setEditingSpec] = useState(null)
-  const [specForm, setSpecForm] = useState({ part_number: '', description: '', spec_data: {} })
+  const [search, setSearch] = useState('')
+  // { id: spec id | 'new', part_number, description, original: stored spec_data }
+  const [editing, setEditing] = useState(null)
+  const [entries, setEntries] = useState({})
+  const [touched, setTouched] = useState(() => new Set())
+  const [saving, setSaving] = useState(false)
+  const [familyPrompt, setFamilyPrompt] = useState(null)
 
   // Fetch the FULL template (with sections) when one is selected
-  const { data: fullSelectedTemplate } = useQuery({
+  const { data: fullSelectedTemplate, isLoading: loadingTemplate } = useQuery({
     queryKey: ['admin-template-full-specs', selectedTemplateId],
     queryFn: async () => {
       const { data } = await api.get(`/admin/templates/${selectedTemplateId}`)
@@ -866,66 +918,119 @@ function PartSpecsTab({ showToast }) {
   const updateSpec = useUpdatePartSpec()
   const deleteSpec = useDeletePartSpec()
 
-  const templateSections = fullSelectedTemplate
-    ? (typeof fullSelectedTemplate.sections === 'string'
-        ? JSON.parse(fullSelectedTemplate.sections)
-        : (fullSelectedTemplate.sections || {}))
-    : {}
+  const { points, issues } = useMemo(() => {
+    const sections = fullSelectedTemplate
+      ? (typeof fullSelectedTemplate.sections === 'string'
+          ? JSON.parse(fullSelectedTemplate.sections)
+          : (fullSelectedTemplate.sections || {}))
+      : {}
+    return listDimensionalPoints(sections)
+  }, [fullSelectedTemplate])
 
-  const dimItems = Object.entries(templateSections)
-    .filter(([k, s]) => k !== '__dimensional_added' && (s.section_type === 'dimensional' || s.section_type === 'general_measurements'))
-    .flatMap(([sKey, s]) => (s.items || []).map(item => ({ sKey, item })))
+  // The editor shows an entry per point: what the admin typed, else the stored value.
+  const editorEntries = useMemo(() => {
+    if (!editing) return {}
+    return Object.fromEntries(points.map(p => [p.key, entries[p.key] ?? toEditorEntry(editing.original[p.key])]))
+  }, [editing, entries, points])
+
+  const ready = !!fullSelectedTemplate && !loadingTemplate
+
+  function openEditor(target) {
+    setEditing(target)
+    setEntries({})
+    setTouched(new Set())
+  }
 
   function startEdit(spec) {
-    setEditingSpec(spec.id)
-    setSpecForm({
+    openEditor({
+      id: spec.id,
       part_number: spec.part_number,
       description: spec.description || '',
-      spec_data: typeof spec.spec_data === 'object' ? { ...spec.spec_data } : {},
+      original: spec.spec_data && typeof spec.spec_data === 'object' ? spec.spec_data : {},
     })
   }
 
   function startCreate() {
-    setEditingSpec('new')
-    setSpecForm({ part_number: '', description: '', spec_data: {} })
+    openEditor({ id: 'new', part_number: '', description: '', original: {} })
+  }
+
+  function changeEntry(key, entry) {
+    setEntries(e => ({ ...e, [key]: entry }))
+    setTouched(t => new Set(t).add(key))
+  }
+
+  async function offerFamily(saved) {
+    if (countSpecified(saved.spec_data, points) === 0) return
+    try {
+      const family = await fetchPartFamily(saved.id)
+      if (family.candidates?.length) {
+        setFamilyPrompt({ source: saved, family: family.family, candidates: family.candidates })
+      }
+    } catch (err) {
+      showToast(`Saved — but related part numbers could not be checked: ${err?.response?.data?.error || err.message}`, 'error')
+    }
   }
 
   async function handleSave() {
-    if (!specForm.part_number.trim()) {
-      showToast('Part number is required', 'error'); return
+    const partNumber = editing.part_number.trim()
+    if (!partNumber) { showToast('Part number is required', 'error'); return }
+    const errors = entryErrors(editorEntries, touched, SPEC_ERROR_MESSAGES)
+    if (errors.length) {
+      const point = points.find(p => p.key === errors[0].key)
+      showToast(`${point?.label || errors[0].key}: ${errors[0].message}`, 'error')
+      return
     }
+    const spec_data = buildSpecPayload(editing.original, editorEntries, touched)
+    setSaving(true)
     try {
-      if (editingSpec === 'new') {
-        await createSpec.mutateAsync({ template_id: selectedTemplateId, ...specForm })
-        showToast('Part spec created', 'success')
-      } else {
-        await updateSpec.mutateAsync({ id: editingSpec, ...specForm })
-        showToast('Part spec updated', 'success')
-      }
-      setEditingSpec(null)
+      const body = { part_number: partNumber, description: editing.description, spec_data }
+      const saved = editing.id === 'new'
+        ? await createSpec.mutateAsync({ template_id: selectedTemplateId, ...body })
+        : await updateSpec.mutateAsync({ id: editing.id, ...body })
+      showToast('Part specification saved', 'success')
+      setEditing(null)
+      await offerFamily(saved)
     } catch (err) {
       showToast(err?.response?.data?.error || 'Save failed', 'error')
+    } finally {
+      setSaving(false)
     }
   }
 
   async function handleDelete(id) {
-    if (!window.confirm('Delete this part specification?')) return
+    if (!window.confirm('Delete this part number and its specifications?')) return
     try {
       await deleteSpec.mutateAsync(id)
       showToast('Deleted', 'success')
     } catch { showToast('Delete failed', 'error') }
   }
 
+  const q = search.trim().toLowerCase()
+  const visibleSpecs = specs.filter(s => !q ||
+    (s.part_number || '').toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q))
+  const specsSummary = spec => (points.length ? `${countSpecified(spec.spec_data, points)} of ${points.length} points` : '—')
+
   return (
     <div className="space-y-3 sm:space-y-4">
+      {familyPrompt && (
+        <PartFamilyDialog
+          source={familyPrompt.source}
+          family={familyPrompt.family}
+          candidates={familyPrompt.candidates}
+          onClose={() => setFamilyPrompt(null)}
+          showToast={showToast}
+        />
+      )}
+
       <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-        <select value={selectedTemplateId} onChange={e => { setSelectedTemplateId(e.target.value); setEditingSpec(null) }}
+        <select value={selectedTemplateId} onChange={e => { setSelectedTemplateId(e.target.value); setEditing(null) }}
+          aria-label="Inspection form"
           className="w-full sm:w-auto sm:flex-1 sm:max-w-md border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]">
           <option value="">— Select Part Type (Inspection Form) —</option>
-          {templates.map(t => <option key={t.id} value={t.id}>{t.form_no} — {t.title}</option>)}
+          {templates.map(t => <option key={t.id} value={t.id}>{templateOptionLabel(t)}</option>)}
         </select>
-        {selectedTemplateId && (
-          <button onClick={startCreate} className="flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[40px]">
+        {selectedTemplateId && !editing && (
+          <button onClick={startCreate} disabled={!ready} className="flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px]">
             <Plus size={15} /> Add Part Spec
           </button>
         )}
@@ -935,115 +1040,120 @@ function PartSpecsTab({ showToast }) {
         <div className="text-center text-gray-400 py-8 sm:py-12 text-sm px-4">Select an inspection form to manage part specifications</div>
       )}
 
-      {selectedTemplateId && editingSpec && (
+      {selectedTemplateId && ready && (
+        <p className="text-xs text-gray-500">
+          {points.length > 0
+            ? `${points.length} dimensional inspection point${points.length === 1 ? '' : 's'} on this form. Measurements are judged Pass/Fail automatically against a numeric specification.`
+            : 'This form has no dimensional inspection points.'}
+        </p>
+      )}
+
+      {selectedTemplateId && editing && (
         <div className="bg-white rounded-xl border border-pdi-navy/30 p-3 sm:p-5 shadow-sm space-y-3 sm:space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm sm:text-base font-semibold text-pdi-navy">{editingSpec === 'new' ? 'New Part Specification' : 'Edit Part Specification'}</h3>
-            <button onClick={() => setEditingSpec(null)} className="min-h-[40px] min-w-[40px] flex items-center justify-center"><X size={18} className="text-gray-400 hover:text-gray-600" /></button>
+            <h3 className="text-sm sm:text-base font-semibold text-pdi-navy">{editing.id === 'new' ? 'New Part Specification' : 'Edit Part Specification'}</h3>
+            <button onClick={() => setEditing(null)} aria-label="Close editor" className="min-h-[40px] min-w-[40px] flex items-center justify-center"><X size={18} className="text-gray-400 hover:text-gray-600" /></button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Part Number <span className="text-red-500">*</span></label>
-              <input value={specForm.part_number} onChange={e => setSpecForm(f => ({ ...f, part_number: e.target.value }))}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+              <input value={editing.part_number} onChange={e => setEditing(f => ({ ...f, part_number: e.target.value }))}
+                aria-label="Part number"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Description</label>
-              <input value={specForm.description} onChange={e => setSpecForm(f => ({ ...f, description: e.target.value }))}
+              <input value={editing.description} onChange={e => setEditing(f => ({ ...f, description: e.target.value }))}
+                aria-label="Description"
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
             </div>
           </div>
-          {dimItems.length > 0 && (
+          {points.length > 0 ? (
             <div>
               <div className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">Dimensional Specifications</div>
-              <div className="space-y-2">
-                {dimItems.map(({ sKey, item }) => {
-                  const specKey = `${sKey}.${item.id}`
-                  return (
-                    <div key={specKey} className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3">
-                      <span className="text-xs text-gray-600 w-full sm:w-56 truncate">{item.measurement || item.name || `Item ${item.id}`}</span>
-                      <input
-                        value={specForm.spec_data[specKey] || ''}
-                        onChange={e => setSpecForm(f => ({ ...f, spec_data: { ...f.spec_data, [specKey]: e.target.value } }))}
-                        placeholder="e.g. 45.00 ± 0.05"
-                        className="w-full sm:flex-1 border border-gray-200 rounded-lg px-3 py-2 sm:py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px] sm:min-h-0"
-                      />
-                    </div>
-                  )
-                })}
-              </div>
+              <DimensionalSpecEditor points={points} issues={issues} entries={editorEntries} onChange={changeEntry} />
             </div>
-          )}
-          {dimItems.length === 0 && selectedTemplateId && fullSelectedTemplate && (
-            <p className="text-xs text-gray-400 italic">No dimensional measurement items defined for this template. Add sections in Inspection Forms first.</p>
+          ) : (
+            <p className="text-xs text-gray-400 italic">No dimensional measurement points are defined on this form. Add them in Inspection Forms first.</p>
           )}
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3 pt-2 border-t border-gray-100">
-            <button onClick={() => setEditingSpec(null)} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
-            <button onClick={handleSave} className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[40px]">
-              <Save size={14} /> Save
+            <button onClick={() => setEditing(null)} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
+            <button onClick={handleSave} disabled={saving} className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px]">
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {saving ? 'Saving…' : 'Save'}
             </button>
           </div>
         </div>
       )}
 
-      {selectedTemplateId && !editingSpec && (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          {isLoading ? <div className="text-center text-gray-400 py-8 sm:py-10">Loading…</div> :
-            specs.length === 0 ? <div className="text-center text-gray-400 py-8 sm:py-10 px-4 text-sm">No part specifications for this form type</div> : (
-              <>
-                {/* Desktop table */}
-                <div className="hidden md:block overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                      <tr>
-                        {['Part Number', 'Description', 'Specs Defined', ''].map(h => (
-                          <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {specs.map(spec => (
-                        <tr key={spec.id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 font-mono text-sm font-semibold text-pdi-navy">{spec.part_number}</td>
-                          <td className="px-4 py-3 text-sm text-gray-600">{spec.description || '—'}</td>
-                          <td className="px-4 py-3 text-sm text-gray-500">{Object.keys(spec.spec_data || {}).length} fields</td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-3">
-                              <button onClick={() => startEdit(spec)} className="text-xs text-pdi-navy hover:underline flex items-center gap-1"><Edit2 size={12} /> Edit</button>
-                              <button onClick={() => handleDelete(spec.id)} className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1"><Trash2 size={12} /> Delete</button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+      {selectedTemplateId && !editing && (
+        <>
+          {specs.length > 0 && (
+            <div className="relative sm:max-w-md">
+              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search part # or description…"
+                className="w-full border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+            </div>
+          )}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            {isLoading ? <div className="text-center text-gray-400 py-8 sm:py-10">Loading…</div> :
+              visibleSpecs.length === 0 ? (
+                <div className="text-center text-gray-400 py-8 sm:py-10 px-4 text-sm">
+                  {q ? 'No part numbers match your search' : 'No part specifications for this form type'}
                 </div>
-                {/* Mobile card list */}
-                <div className="md:hidden divide-y divide-gray-100">
-                  {specs.map(spec => (
-                    <div key={spec.id} className="px-3 py-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="font-mono text-sm font-semibold text-pdi-navy truncate">{spec.part_number}</div>
+              ) : (
+                <>
+                  {/* Desktop table */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 border-b border-gray-200">
+                        <tr>
+                          {['Part Number', 'Description', 'Specs Defined', ''].map(h => (
+                            <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {visibleSpecs.map(spec => (
+                          <tr key={spec.id} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 font-mono text-sm font-semibold text-pdi-navy">{spec.part_number}</td>
+                            <td className="px-4 py-3 text-sm text-gray-600">{spec.description || '—'}</td>
+                            <td className="px-4 py-3 text-sm text-gray-500">{specsSummary(spec)}</td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-3">
+                                <button onClick={() => startEdit(spec)} disabled={!ready} className="text-xs text-pdi-navy hover:underline flex items-center gap-1 disabled:opacity-50"><Edit2 size={12} /> Edit</button>
+                                <button onClick={() => handleDelete(spec.id)} className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1"><Trash2 size={12} /> Delete</button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {/* Mobile card list */}
+                  <div className="md:hidden divide-y divide-gray-100">
+                    {visibleSpecs.map(spec => (
+                      <div key={spec.id} className="px-3 py-3">
+                        <div className="min-w-0">
+                          <div className="font-mono text-sm font-semibold text-pdi-navy break-words">{spec.part_number}</div>
                           <div className="text-xs text-gray-600 mt-0.5 break-words">{spec.description || '—'}</div>
-                          <div className="text-xs text-gray-500 mt-1">{Object.keys(spec.spec_data || {}).length} fields defined</div>
+                          <div className="text-xs text-gray-500 mt-1">{specsSummary(spec)}</div>
+                        </div>
+                        <div className="flex items-center gap-4 mt-2">
+                          <button onClick={() => startEdit(spec)} disabled={!ready} className="text-sm text-pdi-navy hover:underline flex items-center gap-1 min-h-[36px] disabled:opacity-50">
+                            <Edit2 size={13} /> Edit
+                          </button>
+                          <button onClick={() => handleDelete(spec.id)} className="text-sm text-red-500 hover:text-red-600 flex items-center gap-1 min-h-[36px]">
+                            <Trash2 size={13} /> Delete
+                          </button>
                         </div>
                       </div>
-                      <div className="flex items-center gap-4 mt-2">
-                        <button onClick={() => startEdit(spec)} className="text-sm text-pdi-navy hover:underline flex items-center gap-1 min-h-[36px]">
-                          <Edit2 size={13} /> Edit
-                        </button>
-                        <button onClick={() => handleDelete(spec.id)} className="text-sm text-red-500 hover:text-red-600 flex items-center gap-1 min-h-[36px]">
-                          <Trash2 size={13} /> Delete
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )
-          }
-        </div>
+                    ))}
+                  </div>
+                </>
+              )
+            }
+          </div>
+        </>
       )}
     </div>
   )

@@ -505,12 +505,26 @@ CREATE TABLE part_specs (
   template_id INTEGER NOT NULL REFERENCES inspection_templates(id),
   part_number TEXT NOT NULL,
   description TEXT,
-  spec_data   TEXT NOT NULL DEFAULT '{}',           -- JSON: spec fields
+  product_family TEXT,                              -- optional explicit family (migration part_specs_product_family)
+  spec_data   TEXT NOT NULL DEFAULT '{}',           -- JSON: inspection point key → spec
   created_at  TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(template_id, part_number)
 );
 ```
+
+**`spec_data`** maps an inspection point key (`<sectionKey>.<itemId>`, e.g.
+`groove_specs.2`, `valve_recession.intake`) to a spec: `{ type: 'tolerance',
+nominal, lower_tol, upper_tol, unit }`, `{ type: 'limits', min, max, unit }`
+(either limit may be blank), `{ type: 'text', text }`, or a legacy free-text
+string. Dimensional points come from `dimensional`, `general_measurements`,
+`groove_specs`, `camshaft_bore`, `fire_ring_protrusion` and `valve_recession`
+sections (`listDimensionalPoints()` in `shared/dimensionalSpec.mjs`). Measurements
+against a numeric spec are judged Pass/Fail automatically (limits inclusive) by
+the same module on the client and on `PATCH`/`complete`; a Fail may be
+dispositioned Accepted. Product families: an explicit `product_family`, else the
+description with its stage marker removed, within the same component type
+(`services/partFamilies.js`).
 
 ---
 
@@ -560,7 +574,12 @@ All endpoints except `/api/auth/*` and `/health` require a valid JWT in the `Aut
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
 | GET | `/api/part-specs` | JWT | List specs. Query: `template_id`, `part_number` |
-| POST | `/api/part-specs` | JWT | Create or update spec (upsert by template_id + part_number) |
+| GET | `/api/part-specs/resolve` | JWT | The spec an inspection is evaluated against. Query: `template_id`, `part_number` |
+| POST | `/api/part-specs` | admin, qc_manager | Create a part spec (spec_data validated) |
+| PATCH | `/api/part-specs/:id` | admin, qc_manager | Update part number, description, product_family, spec_data |
+| GET | `/api/part-specs/:id/family` | admin, qc_manager | Other part numbers in the part's product family |
+| POST | `/api/part-specs/:id/propagate/preview` | admin, qc_manager | What copying specs to `target_ids` would add, conflict with, or skip |
+| POST | `/api/part-specs/:id/propagate` | admin, qc_manager | Copy specs to `targets: [{ id, replace_conflicts }]` (family members only) |
 
 ### Non-Conformance Reports (NCRs)
 

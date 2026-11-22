@@ -3,6 +3,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { X, Loader2, Ruler } from 'lucide-react'
 import { useInspection, useUpdateInspection } from '../../hooks/useInspections'
 import { useTemplate } from '../../hooks/useTemplates'
+import { useResolvedPartSpec } from '../../hooks/usePartSpecs'
+import { buildSpecIndex, evaluateSection } from '../../lib/dimensional'
 import { useToast } from '../../hooks/useToast'
 import {
   getSectionData, getEffectiveSections, findFireRingKey, getSectionItems, initSectionData,
@@ -38,6 +40,14 @@ export default function AddFireRingModal({ inspectionId, onClose, onSaved }) {
     const defaultGroove = initSectionData({ [grooveKey]: section })[grooveKey]
     return { sd, sections, grooveKey, section, items, defaultGroove }
   }, [inspection, template])
+
+  // Fire Ring readings with a configured spec are judged Pass/Fail as they
+  // are entered — the same rules the server applies when they are saved.
+  const partSpecQuery = useResolvedPartSpec(inspection?.template_id, inspection?.part_number)
+  const specIndex = useMemo(() => {
+    if (!model?.grooveKey || model.sd.__injector_source) return {}
+    return buildSpecIndex(model.sections, partSpecQuery.data?.spec_data || null)
+  }, [model, partSpecQuery.data])
 
   useEffect(() => {
     if (model && model.grooveKey && grooveByItem === null) {
@@ -120,8 +130,12 @@ export default function AddFireRingModal({ inspectionId, onClose, onSaved }) {
                   <SectionGrooveSpecs
                     section={model.section}
                     data={grooveByItem[itemIdx]}
-                    onChange={val => setGrooveByItem(arr => arr.map((g, i) => (i === itemIdx ? val : g)))}
+                    onChange={val => setGrooveByItem(arr => arr.map((g, i) => (
+                      i === itemIdx ? evaluateSection(model.grooveKey, model.section, val, specIndex).data : g
+                    )))}
                     readOnly={false}
+                    specIndex={specIndex}
+                    specSectionKey={model.grooveKey}
                   />
                 </div>
               </div>

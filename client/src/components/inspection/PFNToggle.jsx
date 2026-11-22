@@ -18,24 +18,37 @@ function Glyph({ option, size = 16 }) {
   return <span className="text-xs font-bold leading-none">{option}</span>
 }
 
-export default function PFNToggle({ value, onChange, readOnly = false, options = ['P', 'F', 'A'] }) {
+/**
+ * Pass / Fail / Accepted (/ N/A) selector.
+ *
+ * `allowed` (optional) limits which options can be picked — used for
+ * dimensional points whose result is set automatically from the measurement:
+ * the others stay visible but disabled, with `lockedTitle` explaining why.
+ */
+export default function PFNToggle({ value, onChange, readOnly = false, options = ['P', 'F', 'A'], allowed, lockedTitle }) {
   return (
     <div className="flex gap-1">
       {options.map(opt => {
         const selected = value === opt
+        const locked = !readOnly && Array.isArray(allowed) && !allowed.includes(opt)
+        const disabled = readOnly || locked
+        const label = LABELS[opt] || opt
         return (
           <button
             key={opt}
             type="button"
-            disabled={readOnly}
-            aria-label={LABELS[opt] || opt}
-            title={LABELS[opt] || opt}
-            onClick={() => !readOnly && onChange(selected ? '' : opt)}
+            disabled={disabled}
+            aria-label={label}
+            aria-pressed={selected}
+            title={locked && lockedTitle ? `${label} — ${lockedTitle}` : label}
+            onClick={() => !disabled && onChange(selected ? '' : opt)}
             className={`w-10 h-10 sm:w-9 sm:h-9 flex items-center justify-center rounded border transition-colors ${
               selected
                 ? SELECTED_STYLE[opt] || 'bg-blue-600 text-white border-blue-600'
-                : 'bg-white text-gray-300 border-gray-200 hover:border-gray-400 hover:text-gray-500'
-            } ${readOnly ? 'cursor-default' : 'cursor-pointer'}`}
+                : locked
+                  ? 'bg-gray-50 text-gray-200 border-gray-100'
+                  : 'bg-white text-gray-300 border-gray-200 hover:border-gray-400 hover:text-gray-500'
+            } ${disabled ? 'cursor-default' : 'cursor-pointer'}`}
           >
             <Glyph option={opt} />
           </button>
