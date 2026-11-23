@@ -4,7 +4,7 @@ import { Settings, FileText, Package, Database, Plus, Edit2, Trash2, Search, Sav
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '../lib/api'
 import { useInspections, useDeleteInspection, useCreateInspection, useAssignInspection, useReopenInspection } from '../hooks/useInspections'
-import { usePartSpecs, useAllPartSpecs, useCreatePartSpec, useUpdatePartSpec, useDeletePartSpec, useImportPartSpecs, useImportPartsFromInspections, fetchPartFamily } from '../hooks/usePartSpecs'
+import { usePartSpecs, useAllPartSpecs, useCreatePartSpec, useUpdatePartSpec, useDeletePartSpec, useImportPartSpecs, useImportPartsFromInspections, fetchPartFamily, usePartNumberLookup } from '../hooks/usePartSpecs'
 import { useDrawings, useUploadDrawing, useSetCurrentDrawing, useDeleteDrawing } from '../hooks/useDrawings'
 import { useToast } from '../hooks/useToast'
 import { getUser } from '../lib/auth'
@@ -13,6 +13,7 @@ import { formatDate } from '../lib/utils'
 import { COMPONENT_TYPE_LABELS, STATUS_LABELS, STATUS_COLORS, isReopenable } from '../lib/constants'
 import { isAdminUser } from '../lib/nav'
 import StatusBadge from '../components/StatusBadge'
+import PartNumberCombobox from '../components/PartNumberCombobox'
 import DimensionalSpecEditor from '../components/admin/DimensionalSpecEditor'
 import PartFamilyDialog from '../components/admin/PartFamilyDialog'
 import { listDimensionalPoints, SPEC_ERROR_MESSAGES } from '../lib/dimensional'
@@ -871,87 +872,112 @@ function PartEditorCard({ form, setForm, templates, onSave, onCancel, saving }) 
 }
 
 // ── Part Specifications Tab ───────────────────────────────────────────────────
-// Dimensional specifications per part number. Every dimensional inspection
-// point the selected form defines is listed — the point list comes from the
-// shared listDimensionalPoints(), the same definition the inspection form and
-// the server evaluate against, so a point added to a form appears here too.
-// After saving, the administrator is offered the other part numbers in the
-// product family to copy the specs to.
+// Driven by part number: search the part catalogue as you type (the same
+// lookup as the Part Number field on New Inspection), pick a part, and every
+// dimensional inspection point on that part's own inspection form is listed
+// for specification. The point list comes from the shared
+// listDimensionalPoints(), the definition the inspection form and the server
+// evaluate against, so a point added to a form appears here too. After
+// saving, the other part numbers in the product family are offered.
 
 function templateOptionLabel(t) {
   return `${t.form_no}${t.revision ? ` Rev ${t.revision}` : ''} — ${t.title}${t.active ? '' : ' (inactive)'}`
 }
 
 function PartSpecsTab({ showToast }) {
+  const qc = useQueryClient()
+  const [query, setQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  // The part being edited: { template_id, part_number } as chosen from the lookup.
+  const [selected, setSelected] = useState(null)
+  const [entries, setEntries] = useState({})
+  const [touched, setTouched] = useState(() => new Set())
+  const [details, setDetails] = useState({ description: '', product_family: '' })
+  const [detailsTouched, setDetailsTouched] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [familyPrompt, setFamilyPrompt] = useState(null)
+  const [adding, setAdding] = useState(false)
+  const [newPart, setNewPart] = useState({ template_id: '', description: '' })
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(query.trim()), 250)
+    return () => clearTimeout(t)
+  }, [query])
+
   const { data: allTemplates = [] } = useQuery({
     queryKey: ['admin-templates'],
     queryFn: async () => { const { data } = await api.get('/admin/templates'); return data.templates },
   })
-  // Active forms first; inactive ones stay reachable for parts still on them.
-  const templates = useMemo(() => [...allTemplates].sort((a, b) =>
-    (b.active ? 1 : 0) - (a.active ? 1 : 0) || String(a.form_no).localeCompare(String(b.form_no))
-  ), [allTemplates])
-  const [selectedTemplateId, setSelectedTemplateId] = useState('')
-  const [search, setSearch] = useState('')
-  // { id: spec id | 'new', part_number, description, original: stored spec_data }
-  const [editing, setEditing] = useState(null)
-  const [entries, setEntries] = useState({})
-  const [touched, setTouched] = useState(() => new Set())
-  const [saving, setSaving] = useState(false)
-  const [familyPrompt, setFamilyPrompt] = useState(null)
+  const activeTemplates = useMemo(
+    () => allTemplates.filter(t => t.active).sort((a, b) => String(a.form_no).localeCompare(String(b.form_no))),
+    [allTemplates]
+  )
 
-  // Fetch the FULL template (with sections) when one is selected
-  const { data: fullSelectedTemplate, isLoading: loadingTemplate } = useQuery({
-    queryKey: ['admin-template-full-specs', selectedTemplateId],
+  // Whether the typed part number is already in the catalogue.
+  const { data: matches = [], isFetching: searching } = usePartNumberLookup(debouncedQuery, { enabled: !!debouncedQuery })
+  const exactMatches = matches.filter(m => m.part_number.trim().toLowerCase() === debouncedQuery.toLowerCase())
+
+  // The selected part's catalogue row (with its specs) and its inspection form.
+  const { data: partData, isLoading: loadingPart } = usePartSpecs(
+    selected ? { template_id: selected.template_id, part_number: selected.part_number } : {}
+  )
+  const part = partData?.specs?.[0] || null
+  const { data: partTemplate, isLoading: loadingTemplate } = useQuery({
+    queryKey: ['admin-template-full-specs', selected?.template_id],
     queryFn: async () => {
-      const { data } = await api.get(`/admin/templates/${selectedTemplateId}`)
+      const { data } = await api.get(`/admin/templates/${selected.template_id}`)
       return data.template
     },
-    enabled: !!selectedTemplateId,
+    enabled: !!selected?.template_id,
   })
-
-  const { data: specsData, isLoading } = usePartSpecs(
-    selectedTemplateId ? { template_id: selectedTemplateId } : {}
-  )
-  const specs = specsData?.specs || []
   const createSpec = useCreatePartSpec()
   const updateSpec = useUpdatePartSpec()
-  const deleteSpec = useDeletePartSpec()
 
   const { points, issues } = useMemo(() => {
-    const sections = fullSelectedTemplate
-      ? (typeof fullSelectedTemplate.sections === 'string'
-          ? JSON.parse(fullSelectedTemplate.sections)
-          : (fullSelectedTemplate.sections || {}))
+    const sections = partTemplate
+      ? (typeof partTemplate.sections === 'string' ? JSON.parse(partTemplate.sections) : (partTemplate.sections || {}))
       : {}
     return listDimensionalPoints(sections)
-  }, [fullSelectedTemplate])
+  }, [partTemplate])
 
-  // The editor shows an entry per point: what the admin typed, else the stored value.
-  const editorEntries = useMemo(() => {
-    if (!editing) return {}
-    return Object.fromEntries(points.map(p => [p.key, entries[p.key] ?? toEditorEntry(editing.original[p.key])]))
-  }, [editing, entries, points])
+  const original = useMemo(
+    () => (part?.spec_data && typeof part.spec_data === 'object' ? part.spec_data : {}),
+    [part]
+  )
 
-  const ready = !!fullSelectedTemplate && !loadingTemplate
-
-  function openEditor(target) {
-    setEditing(target)
+  // A freshly loaded (or freshly saved) part starts with no pending edits.
+  useEffect(() => {
     setEntries({})
     setTouched(new Set())
+    setDetails({ description: part?.description || '', product_family: part?.product_family || '' })
+    setDetailsTouched(false)
+  }, [part?.id, part?.updated_at])
+
+  // The editor shows an entry per point: what the admin typed, else the stored value.
+  const editorEntries = useMemo(
+    () => Object.fromEntries(points.map(p => [p.key, entries[p.key] ?? toEditorEntry(original[p.key])])),
+    [entries, points, original]
+  )
+  const dirty = touched.size > 0 || detailsTouched
+
+  function confirmDiscard() {
+    return !dirty || window.confirm('Discard the unsaved changes to this part’s specifications?')
   }
 
-  function startEdit(spec) {
-    openEditor({
-      id: spec.id,
-      part_number: spec.part_number,
-      description: spec.description || '',
-      original: spec.spec_data && typeof spec.spec_data === 'object' ? spec.spec_data : {},
-    })
+  function handleQueryChange(value) {
+    if (selected && value !== selected.part_number) {
+      if (!confirmDiscard()) return
+      setSelected(null)
+    }
+    setAdding(false)
+    setQuery(value)
   }
 
-  function startCreate() {
-    openEditor({ id: 'new', part_number: '', description: '', original: {} })
+  function handlePartSelect(rec) {
+    if (selected && (rec.part_number !== selected.part_number || rec.template_id !== selected.template_id) && !confirmDiscard()) return
+    setQuery(rec.part_number)
+    setSelected({ template_id: rec.template_id, part_number: rec.part_number })
+    setAdding(false)
   }
 
   function changeEntry(key, entry) {
@@ -959,36 +985,45 @@ function PartSpecsTab({ showToast }) {
     setTouched(t => new Set(t).add(key))
   }
 
-  async function offerFamily(saved) {
+  function changeDetail(field, value) {
+    setDetails(d => ({ ...d, [field]: value }))
+    setDetailsTouched(true)
+  }
+
+  // Offer the part's saved specs to the rest of its product family — after a
+  // save, or on request for specs saved earlier.
+  async function offerFamily(saved, { onRequest = false } = {}) {
     if (countSpecified(saved.spec_data, points) === 0) return
     try {
       const family = await fetchPartFamily(saved.id)
       if (family.candidates?.length) {
         setFamilyPrompt({ source: saved, family: family.family, candidates: family.candidates })
+      } else if (onRequest) {
+        showToast(`No other part numbers are in ${saved.part_number}’s product family.`, 'info')
       }
     } catch (err) {
-      showToast(`Saved — but related part numbers could not be checked: ${err?.response?.data?.error || err.message}`, 'error')
+      showToast(`${onRequest ? '' : 'Saved — but '}related part numbers could not be checked: ${err?.response?.data?.error || err.message}`, 'error')
     }
   }
 
   async function handleSave() {
-    const partNumber = editing.part_number.trim()
-    if (!partNumber) { showToast('Part number is required', 'error'); return }
+    if (!part) return
     const errors = entryErrors(editorEntries, touched, SPEC_ERROR_MESSAGES)
     if (errors.length) {
       const point = points.find(p => p.key === errors[0].key)
       showToast(`${point?.label || errors[0].key}: ${errors[0].message}`, 'error')
       return
     }
-    const spec_data = buildSpecPayload(editing.original, editorEntries, touched)
     setSaving(true)
     try {
-      const body = { part_number: partNumber, description: editing.description, spec_data }
-      const saved = editing.id === 'new'
-        ? await createSpec.mutateAsync({ template_id: selectedTemplateId, ...body })
-        : await updateSpec.mutateAsync({ id: editing.id, ...body })
-      showToast('Part specification saved', 'success')
-      setEditing(null)
+      const saved = await updateSpec.mutateAsync({
+        id: part.id,
+        description: details.description.trim(),
+        product_family: details.product_family.trim(),
+        spec_data: buildSpecPayload(original, editorEntries, touched),
+      })
+      qc.invalidateQueries({ queryKey: ['part-number-lookup'] })
+      showToast(`Specifications saved for ${saved.part_number}`, 'success')
       await offerFamily(saved)
     } catch (err) {
       showToast(err?.response?.data?.error || 'Save failed', 'error')
@@ -997,18 +1032,29 @@ function PartSpecsTab({ showToast }) {
     }
   }
 
-  async function handleDelete(id) {
-    if (!window.confirm('Delete this part number and its specifications?')) return
+  async function handleAddPart() {
+    const partNumber = query.trim()
+    if (!partNumber) return
+    if (!newPart.template_id) { showToast('Select the inspection form this part is inspected on', 'error'); return }
     try {
-      await deleteSpec.mutateAsync(id)
-      showToast('Deleted', 'success')
-    } catch { showToast('Delete failed', 'error') }
+      const created = await createSpec.mutateAsync({
+        template_id: newPart.template_id,
+        part_number: partNumber,
+        description: newPart.description.trim(),
+      })
+      qc.invalidateQueries({ queryKey: ['part-number-lookup'] })
+      showToast(`${created.part_number} added to the part catalogue`, 'success')
+      setAdding(false)
+      setNewPart({ template_id: '', description: '' })
+      setSelected({ template_id: created.template_id, part_number: created.part_number })
+    } catch (err) {
+      showToast(err?.response?.data?.error || 'Could not add the part number', 'error')
+    }
   }
 
-  const q = search.trim().toLowerCase()
-  const visibleSpecs = specs.filter(s => !q ||
-    (s.part_number || '').toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q))
-  const specsSummary = spec => (points.length ? `${countSpecified(spec.spec_data, points)} of ${points.length} points` : '—')
+  const lookupSettled = !!debouncedQuery && debouncedQuery === query.trim() && !searching
+  const notInCatalogue = !selected && lookupSettled && exactMatches.length === 0
+  const loading = selected && (loadingPart || loadingTemplate)
 
   return (
     <div className="space-y-3 sm:space-y-4">
@@ -1022,49 +1068,85 @@ function PartSpecsTab({ showToast }) {
         />
       )}
 
-      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-        <select value={selectedTemplateId} onChange={e => { setSelectedTemplateId(e.target.value); setEditing(null) }}
-          aria-label="Inspection form"
-          className="w-full sm:w-auto sm:flex-1 sm:max-w-md border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]">
-          <option value="">— Select Part Type (Inspection Form) —</option>
-          {templates.map(t => <option key={t.id} value={t.id}>{templateOptionLabel(t)}</option>)}
-        </select>
-        {selectedTemplateId && !editing && (
-          <button onClick={startCreate} disabled={!ready} className="flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px]">
-            <Plus size={15} /> Add Part Spec
-          </button>
+      <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-4 space-y-2">
+        <label htmlFor="spec-part-number" className="block text-xs font-semibold text-gray-700">Part Number</label>
+        <div className="sm:max-w-xl">
+          <PartNumberCombobox
+            id="spec-part-number"
+            value={query}
+            onChange={handleQueryChange}
+            onSelect={handlePartSelect}
+            placeholder="Search part number or description…"
+            emptyText={() => null}
+          />
+        </div>
+        {!selected && !query.trim() && (
+          <p className="text-xs text-gray-500">Search for a part number to view and edit its dimensional specifications.</p>
+        )}
+        {!selected && exactMatches.length > 0 && lookupSettled && (
+          <p className="text-xs text-gray-500">Choose the part from the list to edit its specifications.</p>
+        )}
+        {notInCatalogue && !adding && (
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 text-xs text-gray-600">
+            <span><span className="font-mono font-semibold">{query.trim()}</span> isn’t in the part catalogue.</span>
+            <button type="button" onClick={() => setAdding(true)} className="flex items-center gap-1 text-pdi-navy font-medium hover:underline min-h-[32px]">
+              <Plus size={13} /> Add it
+            </button>
+          </div>
+        )}
+        {notInCatalogue && adding && (
+          <div className="rounded-lg border border-pdi-navy/20 bg-pdi-frost/40 p-3 space-y-2">
+            <div className="text-xs font-semibold text-gray-700">Add <span className="font-mono">{query.trim()}</span> to the part catalogue</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <select value={newPart.template_id} onChange={e => setNewPart(n => ({ ...n, template_id: e.target.value }))}
+                aria-label="Inspection form"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]">
+                <option value="">— Inspection form (product type) —</option>
+                {activeTemplates.map(t => <option key={t.id} value={t.id}>{templateOptionLabel(t)}</option>)}
+              </select>
+              <input value={newPart.description} onChange={e => setNewPart(n => ({ ...n, description: e.target.value }))}
+                placeholder="Description (e.g. CAT C15 Cylinder Head Stage 1)" aria-label="New part description"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setAdding(false)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-white min-h-[38px]">Cancel</button>
+              <button type="button" onClick={handleAddPart} disabled={createSpec.isPending}
+                className="flex items-center gap-1.5 px-3 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[38px]">
+                {createSpec.isPending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} Add part number
+              </button>
+            </div>
+          </div>
         )}
       </div>
 
-      {!selectedTemplateId && (
-        <div className="text-center text-gray-400 py-8 sm:py-12 text-sm px-4">Select an inspection form to manage part specifications</div>
+      {loading && <div className="text-center text-gray-400 py-8 text-sm">Loading…</div>}
+
+      {selected && !loading && !part && (
+        <div className="text-center text-gray-400 py-8 text-sm">This part number is no longer in the catalogue.</div>
       )}
 
-      {selectedTemplateId && ready && (
-        <p className="text-xs text-gray-500">
-          {points.length > 0
-            ? `${points.length} dimensional inspection point${points.length === 1 ? '' : 's'} on this form. Measurements are judged Pass/Fail automatically against a numeric specification.`
-            : 'This form has no dimensional inspection points.'}
-        </p>
-      )}
-
-      {selectedTemplateId && editing && (
-        <div className="bg-white rounded-xl border border-pdi-navy/30 p-3 sm:p-5 shadow-sm space-y-3 sm:space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm sm:text-base font-semibold text-pdi-navy">{editing.id === 'new' ? 'New Part Specification' : 'Edit Part Specification'}</h3>
-            <button onClick={() => setEditing(null)} aria-label="Close editor" className="min-h-[40px] min-w-[40px] flex items-center justify-center"><X size={18} className="text-gray-400 hover:text-gray-600" /></button>
+      {selected && !loading && part && (
+        <div className="bg-white rounded-xl border border-pdi-navy/30 p-3 sm:p-5 shadow-sm space-y-3 sm:space-y-4" data-testid="part-spec-editor">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-1">
+            <div className="min-w-0">
+              <div className="font-mono text-base sm:text-lg font-bold text-pdi-navy break-words">{part.part_number}</div>
+              <div className="text-xs text-gray-500">
+                {partTemplate ? templateOptionLabel(partTemplate) : part.form_no}
+                {' · '}{countSpecified(original, points)} of {points.length} point{points.length === 1 ? '' : 's'} specified
+              </div>
+            </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Part Number <span className="text-red-500">*</span></label>
-              <input value={editing.part_number} onChange={e => setEditing(f => ({ ...f, part_number: e.target.value }))}
-                aria-label="Part number"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
+              <label className="block text-xs font-medium text-gray-500 mb-1">Description</label>
+              <input value={details.description} onChange={e => changeDetail('description', e.target.value)}
+                aria-label="Description"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Description</label>
-              <input value={editing.description} onChange={e => setEditing(f => ({ ...f, description: e.target.value }))}
-                aria-label="Description"
+              <label className="block text-xs font-medium text-gray-500 mb-1">Product Family (optional)</label>
+              <input value={details.product_family} onChange={e => changeDetail('product_family', e.target.value)} maxLength={120}
+                aria-label="Product family" placeholder="Blank = grouped by description"
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
             </div>
           </div>
@@ -1074,86 +1156,25 @@ function PartSpecsTab({ showToast }) {
               <DimensionalSpecEditor points={points} issues={issues} entries={editorEntries} onChange={changeEntry} />
             </div>
           ) : (
-            <p className="text-xs text-gray-400 italic">No dimensional measurement points are defined on this form. Add them in Inspection Forms first.</p>
+            <p className="text-xs text-gray-400 italic">This part’s inspection form has no dimensional measurement points. Add them in Inspection Forms first.</p>
           )}
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3 pt-2 border-t border-gray-100">
-            <button onClick={() => setEditing(null)} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
-            <button onClick={handleSave} disabled={saving} className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px]">
+            {countSpecified(original, points) > 0 && (
+              <button type="button" onClick={() => offerFamily(part, { onRequest: true })} disabled={dirty || saving}
+                title={dirty ? 'Save your changes first' : 'Copy these saved specifications to other part numbers in the product family'}
+                className="sm:mr-auto flex items-center justify-center gap-1.5 px-4 py-2 text-sm border border-pdi-navy/30 text-pdi-navy rounded-lg hover:bg-pdi-frost disabled:opacity-50 min-h-[40px]">
+                <Users size={14} /> Apply to product family…
+              </button>
+            )}
+            <button type="button" onClick={() => { setEntries({}); setTouched(new Set()); setDetails({ description: part.description || '', product_family: part.product_family || '' }); setDetailsTouched(false) }}
+              disabled={!dirty || saving}
+              className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50 min-h-[40px]">Undo changes</button>
+            <button type="button" onClick={handleSave} disabled={saving || !dirty}
+              className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-50 min-h-[40px]">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {saving ? 'Saving…' : 'Save'}
             </button>
           </div>
         </div>
-      )}
-
-      {selectedTemplateId && !editing && (
-        <>
-          {specs.length > 0 && (
-            <div className="relative sm:max-w-md">
-              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search part # or description…"
-                className="w-full border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px]" />
-            </div>
-          )}
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            {isLoading ? <div className="text-center text-gray-400 py-8 sm:py-10">Loading…</div> :
-              visibleSpecs.length === 0 ? (
-                <div className="text-center text-gray-400 py-8 sm:py-10 px-4 text-sm">
-                  {q ? 'No part numbers match your search' : 'No part specifications for this form type'}
-                </div>
-              ) : (
-                <>
-                  {/* Desktop table */}
-                  <div className="hidden md:block overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-50 border-b border-gray-200">
-                        <tr>
-                          {['Part Number', 'Description', 'Specs Defined', ''].map(h => (
-                            <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {visibleSpecs.map(spec => (
-                          <tr key={spec.id} className="hover:bg-gray-50">
-                            <td className="px-4 py-3 font-mono text-sm font-semibold text-pdi-navy">{spec.part_number}</td>
-                            <td className="px-4 py-3 text-sm text-gray-600">{spec.description || '—'}</td>
-                            <td className="px-4 py-3 text-sm text-gray-500">{specsSummary(spec)}</td>
-                            <td className="px-4 py-3">
-                              <div className="flex items-center gap-3">
-                                <button onClick={() => startEdit(spec)} disabled={!ready} className="text-xs text-pdi-navy hover:underline flex items-center gap-1 disabled:opacity-50"><Edit2 size={12} /> Edit</button>
-                                <button onClick={() => handleDelete(spec.id)} className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1"><Trash2 size={12} /> Delete</button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  {/* Mobile card list */}
-                  <div className="md:hidden divide-y divide-gray-100">
-                    {visibleSpecs.map(spec => (
-                      <div key={spec.id} className="px-3 py-3">
-                        <div className="min-w-0">
-                          <div className="font-mono text-sm font-semibold text-pdi-navy break-words">{spec.part_number}</div>
-                          <div className="text-xs text-gray-600 mt-0.5 break-words">{spec.description || '—'}</div>
-                          <div className="text-xs text-gray-500 mt-1">{specsSummary(spec)}</div>
-                        </div>
-                        <div className="flex items-center gap-4 mt-2">
-                          <button onClick={() => startEdit(spec)} disabled={!ready} className="text-sm text-pdi-navy hover:underline flex items-center gap-1 min-h-[36px] disabled:opacity-50">
-                            <Edit2 size={13} /> Edit
-                          </button>
-                          <button onClick={() => handleDelete(spec.id)} className="text-sm text-red-500 hover:text-red-600 flex items-center gap-1 min-h-[36px]">
-                            <Trash2 size={13} /> Delete
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )
-            }
-          </div>
-        </>
       )}
     </div>
   )

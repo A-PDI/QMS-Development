@@ -15,6 +15,8 @@ import { usePartNumberLookup } from '../hooks/usePartSpecs'
  *  - onChange:     (string) => void           — fired on every keystroke
  *  - onSelect:     (record) => void           — fired when a suggestion is chosen
  *  - templateId:   optional template filter for suggestions
+ *  - emptyText:    (query) => string shown when nothing matches; return null
+ *                  to show no dropdown at all (the parent explains instead)
  *  - required, id, placeholder, className, inputClassName
  */
 export default function PartNumberCombobox({
@@ -26,6 +28,7 @@ export default function PartNumberCombobox({
   id,
   placeholder = 'Type or select a part number…',
   inputClassName = '',
+  emptyText = (q) => `No matching parts — press Enter to use “${q}” as a new part number.`,
 }) {
   const [open, setOpen] = useState(false)
   const [debounced, setDebounced] = useState(value)
@@ -85,6 +88,8 @@ export default function PartNumberCombobox({
     }
   }
 
+  const emptyMessage = debounced ? emptyText(debounced) : null
+
   return (
     <div ref={wrapRef} className="relative">
       <div className="relative">
@@ -112,14 +117,14 @@ export default function PartNumberCombobox({
         </span>
       </div>
 
-      {open && (results.length > 0 || (debounced && !isFetching)) && (
+      {open && (results.length > 0 || (emptyMessage && !isFetching)) && (
         <ul
           role="listbox"
           className="absolute z-30 mt-1 w-full max-h-60 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg py-1"
         >
           {results.length === 0 ? (
             <li className="px-3 py-2 text-xs text-gray-400">
-              No matching parts — press Enter to use “{debounced}” as a new part number.
+              {emptyMessage}
             </li>
           ) : (
             results.map((rec, idx) => (

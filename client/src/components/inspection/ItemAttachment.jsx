@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Camera, Images, X, Loader2, RotateCcw, AlertTriangle, Trash2, Check } from 'lucide-react'
+import { Camera, ImagePlus, X, Loader2, RotateCcw, AlertTriangle, Trash2, Check } from 'lucide-react'
 import AuthImage from '../AuthImage'
 import { Dialog } from '../ui/dialog'
 import { useToast } from '../../hooks/useToast'
@@ -13,12 +13,13 @@ let nextEntryId = 1
 const MAX_INLINE_PHOTOS = 3
 
 /**
- * Photos for one inspection point.
+ * Photos for one inspection point — one button.
  *
- * - Library: several photos can be picked at once and are attached in one go.
- * - Camera: photos are taken one after another in a single session — after
- *   each one the inspector chooses "Take another photo" or "Done" — so the
- *   attachment flow is not restarted for every photo.
+ * The button opens the device's own picker: on iOS / Android that offers
+ * "Take Photo" or the photo library, where several photos can be selected at
+ * once; on a desktop it is the file picker. Once photos are added a dialog
+ * keeps the session open — "Add more photos" or "Done" — so photos can be
+ * taken one after another without starting over each time.
  *
  * Every photo is uploaded on its own (in the order it was taken or picked) and
  * filed against this point's section key + item id at the moment it was
@@ -46,8 +47,7 @@ export default function ItemAttachment({
   uploadingKey = null,
   readOnly = false,
 }) {
-  const libraryRef = useRef(null)
-  const cameraRef = useRef(null)
+  const pickerRef = useRef(null)
   const { showToast } = useToast()
 
   // Upload queue: [{ id, file, url, sectionKey, itemId, status: 'queued'|'uploading'|'failed', error, session }]
@@ -57,7 +57,7 @@ export default function ItemAttachment({
   const onUploadRef = useRef(onUpload)
   onUploadRef.current = onUpload
 
-  // Camera session: { id, sectionKey, itemId } while open; uploaded ids shown in it.
+  // Photo session: { id, sectionKey, itemId } while open; uploaded ids shown in it.
   const [session, setSession] = useState(null)
   const [sessionUploads, setSessionUploads] = useState([])
   const [preview, setPreview] = useState(null)
@@ -141,19 +141,9 @@ export default function ItemAttachment({
     })
   }
 
-  function openLibrary() {
-    libraryRef.current?.click()
-  }
-
-  function openCamera() {
-    setSession({ id: `s${nextEntryId++}`, sectionKey, itemId })
-    setSessionUploads([])
-    // Open the camera straight away — this click is the user gesture iOS needs.
-    cameraRef.current?.click()
-  }
-
-  function takeAnother() {
-    cameraRef.current?.click()
+  // Opened straight from the tap — the user gesture mobile browsers require.
+  function openPicker() {
+    pickerRef.current?.click()
   }
 
   function closeSession() {
@@ -161,16 +151,17 @@ export default function ItemAttachment({
     setSessionUploads([])
   }
 
-  function handleLibraryPicked(e) {
+  function handlePicked(e) {
     const files = Array.from(e.target.files || [])
     e.target.value = ''   // allow picking the same photos again
-    addFiles(files)
-  }
-
-  function handleCameraCaptured(e) {
-    const files = Array.from(e.target.files || [])
-    e.target.value = ''
-    addFiles(files, session?.id || null)
+    if (!files.length) return   // picker cancelled
+    let sessionId = session?.id
+    if (!sessionId) {
+      sessionId = `s${nextEntryId++}`
+      setSession({ id: sessionId, sectionKey, itemId })
+      setSessionUploads([])
+    }
+    addFiles(files, sessionId)
   }
 
   async function removeAttachment(attachmentId) {
@@ -195,9 +186,11 @@ export default function ItemAttachment({
         <>
           <button
             type="button"
-            onClick={openCamera}
-            title={isFail ? 'Take photos (required for failed items)' : 'Take photos'}
-            aria-label={isFail ? 'Take photos (required)' : 'Take photos'}
+            onClick={openPicker}
+            title={isFail
+              ? 'Add photos — required for failed items (camera or library, several at once)'
+              : 'Add photos (camera or library, several at once)'}
+            aria-label={isFail ? 'Add photos (required)' : 'Add photos'}
             className={`inline-flex items-center justify-center w-8 h-8 sm:w-7 sm:h-7 rounded transition-colors
               ${requiresImage
                 ? 'text-red-500 bg-red-50 hover:bg-red-100 ring-1 ring-red-400 animate-pulse'
@@ -206,37 +199,19 @@ export default function ItemAttachment({
           >
             {busy ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
           </button>
-          <button
-            type="button"
-            onClick={openLibrary}
-            title="Add photos from the library (select several at once)"
-            aria-label="Add photos from library"
-            className="inline-flex items-center justify-center w-8 h-8 sm:w-7 sm:h-7 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100 bg-gray-50 sm:bg-transparent transition-colors"
-          >
-            <Images size={14} />
-          </button>
-          {/* Visually hidden (not display:none) so programmatic clicks work on every mobile browser. */}
+          {/* Visually hidden (not display:none) so programmatic clicks work on
+              every mobile browser. No `capture` attribute: that would force the
+              camera and hide the library — without it iOS and Android offer both. */}
           <input
-            ref={libraryRef}
+            ref={pickerRef}
             type="file"
             multiple
             accept={IMAGE_ACCEPT}
             className="sr-only"
             tabIndex={-1}
             aria-hidden="true"
-            data-testid="photo-library-input"
-            onChange={handleLibraryPicked}
-          />
-          <input
-            ref={cameraRef}
-            type="file"
-            accept={IMAGE_ACCEPT}
-            capture="environment"
-            className="sr-only"
-            tabIndex={-1}
-            aria-hidden="true"
-            data-testid="photo-camera-input"
-            onChange={handleCameraCaptured}
+            data-testid="photo-input"
+            onChange={handlePicked}
           />
         </>
       )}
@@ -307,17 +282,18 @@ export default function ItemAttachment({
         <span className="text-[10px] text-red-600 whitespace-nowrap" role="alert">{failed.length} failed</span>
       )}
 
-      {/* Camera session */}
+      {/* Photo session */}
       {session && createPortal(
-        <Dialog open onClose={closeSession} title="Take photos" className="sm:max-w-md">
+        <Dialog open onClose={closeSession} title="Photos" className="sm:max-w-md">
           <div className="space-y-4">
             <p className="text-sm text-gray-600">
               {sessionCount === 0
-                ? 'Take a photo of this inspection point. You can take as many as you need before finishing.'
-                : `${sessionCount} photo${sessionCount === 1 ? '' : 's'} taken for this inspection point.`}
+                ? 'No photos added in this session.'
+                : `${sessionCount} photo${sessionCount === 1 ? '' : 's'} added to this inspection point.`}
+              {' '}Add more with the camera or from the library, or finish.
             </p>
             {sessionCount > 0 && (
-              <div className="grid grid-cols-4 gap-2" data-testid="camera-session-photos">
+              <div className="grid grid-cols-4 gap-2" data-testid="photo-session-photos">
                 {sessionSaved.map(att => (
                   <div key={att.id} className="relative aspect-square">
                     <AuthImage attachmentId={att.id} alt={att.file_name} className="w-full h-full object-cover rounded border border-gray-200" />
@@ -352,9 +328,9 @@ export default function ItemAttachment({
                 className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[44px]">
                 {sessionBusy ? 'Done (finishing uploads)' : 'Done'}
               </button>
-              <button type="button" onClick={takeAnother}
+              <button type="button" onClick={openPicker}
                 className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[44px]">
-                <Camera size={15} /> {sessionCount === 0 ? 'Take photo' : 'Take another photo'}
+                <ImagePlus size={15} /> Add more photos
               </button>
             </div>
           </div>
