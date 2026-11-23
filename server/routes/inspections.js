@@ -41,6 +41,28 @@ function logActivity(inspectionId, actionType, user, notes = null) {
   } catch (_) {}
 }
 
+// Part description shown on inspection lists: the description recorded on the
+// inspection, or else the catalogue description of its part number on the
+// same form (exact part number first, then case/whitespace-insensitive — the
+// same match findPartSpec uses). Expects the inspections table aliased as `i`.
+const PART_DESCRIPTION_SQL = `COALESCE(
+  NULLIF(TRIM(i.description), ''),
+  (SELECT TRIM(ps.description) FROM part_specs ps
+   WHERE ps.template_id = i.template_id
+     AND UPPER(TRIM(ps.part_number)) = UPPER(TRIM(i.part_number))
+     AND TRIM(COALESCE(ps.description, '')) <> ''
+   ORDER BY (ps.part_number = i.part_number) DESC, ps.updated_at DESC
+   LIMIT 1)
+)`;
+
+// Columns returned for each row of an inspection list.
+const LIST_FIELDS_SQL = [
+  'id', 'template_id', 'component_type', 'form_no', 'part_number', 'po_number', 'supplier',
+  'lot_serial_no', 'date_received', 'inspector_name', 'lot_size', 'sample_size', 'disposition',
+  'status', 'item_count', 'created_at', 'completed_at', 'due_date', 'assigned_to', 'assigned_at',
+].map((field) => `i.${field}`).join(', ');
+const LIST_COLUMNS = `${LIST_FIELDS_SQL}, ${PART_DESCRIPTION_SQL} AS part_description`;
+
 // GET /api/inspections — list with filters and pagination
 router.get('/', (req, res, next) => {
   try {
@@ -58,18 +80,23 @@ router.get('/', (req, res, next) => {
       limit = 20,
     } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
-    let sql = `SELECT id, template_id, component_type, form_no, part_number, po_number, supplier, lot_serial_no, date_received, inspector_name, lot_size, sample_size, disposition, status, item_count, created_at, completed_at, due_date, assigned_to, assigned_at FROM inspections WHERE 1=1`;
+    let where = ' WHERE 1=1';
     const params = [];
-    if (status) { sql += ' AND status = ?'; params.push(status); }
-    if (component_type) { sql += ' AND component_type = ?'; params.push(component_type); }
-    if (inspector_name) { sql += ' AND inspector_name = ?'; params.push(inspector_name); }
-    if (date_from) { sql += ' AND date_received >= ?'; params.push(date_from); }
-    if (date_to) { sql += ' AND date_received <= ?'; params.push(date_to); }
+    if (status) { where += ' AND i.status = ?'; params.push(status); }
+    if (component_type) { where += ' AND i.component_type = ?'; params.push(component_type); }
+    if (inspector_name) { where += ' AND i.inspector_name = ?'; params.push(inspector_name); }
+    if (date_from) { where += ' AND i.date_received >= ?'; params.push(date_from); }
+    if (date_to) { where += ' AND i.date_received <= ?'; params.push(date_to); }
     if (search) {
-      sql +=
-        " AND (part_number LIKE ? OR po_number LIKE ? OR inspector_name LIKE ? OR lot_serial_no LIKE ?)";
+      // Part description matches the one recorded on the inspection or the
+      // catalogue description of its part number on the same form.
+      where += ` AND (i.part_number LIKE ? OR i.po_number LIKE ? OR i.inspector_name LIKE ? OR i.lot_serial_no LIKE ?
+        OR i.description LIKE ?
+        OR (i.template_id, UPPER(TRIM(i.part_number))) IN (
+          SELECT ps.template_id, UPPER(TRIM(ps.part_number)) FROM part_specs ps WHERE ps.description LIKE ?
+        ))`;
       const s = `%${search}%`;
-      params.push(s, s, s, s);
+      params.push(s, s, s, s, s, s);
     }
     // Comma-separated disposition codes to leave out (e.g. the NCR inspection
     // picker skips PASS). Case-insensitive; inspections with no disposition yet
@@ -78,7 +105,7 @@ router.get('/', (req, res, next) => {
       const codes = String(exclude_disposition).split(',')
         .map((code) => code.trim().toUpperCase()).filter(Boolean).slice(0, 10);
       if (codes.length) {
-        sql += ` AND UPPER(TRIM(COALESCE(disposition, ''))) NOT IN (${codes.map(() => '?').join(', ')})`;
+        where += ` AND UPPER(TRIM(COALESCE(i.disposition, ''))) NOT IN (${codes.map(() => '?').join(', ')})`;
         params.push(...codes);
       }
     }
@@ -98,10 +125,16 @@ router.get('/', (req, res, next) => {
     const sortCol = SORTABLE[sort_by] || 'created_at';
     const sortDir = String(sort_dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
     // Stable secondary ordering so equal values keep a deterministic order.
-    sql += ` ORDER BY ${sortCol} ${sortDir}, created_at DESC`;
-    const countSql = sql.replace(/SELECT.*?FROM/, 'SELECT COUNT(*) as count FROM');
-    const total = db.get(countSql, params).count;
-    const inspections = db.all(sql + ` LIMIT ? OFFSET ?`, [...params, parseInt(limit), offset]);
+    const orderBy = `ORDER BY i.${sortCol} ${sortDir}, i.created_at DESC`;
+    const total = db.get(`SELECT COUNT(*) as count FROM inspections i${where}`, params).count;
+    // Page first, then look up the part description for that page's rows only
+    // (otherwise it is computed for every row an OFFSET skips).
+    const inspections = db.all(
+      `SELECT ${LIST_COLUMNS} FROM (
+         SELECT ${LIST_FIELDS_SQL}, i.description FROM inspections i${where} ${orderBy} LIMIT ? OFFSET ?
+       ) i ${orderBy}`,
+      [...params, parseInt(limit), offset]
+    );
     res.json({ inspections, total, page: parseInt(page), limit: parseInt(limit) });
   } catch (err) { next(err); }
 });
@@ -110,10 +143,10 @@ router.get('/', (req, res, next) => {
 router.get('/assigned', (req, res, next) => {
   try {
     const inspections = db.all(
-      `SELECT id, template_id, component_type, form_no, part_number, po_number, supplier, lot_serial_no, date_received, inspector_name, lot_size, sample_size, disposition, status, item_count, created_at, completed_at, due_date, assigned_to, assigned_at
-       FROM inspections
-       WHERE assigned_to = ? AND status != 'complete'
-       ORDER BY due_date ASC, created_at DESC`,
+      `SELECT ${LIST_COLUMNS}
+       FROM inspections i
+       WHERE i.assigned_to = ? AND i.status != 'complete'
+       ORDER BY i.due_date ASC, i.created_at DESC`,
       [req.user.id]
     );
     res.json({ inspections });
