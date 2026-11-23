@@ -2,6 +2,8 @@ import { useState } from 'react'
 import PFNToggle from './PFNToggle'
 import { PFN_COLORS } from '../../lib/constants'
 import ItemAttachment from './ItemAttachment'
+import { SpecInfo, EvaluationBadge, InvalidEntryMessage, readingTone, readingTitle } from './DimensionalSpec'
+import { pointKey, evaluateMeasurements, allowedStatusOptions } from '../../lib/dimensional'
 import { Pencil, Trash2, Check, X } from 'lucide-react'
 
 export default function SectionDimensional({
@@ -16,6 +18,8 @@ export default function SectionDimensional({
   uploadingKey,
   adminItemTools, // { onDelete(itemId), onEdit(itemId, name, requirement) }
   onRemoveItem,   // (itemId) — remove one measurement row from this inspection
+  specIndex,      // configured specs by point key (automatic Pass/Fail)
+  specSectionKey, // this section's key in the form (for spec lookup)
 }) {
   const [editingId, setEditingId] = useState(null)
   const [editMeasurement, setEditMeasurement] = useState('')
@@ -52,6 +56,14 @@ export default function SectionDimensional({
   // Resolve the spec shown for a row: prefer the answer's spec, fall back to the
   // item definition's spec so it is never blank when the template carries it.
   const specFor = (row, item) => row.spec || item.spec || ''
+  // A configured numeric spec makes the row's Pass/Fail automatic. Test-bench
+  // rows (single_value) keep the bench's own results.
+  const autoSpecFor = (item) => {
+    if (singleValue || !specIndex || !specSectionKey) return null
+    const spec = specIndex[pointKey(specSectionKey, item.id)]
+    return spec && spec.evaluable ? spec : null
+  }
+  const evaluate = (spec, row) => (spec ? evaluateMeasurements(spec, actualFields.map(f => row[f])) : null)
 
   return (
     <div>
@@ -88,6 +100,8 @@ export default function SectionDimensional({
             {section.items.map(item => {
               const row = data.find(r => r.id === item.id) || { id: item.id, spec: item.spec || '', actual1: '', actual2: '', actual3: '', status: '', notes: '' }
               const specVal = specFor(row, item)
+              const autoSpec = autoSpecFor(item)
+              const evaluation = evaluate(autoSpec, row)
               const isAccepted = row.status === 'A'
               const isFail = row.status === 'F'
               const needsNotes = isAccepted && !row.notes?.trim()
@@ -110,7 +124,9 @@ export default function SectionDimensional({
                     </td>
                   )}
                   <td className="px-3 py-2">
-                    {readOnly ? (
+                    {autoSpec && !readOnly ? (
+                      <SpecInfo spec={autoSpec} />
+                    ) : readOnly ? (
                       <span className="font-mono text-xs">{specVal || '\u2014'}</span>
                     ) : (
                       <input
@@ -118,7 +134,7 @@ export default function SectionDimensional({
                         className="w-full text-xs border border-gray-200 rounded px-2 py-1 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy"
                         value={specVal}
                         onChange={e => update(item.id, 'spec', e.target.value)}
-                        placeholder="e.g. 85.00\u00b10.02"
+                        placeholder={'e.g. 85.00\u00b10.02'}
                       />
                     )}
                   </td>
@@ -130,10 +146,12 @@ export default function SectionDimensional({
                         <input
                           type="text"
                           inputMode="decimal"
-                          className="w-full text-xs border border-gray-200 rounded px-2 py-1 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy"
+                          className={`w-full text-xs border border-gray-200 rounded px-2 py-1 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy ${readingTone(autoSpec, row[field])}`}
                           value={row[field] || ''}
                           onChange={e => update(item.id, field, e.target.value)}
                           placeholder="0.000"
+                          title={readingTitle(autoSpec, row[field])}
+                          aria-label={`${item.measurement || `Item ${item.id}`} ${field.replace('actual', 'actual ')}`}
                         />
                       )}
                     </td>
@@ -144,7 +162,15 @@ export default function SectionDimensional({
                       onChange={v => update(item.id, 'status', v)}
                       readOnly={readOnly}
                       options={['P', 'F', 'A']}
+                      allowed={evaluation ? allowedStatusOptions(evaluation) : undefined}
+                      lockedTitle="set automatically from the measurement"
                     />
+                    {evaluation && !readOnly && (
+                      <div className="mt-1">
+                        <EvaluationBadge evaluation={evaluation} accepted={isAccepted} />
+                        <InvalidEntryMessage evaluation={evaluation} />
+                      </div>
+                    )}
                   </td>
                   <td className="px-3 py-2">
                     {readOnly ? (
@@ -209,6 +235,9 @@ export default function SectionDimensional({
         {section.items.map(item => {
           const row = data.find(r => r.id === item.id) || { id: item.id, spec: item.spec || '', actual1: '', actual2: '', actual3: '', status: '', notes: '' }
           const specVal = specFor(row, item)
+          const autoSpec = autoSpecFor(item)
+          const evaluation = evaluate(autoSpec, row)
+          const allowed = evaluation ? allowedStatusOptions(evaluation) : null
           const isAccepted = row.status === 'A'
           const isFail = row.status === 'F'
           const needsNotes = isAccepted && !row.notes?.trim()
@@ -229,7 +258,16 @@ export default function SectionDimensional({
                   </button>
                 )}
               </div>
-              {specVal && <div className="text-xs text-gray-400 mb-2">Spec: {specVal}</div>}
+              {showImages && (
+                <div className="mb-2">
+                  <ItemAttachment sectionKey={sectionKey} itemId={item.id} isFail={isFail || isAccepted}
+                    attachments={attachments} onUpload={onUploadItem} onDelete={onDeleteItem}
+                    uploadingKey={uploadingKey} readOnly={readOnly} />
+                </div>
+              )}
+              {autoSpec && !readOnly
+                ? <SpecInfo spec={autoSpec} className="mb-2" />
+                : specVal && <div className="text-xs text-gray-400 mb-2">Spec: {specVal}</div>}
               <div className={`grid gap-1.5 mb-1.5 ${singleValue ? 'grid-cols-1' : 'grid-cols-3'}`}>
                 {actualFields.map((f,i) => (
                   <div key={f}>
@@ -237,21 +275,28 @@ export default function SectionDimensional({
                     {readOnly ? (
                       <span className="text-xs font-mono">{row[f] || '—'}</span>
                     ) : (
-                      <input type="text" value={row[f] || ''} onChange={e => update(item.id, f, e.target.value)}
-                        className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[36px]" />
+                      <input type="text" inputMode="decimal" value={row[f] || ''} onChange={e => update(item.id, f, e.target.value)}
+                        title={readingTitle(autoSpec, row[f])}
+                        aria-label={`${item.measurement || `Item ${item.id}`} ${actualLabels[i]}`}
+                        className={`w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[36px] ${readingTone(autoSpec, row[f])}`} />
                     )}
                   </div>
                 ))}
               </div>
-              <div className="flex items-center gap-2">
-                {['P','F','A'].map(v => (
-                  <button key={v} type="button" disabled={readOnly}
-                    onClick={() => !readOnly && update(item.id, 'status', row.status === v ? '' : v)}
-                    className={`px-2.5 py-1 text-xs font-semibold rounded border min-h-[32px] ${row.status === v ? PFN_COLORS[v] : 'bg-white text-gray-400 border-gray-200'} ${readOnly ? 'cursor-default' : 'cursor-pointer'}`}>
-                    {v === 'P' ? 'Pass' : v === 'F' ? 'Fail' : 'Acc'}
-                  </button>
-                ))}
+              <div className="flex items-center gap-2 flex-wrap">
+                {['P','F','A'].map(v => {
+                  const locked = !readOnly && !!allowed && !allowed.includes(v)
+                  return (
+                    <button key={v} type="button" disabled={readOnly || locked}
+                      onClick={() => !readOnly && !locked && update(item.id, 'status', row.status === v ? '' : v)}
+                      className={`px-2.5 py-1 text-xs font-semibold rounded border min-h-[32px] ${row.status === v ? PFN_COLORS[v] : locked ? 'bg-gray-50 text-gray-200 border-gray-100' : 'bg-white text-gray-400 border-gray-200'} ${readOnly || locked ? 'cursor-default' : 'cursor-pointer'}`}>
+                      {v === 'P' ? 'Pass' : v === 'F' ? 'Fail' : 'Acc'}
+                    </button>
+                  )
+                })}
+                {evaluation && !readOnly && <EvaluationBadge evaluation={evaluation} accepted={isAccepted} />}
               </div>
+              {evaluation && !readOnly && <InvalidEntryMessage evaluation={evaluation} />}
               {needsNotes && (
                 <input type="text" value={row.notes || ''} onChange={e => update(item.id, 'notes', e.target.value)}
                   placeholder="Description required…"

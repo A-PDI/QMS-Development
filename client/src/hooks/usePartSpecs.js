@@ -48,6 +48,22 @@ export function usePartNumberLookup(query = '', { templateId, enabled = true } =
   })
 }
 
+// The part spec an inspection is evaluated against: the server's own lookup,
+// so the form and the server always judge a measurement against the same spec.
+export function useResolvedPartSpec(templateId, partNumber) {
+  const pn = (partNumber || '').trim()
+  return useQuery({
+    queryKey: ['part-specs', 'resolve', templateId || '', pn],
+    queryFn: async () => {
+      const params = new URLSearchParams({ template_id: templateId, part_number: pn })
+      const { data } = await api.get(`/part-specs/resolve?${params}`)
+      return data.spec || null
+    },
+    enabled: !!templateId && !!pn,
+    staleTime: 30_000,
+  })
+}
+
 export function useCreatePartSpec() {
   const qc = useQueryClient()
   return useMutation({
@@ -105,6 +121,38 @@ export function useDeletePartSpec() {
     mutationFn: async (id) => {
       const { data } = await api.delete(`/part-specs/${id}`)
       return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['part-specs'] }),
+  })
+}
+
+// ── Product families: copying specs to related part numbers ────────────────
+
+// The other part numbers in a part's product family. Returns
+// { part, family: { name, explicit } | null, candidates: [...] }.
+export async function fetchPartFamily(partSpecId) {
+  const { data } = await api.get(`/part-specs/${partSpecId}/family`)
+  return data
+}
+
+// What copying a part's saved specs to the selected parts would do (no changes).
+export function usePropagationPreview() {
+  return useMutation({
+    mutationFn: async ({ sourceId, targetIds }) => {
+      const { data } = await api.post(`/part-specs/${sourceId}/propagate/preview`, { target_ids: targetIds })
+      return data.plans || []
+    },
+  })
+}
+
+// Copy a part's saved specs to the selected parts.
+// targets: [{ id, replace_conflicts }]
+export function usePropagateSpecs() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ sourceId, targets }) => {
+      const { data } = await api.post(`/part-specs/${sourceId}/propagate`, { targets })
+      return data.results || []
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['part-specs'] }),
   })

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { Save, CheckSquare, ChevronDown, ChevronUp, Paperclip, PlusCircle, X, Printer, Mail, Loader2, AlertTriangle, Bell, ImagePlus, Trash2, Pencil, Check, Circle } from 'lucide-react'
 import api from '../lib/api'
@@ -7,6 +7,7 @@ import { useInspection } from '../hooks/useInspections'
 import { useTemplate } from '../hooks/useTemplates'
 import { useUpdateInspection, useCompleteInspection } from '../hooks/useInspections'
 import { useAttachments, useUploadAttachment, useDeleteAttachment } from '../hooks/useAttachments'
+import { useResolvedPartSpec } from '../hooks/usePartSpecs'
 import { useToast } from '../hooks/useToast'
 import StatusBadge from '../components/StatusBadge'
 import SectionReceiving from '../components/inspection/SectionReceiving'
@@ -32,6 +33,9 @@ import {
   splitSectionsByScope, inspectionLevelKeys, extractSharedSectionData, stripSectionKeys,
   sharedSectionAttachments, SHARED_SECTION_DATA_KEY,
 } from '../lib/sections'
+import { buildSpecIndex, evaluateSection, evaluateItem, evaluateSectionData } from '../lib/dimensional'
+import { uploadErrorMessage } from '../lib/photoUpload'
+import { saveAndComplete, INSPECTIONS_LIST_PATH } from '../lib/inspectionCompletion'
 
 // Statuses that are still editable in the inspection form (not yet finalized).
 const EDITABLE_STATUSES = new Set(['draft', 'partially_complete'])
@@ -275,7 +279,15 @@ export default function InspectionForm() {
   })
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [saveState, setSaveState] = useState('idle')
-  const [uploadingKey, setUploadingKey] = useState(null)
+  // Photo uploads still in flight, by attachment point ("${sectionKey}_${itemId}"
+  // → count). Completing the inspection waits until this is empty.
+  const [uploadingCounts, setUploadingCounts] = useState(() => new Map())
+  const uploadingKeys = useMemo(() => new Set(uploadingCounts.keys()), [uploadingCounts])
+  const uploadsInFlight = [...uploadingCounts.values()].reduce((a, b) => a + b, 0)
+  // Set once the inspection has been completed, so the page leaves for the
+  // Inspections list instead of the read-only view.
+  const completedRef = useRef(false)
+  const [formReady, setFormReady] = useState(false)
   const [dimensionalAdded, setDimensionalAdded] = useState(false)
   const [pdfLoading, setPdfLoading] = useState(false)
   const [showAlertModal, setShowAlertModal] = useState(false)
@@ -294,14 +306,44 @@ export default function InspectionForm() {
   const [newItemName, setNewItemName] = useState('')
 
   // Derive effective sections (admin overrides take priority)
-  const rawSections = template
+  const rawSections = useMemo(() => (template
     ? (typeof template.sections === 'string' ? JSON.parse(template.sections) : template.sections)
-    : {}
+    : {}), [template])
   const effectiveSections = customSections ?? rawSections
   // Section A is answered once for the whole inspection; everything else is
   // answered once per inspected item.
   const { inspectionLevel: inspectionLevelSections, perItem: perItemSections } =
     splitSectionsByScope(effectiveSections)
+
+  // ── Automatic dimensional Pass/Fail ──────────────────────────────────────
+  // The spec for this part number and form (the same lookup the server uses),
+  // indexed by inspection point. Points with a numeric spec get their result
+  // from the measurement — shared rules in lib/dimensional, which the server
+  // re-applies when the inspection is saved and completed.
+  const partSpecQuery = useResolvedPartSpec(inspection?.template_id, headerInfo.part_number)
+  const partNumberEntered = !!headerInfo.part_number.trim()
+  const specSettled = !partNumberEntered || partSpecQuery.isSuccess || partSpecQuery.isError
+  const isBenchInspection = !!sharedFlags.__injector_source
+  const partSpecData = partSpecQuery.data?.spec_data || null
+  const specIndex = useMemo(
+    () => (isBenchInspection ? {} : buildSpecIndex(effectiveSections, partSpecData)),
+    [effectiveSections, partSpecData, isBenchInspection]
+  )
+
+  // Re-judge what is already entered whenever the spec in force changes (the
+  // form opening, the part number being changed, the spec arriving).
+  useEffect(() => {
+    if (!formReady || !specSettled) return
+    setItems(prev => {
+      let changed = false
+      const next = prev.map(itemData => {
+        const r = evaluateItem(itemData, effectiveSections, specIndex)
+        if (r.changed) changed = true
+        return r.item
+      })
+      return changed ? next : prev
+    })
+  }, [formReady, specSettled, specIndex])
 
   // Initialize section data when template and inspection are loaded
   useEffect(() => {
@@ -387,6 +429,7 @@ export default function InspectionForm() {
     // Restore admin section customisations
     if (flags.__admin_sections) setCustomSections(flags.__admin_sections)
     initialLoad.current = false
+    setFormReady(true)
   }, [template?.id, inspection?.id])
 
   const debouncedSave = useCallback(() => {
@@ -470,15 +513,33 @@ export default function InspectionForm() {
     await handleUpload(resized)
   }
 
+  function trackUpload(key, delta) {
+    setUploadingCounts(prev => {
+      const next = new Map(prev)
+      const count = (next.get(key) || 0) + delta
+      if (count > 0) next.set(key, count)
+      else next.delete(key)
+      return next
+    })
+  }
+
+  /**
+   * Upload one photo for an inspection point. Resolves with the saved
+   * attachment; rejects when the upload fails, so the photo widget can keep
+   * the photo for a retry. Each photo is its own request, so photos already
+   * saved stay saved whatever happens to the rest.
+   */
   async function handleItemUpload(file, sectionKey, itemId) {
     const key = `${sectionKey}_${itemId}`
-    setUploadingKey(key)
+    trackUpload(key, 1)
     try {
-      await uploadFile.mutateAsync({ inspectionId: id, file, sectionKey, itemId })
-    } catch {
-      showToast(`Failed to upload image for item #${itemId}`, 'error')
+      const data = await uploadFile.mutateAsync({ inspectionId: id, file, sectionKey, itemId })
+      return data?.attachment
+    } catch (err) {
+      showToast(`Photo not uploaded (${file?.name || 'photo'}): ${uploadErrorMessage(err)}`, 'error')
+      throw err
     } finally {
-      setUploadingKey(null)
+      trackUpload(key, -1)
     }
   }
 
@@ -656,6 +717,12 @@ export default function InspectionForm() {
   }
 
   async function handleComplete() {
+    // Photos still uploading belong to this inspection; finishing now could
+    // lose them, so completion waits.
+    if (uploadsInFlight > 0) {
+      showToast(`Wait for ${uploadsInFlight} photo${uploadsInFlight === 1 ? '' : 's'} to finish uploading before completing.`, 'error')
+      return
+    }
     // Gate 1: every item must have a Disposition selected. If any item is
     // missing one, the inspection is saved as "Partially Complete" instead.
     const itemCompletion = getItemsCompletion(items)
@@ -728,28 +795,61 @@ export default function InspectionForm() {
       return
     }
 
+    // A measurement against a configured spec has to be a number to be judged
+    // (the server refuses to complete otherwise, with the same rules).
+    const { invalid } = evaluateSectionData(buildSectionDataPayload(), {
+      templateSections: rawSections,
+      partSpecData: isBenchInspection ? null : partSpecData,
+    })
+    if (invalid.length > 0) {
+      const first = invalid[0]
+      const where = items.length > 1 ? `${getItemLabel(items[first.itemIndex], first.itemIndex)} — ` : ''
+      const extra = invalid.length > 1 ? ` (+${invalid.length - 1} more)` : ''
+      showToast(`Cannot complete: "${where}${first.label}" has a measurement that is not a valid number${extra}.`, 'error')
+      return
+    }
+
     setCompleting(true)
     clearTimeout(saveTimer.current)
     try {
-      await update.mutateAsync({ id, section_data: buildSectionDataPayload(), disposition: deriveOverallDisposition(items), item_count: items.length, ...headerInfo, ...lotSerialPayload() })
       const hasAccepted = detectAcceptedItems(sharedSectionData) || items.some(itemData =>
         getItemDisposition(itemData) === 'ACCEPTED' ||
         Object.entries(itemData).some(([, rows]) =>
           Array.isArray(rows) && rows.some(r => r.result === 'A' || r.status === 'A')
         )
       )
-      const result = await complete.mutateAsync(id)
+      // Save everything, then complete. A failure at either step keeps the
+      // inspector on the form with the error.
+      const outcome = await saveAndComplete({
+        uploadsInFlight,
+        save: () => update.mutateAsync({ id, section_data: buildSectionDataPayload(), disposition: deriveOverallDisposition(items), item_count: items.length, ...headerInfo, ...lotSerialPayload() }),
+        complete: () => complete.mutateAsync(id),
+      })
+      if (outcome.status === 'uploads_pending') {
+        showToast(`Wait for ${outcome.count} photo${outcome.count === 1 ? '' : 's'} to finish uploading before completing.`, 'error')
+        return
+      }
+      if (outcome.status === 'failed') {
+        const err = outcome.error
+        const fallback = outcome.stage === 'save' ? 'Saving the inspection failed' : 'Complete failed'
+        showToast(err?.response?.data?.error || err?.message || fallback, 'error')
+        return
+      }
+      const result = outcome.result
+      // The server has confirmed completion — from here the page heads back to
+      // the Inspections list (refreshed by useCompleteInspection).
+      completedRef.current = true
       const wasPendingReview = result?.pending_review === true
 
       if (wasPendingReview) {
         showToast('Inspection submitted for review. An admin must approve before it can be printed or shared.', 'info')
-        navigate(`/inspections/${id}`)
+        navigate(INSPECTIONS_LIST_PATH)
       } else if (hasAccepted && isAdminRole) {
         setCompletedInspectionId(id)
         setShowAlertModal(true)
       } else {
         showToast('Inspection completed', 'success')
-        navigate(`/inspections/${id}`)
+        navigate(INSPECTIONS_LIST_PATH)
       }
     } catch (err) {
       showToast(err?.response?.data?.error || err.message || 'Complete failed', 'error')
@@ -761,7 +861,7 @@ export default function InspectionForm() {
   function handleAlertModalDone() {
     setShowAlertModal(false)
     showToast('Inspection completed', 'success')
-    navigate(`/inspections/${completedInspectionId}`)
+    navigate(INSPECTIONS_LIST_PATH)
   }
 
   if (loadingInsp || loadingTpl) {
@@ -773,6 +873,13 @@ export default function InspectionForm() {
   }
 
   if (!EDITABLE_STATUSES.has(inspection.status)) {
+    // Just completed here: the completion handler is taking the user to the
+    // Inspections list (or showing the Quality Alert prompt first).
+    if (completedRef.current) {
+      return showAlertModal && completedInspectionId
+        ? <QualityAlertModal inspectionId={completedInspectionId} onDone={handleAlertModalDone} />
+        : null
+    }
     navigate(`/inspections/${id}`)
     return null
   }
@@ -816,9 +923,11 @@ export default function InspectionForm() {
     const showPassAll = isVisualSection(key, section) && supportsPassAll(section)
     const removableRows = REMOVABLE_ROW_SECTIONS.has(section.section_type)
     const data = shared ? sharedSectionData[key] : sectionData[key]
+    // Item-level answers pass through the dimensional evaluation, so a point
+    // with a configured spec takes its Pass/Fail from the value just entered.
     const onChange = shared
       ? val => setSharedSectionData(d => ({ ...d, [key]: val }))
-      : val => setSectionData(d => ({ ...d, [key]: val }))
+      : val => setSectionData(d => ({ ...d, [key]: evaluateSection(key, section, val, specIndex).data }))
     return (
       <CollapsibleSection
         key={key}
@@ -849,8 +958,10 @@ export default function InspectionForm() {
             attachments: shared ? sharedSectionAttachments(attachments, key) : attachments,
             onUploadItem: handleItemUpload,
             onDeleteItem: handleDeleteFile,
-            uploadingKey,
+            uploadingKey: uploadingKeys,
           } : {})}
+          specIndex={shared ? undefined : specIndex}
+          specSectionKey={key}
           adminItemTools={adminTools}
           {...(removableRows ? { onRemoveItem: itemId => handleRemoveRow(key, section, itemId) } : {})}
           allowNA={allowNA}
@@ -990,8 +1101,8 @@ export default function InspectionForm() {
             </button>
             <button
               onClick={handleComplete}
-              disabled={complete.isPending || completing}
-              title={complete.isPending ? 'Completing…' : (!completion.allComplete ? 'Disposition required on every item' : 'Complete Inspection')}
+              disabled={complete.isPending || completing || uploadsInFlight > 0}
+              title={complete.isPending ? 'Completing…' : uploadsInFlight > 0 ? 'Photos are still uploading' : (!completion.allComplete ? 'Disposition required on every item' : 'Complete Inspection')}
               className="p-2 rounded text-pdi-teal hover:bg-teal-50 hover:text-teal-700 disabled:opacity-40 transition-colors flex-shrink-0"
             >
               {complete.isPending || completing ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
@@ -1052,6 +1163,15 @@ export default function InspectionForm() {
               <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
               <p className="text-sm text-amber-800">
                 Accepted items require admin approval before this inspection can be printed or shared.
+              </p>
+            </div>
+          )}
+
+          {partNumberEntered && partSpecQuery.isError && !isBenchInspection && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2">
+              <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
+              <p className="text-sm text-amber-800">
+                The part's dimensional specifications could not be loaded. Measurements are still checked against them when the inspection is saved and completed.
               </p>
             </div>
           )}
@@ -1238,13 +1358,13 @@ export default function InspectionForm() {
               <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
                 <button
                   type="button"
-                  disabled={completing || !completion.allComplete}
+                  disabled={completing || !completion.allComplete || uploadsInFlight > 0}
                   onClick={handleComplete}
-                  title={!completion.allComplete ? 'Select a Disposition for every item before completing' : undefined}
+                  title={uploadsInFlight > 0 ? 'Photos are still uploading' : !completion.allComplete ? 'Select a Disposition for every item before completing' : undefined}
                   className="flex items-center justify-center gap-2 w-full sm:w-auto px-6 py-2.5 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light disabled:opacity-40 font-medium min-h-[44px]"
                 >
-                  {completing ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
-                  {completing ? 'Saving…' : 'Complete Inspection'}
+                  {completing || uploadsInFlight > 0 ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
+                  {completing ? 'Saving…' : uploadsInFlight > 0 ? `Uploading ${uploadsInFlight} photo${uploadsInFlight === 1 ? '' : 's'}…` : 'Complete Inspection'}
                 </button>
                 {!completion.allComplete && (
                   <button

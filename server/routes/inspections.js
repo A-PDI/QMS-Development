@@ -5,6 +5,7 @@ const { v4: uuidv4 } = require("uuid");
 const db = require("../db/adapter");
 const { AppError } = require("../middleware/error");
 const { generateInspectionPdf } = require("../services/pdf");
+const { evaluateForSave, describeInvalid } = require("../services/dimensionalEvaluation");
 
 // Roles allowed to perform admin-only inspection actions. Matches requireAdmin
 // in routes/admin.js and ADMIN_ROLES in client/src/lib/nav.js.
@@ -196,9 +197,12 @@ router.get('/:id', (req, res, next) => {
 });
 
 // PATCH /api/inspections/:id — update inspection fields + section data
-router.patch('/:id', (req, res, next) => {
+router.patch('/:id', async (req, res, next) => {
   try {
-    const existing = db.get('SELECT id, status FROM inspections WHERE id = ?', [req.params.id]);
+    const existing = db.get(
+      'SELECT id, status, template_id, part_number, section_data FROM inspections WHERE id = ?',
+      [req.params.id]
+    );
     if (!existing) return next(new AppError('Inspection not found', 404, 'NOT_FOUND'));
 
     const updates = [];
@@ -212,8 +216,16 @@ router.patch('/:id', (req, res, next) => {
       if (req.body[f] !== undefined) { updates.push(`${f} = ?`); values.push(req.body[f]); }
     }
     if (req.body.section_data !== undefined) {
+      // Dimensional points with a configured spec get their Pass/Fail from the
+      // shared evaluation rules — the same ones the inspection form applies —
+      // so a stored result always agrees with its measurement.
+      let sectionData = req.body.section_data;
+      if (sectionData && typeof sectionData === 'object' && !Array.isArray(sectionData)) {
+        const partNumber = req.body.part_number !== undefined ? req.body.part_number : existing.part_number;
+        sectionData = (await evaluateForSave({ inspection: existing, sectionData, partNumber })).sectionData;
+      }
       updates.push('section_data = ?');
-      values.push(JSON.stringify(req.body.section_data));
+      values.push(JSON.stringify(sectionData));
     }
     // Assignment fields
     if (req.body.assigned_to !== undefined) {
@@ -260,13 +272,30 @@ router.delete('/:id', (req, res, next) => {
 });
 
 // POST /api/inspections/:id/complete — mark inspection complete + trigger quality alerts
-router.post('/:id/complete', (req, res, next) => {
+router.post('/:id/complete', async (req, res, next) => {
   try {
     const inspection = db.get('SELECT * FROM inspections WHERE id = ?', [req.params.id]);
     if (!inspection) return next(new AppError('Inspection not found', 404, 'NOT_FOUND'));
     if (inspection.status === 'complete') return next(new AppError('Inspection already complete', 400, 'VALIDATION_ERROR'));
 
+    // Re-apply the dimensional evaluation to what is stored before closing the
+    // record, and refuse to close it while a reading against a configured spec
+    // is not a number (it could not be judged Pass or Fail).
+    let storedData;
+    try { storedData = JSON.parse(inspection.section_data || '{}'); } catch (_) { storedData = {}; }
+    const evaluation = await evaluateForSave({ inspection, sectionData: storedData, partNumber: inspection.part_number });
+    if (evaluation.invalid.length > 0) {
+      const itemCount = Array.isArray(storedData.__items) ? storedData.__items.length : 1;
+      return next(new AppError(
+        `Cannot complete: enter a valid number for ${describeInvalid(evaluation.invalid, itemCount)}.`,
+        400, 'INVALID_MEASUREMENT'
+      ));
+    }
+
     const now = new Date().toISOString();
+    if (evaluation.changed) {
+      db.run('UPDATE inspections SET section_data = ? WHERE id = ?', [JSON.stringify(evaluation.sectionData), req.params.id]);
+    }
     const { disposition } = req.body;
     db.run(
       `UPDATE inspections SET status = 'complete', completed_at = ?, updated_at = ?${disposition ? ', disposition = ?' : ''} WHERE id = ?`,

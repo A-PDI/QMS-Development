@@ -1234,7 +1234,9 @@ function renderGrooveSpecs(doc, section, data, secAtts = []) {
   const rows   = entryItems.map(item => {
     const m = meas.find(r => r.id === item.id) || {};
     const cyls = Array.isArray(m.cylinders) ? m.cylinders : [];
-    const label = item.spec ? `${item.measurement}\n${item.spec}` : (item.measurement || '');
+    // The spec the readings were judged against (recorded with them), else the form's.
+    const spec = m.spec || item.spec;
+    const label = spec ? `${item.measurement}\n${spec}` : (item.measurement || '');
     return [label, ...Array.from({ length: cc }, (_, i) => cyls[i] || ''), m.status || ''];
   });
 

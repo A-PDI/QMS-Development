@@ -61,7 +61,9 @@ export function useCompleteInspection() {
     },
     onSuccess: (_, id) => {
       qc.invalidateQueries({ queryKey: ['inspection', id] })
+      // The lists the inspector returns to show the new status.
       qc.invalidateQueries({ queryKey: ['inspections'] })
+      qc.invalidateQueries({ queryKey: ['inspections-assigned'] })
       qc.invalidateQueries({ queryKey: ['dashboard'] })
     },
   })

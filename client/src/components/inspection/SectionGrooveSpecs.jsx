@@ -1,6 +1,8 @@
 import PFNToggle from './PFNToggle'
 import ItemAttachment from './ItemAttachment'
 import MeasurementInput from './MeasurementInput'
+import { SpecInfo, EvaluationBadge, InvalidEntryMessage, readingTone } from './DimensionalSpec'
+import { pointKey, evaluateMeasurements, allowedStatusOptions, isGrooveEntryItem } from '../../lib/dimensional'
 
 /**
  * Fire Ring (Cylinder Head, section C — Dimensional Inspection).
@@ -24,6 +26,7 @@ function rowFor(data, item, count) {
     : null
   const cylinders = Array(count).fill('').map((_, i) => existing?.cylinders?.[i] ?? '')
   return {
+    ...(existing || {}),   // keeps the recorded spec snapshot
     id: item.id,
     cylinders,
     status: existing?.status ?? '',
@@ -41,14 +44,19 @@ export default function SectionGrooveSpecs({
   onUploadItem,
   onDeleteItem,
   uploadingKey,
+  specIndex,      // configured specs by point key (automatic Pass/Fail)
+  specSectionKey, // this section's key in the form (for spec lookup)
 }) {
   const count = section.cylinder_count || DEFAULT_CYL_COUNT
   const items = section.items || []
   // Only these items get data-entry charts. If no item is explicitly flagged
   // (older templates), fall back to Wire Protrusion by name.
-  const entryItems = items.filter(it =>
-    it.entry === true || (it.entry === undefined && /wire protrusion/i.test(it.measurement || ''))
-  )
+  const entryItems = items.filter(isGrooveEntryItem)
+  const autoSpecFor = (item) => {
+    if (readOnly || !specIndex || !specSectionKey) return null
+    const spec = specIndex[pointKey(specSectionKey, item.id)]
+    return spec && spec.evaluable ? spec : null
+  }
   // Specs without a chart of their own stay in the header for reference.
   const referenceItems = items.filter(it => !entryItems.includes(it))
 
@@ -89,6 +97,8 @@ export default function SectionGrooveSpecs({
       <div className="space-y-3">
         {entryItems.map(item => {
           const row = rowFor(data, item, count)
+          const autoSpec = autoSpecFor(item)
+          const evaluation = autoSpec ? evaluateMeasurements(autoSpec, row.cylinders) : null
           const isFail = row.status === 'F'
           const isAccepted = row.status === 'A'
           const needsNotes = isAccepted && !row.notes?.trim()
@@ -97,14 +107,19 @@ export default function SectionGrooveSpecs({
               <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
                 <div className="min-w-0">
                   <div className="text-sm font-medium text-gray-700">{item.measurement}</div>
-                  {item.spec && <div className="text-xs text-gray-400 font-mono">{item.spec}</div>}
+                  {autoSpec
+                    ? <SpecInfo spec={autoSpec} />
+                    : (row.spec || item.spec) && <div className="text-xs text-gray-400 font-mono">{row.spec || item.spec}</div>}
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
+                  <EvaluationBadge evaluation={evaluation} accepted={isAccepted} />
                   <PFNToggle
                     value={row.status}
                     onChange={v => setRow(item.id, { status: v })}
                     readOnly={readOnly}
                     options={['P', 'F', 'A']}
+                    allowed={evaluation ? allowedStatusOptions(evaluation) : undefined}
+                    lockedTitle="set automatically from the measurements"
                   />
                   {showImages && (
                     <ItemAttachment
@@ -145,7 +160,7 @@ export default function SectionGrooveSpecs({
                             onChange={v => setCyl(item.id, ci, v)}
                             readOnly={readOnly}
                             placeholder="0.000"
-                            className="w-full text-center text-xs border border-gray-200 rounded px-1.5 py-1 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[34px]"
+                            className={`w-full text-center text-xs border border-gray-200 rounded px-1.5 py-1 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[34px] ${readingTone(autoSpec, val)}`}
                             ariaLabel={`${item.measurement} Cylinder ${ci + 1}`}
                           />
                         </td>
@@ -154,6 +169,8 @@ export default function SectionGrooveSpecs({
                   </tbody>
                 </table>
               </div>
+
+              <InvalidEntryMessage evaluation={evaluation} />
 
               {(isAccepted || needsNotes) && (
                 <input

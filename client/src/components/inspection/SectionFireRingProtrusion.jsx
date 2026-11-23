@@ -1,5 +1,7 @@
 import PFNToggle from './PFNToggle'
 import ItemAttachment from './ItemAttachment'
+import { SpecInfo, EvaluationBadge, InvalidEntryMessage, readingTone } from './DimensionalSpec'
+import { pointKey, evaluateMeasurements, allowedStatusOptions } from '../../lib/dimensional'
 
 export default function SectionFireRingProtrusion({
   section,
@@ -11,6 +13,8 @@ export default function SectionFireRingProtrusion({
   onUploadItem,
   onDeleteItem,
   uploadingKey,
+  specIndex,      // configured specs by point key (automatic Pass/Fail)
+  specSectionKey, // this section's key in the form (for spec lookup)
 }) {
   const current = { spec: '', cylinders: Array(section.cylinder_count).fill(''), result: '', notes: '', ...data }
 
@@ -25,6 +29,10 @@ export default function SectionFireRingProtrusion({
   const isAccepted = current.result === 'A'
   const isFail = current.result === 'F'
   const needsNotes = isAccepted && !current.notes?.trim()
+  // A configured numeric spec makes the section result automatic.
+  const configured = !readOnly && specIndex && specSectionKey ? specIndex[pointKey(specSectionKey, '0')] : null
+  const autoSpec = configured && configured.evaluable ? configured : null
+  const evaluation = autoSpec ? evaluateMeasurements(autoSpec, current.cylinders) : null
   const SECTION_ITEM_ID = 0
 
   return (
@@ -32,7 +40,9 @@ export default function SectionFireRingProtrusion({
       {/* Spec row */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
         <label className="text-sm font-medium text-gray-700 sm:w-12">Spec:</label>
-        {readOnly ? (
+        {autoSpec ? (
+          <SpecInfo spec={autoSpec} />
+        ) : readOnly ? (
           <span className="font-mono text-sm">{current.spec || '\u2014'}</span>
         ) : (
           <input
@@ -67,7 +77,7 @@ export default function SectionFireRingProtrusion({
                     <input
                       type="text"
                       inputMode="decimal"
-                      className="w-20 text-sm border-0 font-mono text-center focus:outline-none focus:ring-1 focus:ring-pdi-navy rounded"
+                      className={`w-20 text-sm border-0 font-mono text-center focus:outline-none focus:ring-1 focus:ring-pdi-navy rounded ${readingTone(autoSpec, current.cylinders[i])}`}
                       value={current.cylinders[i] || ''}
                       onChange={e => setCyl(i, e.target.value)}
                       placeholder="0.000"
@@ -91,7 +101,7 @@ export default function SectionFireRingProtrusion({
               <input
                 type="text"
                 inputMode="decimal"
-                className="w-full text-sm border border-gray-200 rounded px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[36px]"
+                className={`w-full text-sm border border-gray-200 rounded px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[36px] ${readingTone(autoSpec, current.cylinders[i])}`}
                 value={current.cylinders[i] || ''}
                 onChange={e => setCyl(i, e.target.value)}
                 placeholder="0.000"
@@ -109,8 +119,12 @@ export default function SectionFireRingProtrusion({
             value={current.result}
             onChange={v => set('result', v)}
             readOnly={readOnly}
+            allowed={evaluation ? allowedStatusOptions(evaluation) : undefined}
+            lockedTitle="set automatically from the measurements"
           />
+          <EvaluationBadge evaluation={evaluation} accepted={isAccepted} />
         </div>
+        <InvalidEntryMessage evaluation={evaluation} />
         <div className="flex-1">
           {readOnly ? (
             <span className="text-sm text-gray-600">{current.notes || '—'}</span>

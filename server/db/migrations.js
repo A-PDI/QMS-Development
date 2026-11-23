@@ -603,6 +603,21 @@ function applyMigrations(db) {
     db.exec('CREATE INDEX IF NOT EXISTS idx_injector_reports_sheet_export ON injector_test_reports(sheet_exported_at)');
   });
 
+  // ── Migration: explicit product family on catalogued part numbers ───────
+  // Dimensional specifications entered for one part number can be copied to
+  // the other part numbers in its product family (e.g. Stage 1 and Stage 2 of
+  // the same cylinder head). Families are normally recognised from the part
+  // description; this optional column lets an administrator state a part's
+  // family explicitly, which then takes precedence. Existing rows keep NULL,
+  // so nothing about current specs or their matching changes.
+  once('part_specs_product_family', () => {
+    const cols = db.all('PRAGMA table_info(part_specs)', []).map(c => c.name);
+    if (cols.length === 0) throw new Error('part_specs table does not exist yet');
+    if (!cols.includes('product_family')) {
+      db.exec('ALTER TABLE part_specs ADD COLUMN product_family TEXT');
+    }
+  });
+
   // ── Migration: persistent injector repair lifecycle ─────────────────────
   // The tables and indexes are created by sqlite.js during schema startup.
   // Recording this feature migration gives deployed databases an auditable
