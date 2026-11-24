@@ -45,13 +45,24 @@ function logActivity(inspectionId, actionType, user, notes = null) {
 // inspection, or else the catalogue description of its part number on the
 // same form (exact part number first, then case/whitespace-insensitive — the
 // same match findPartSpec uses). Expects the inspections table aliased as `i`.
+//
+// The exact and case-insensitive matches are separate subqueries on purpose:
+// the SQLite bundled with older Node 22 releases (production runs 22.11.0)
+// rejects a subquery whose ORDER BY refers to the outer row's columns with
+// "no such column", although newer SQLite accepts it. Keep `i.` columns out
+// of any ORDER BY here.
 const PART_DESCRIPTION_SQL = `COALESCE(
   NULLIF(TRIM(i.description), ''),
   (SELECT TRIM(ps.description) FROM part_specs ps
    WHERE ps.template_id = i.template_id
+     AND ps.part_number = i.part_number
+     AND TRIM(COALESCE(ps.description, '')) <> ''
+   LIMIT 1),
+  (SELECT TRIM(ps.description) FROM part_specs ps
+   WHERE ps.template_id = i.template_id
      AND UPPER(TRIM(ps.part_number)) = UPPER(TRIM(i.part_number))
      AND TRIM(COALESCE(ps.description, '')) <> ''
-   ORDER BY (ps.part_number = i.part_number) DESC, ps.updated_at DESC
+   ORDER BY ps.updated_at DESC
    LIMIT 1)
 )`;
 

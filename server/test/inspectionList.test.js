@@ -48,10 +48,10 @@ function addInspection(template, fields) {
   return id;
 }
 
-function addCatalogueEntry(template, partNumber, description) {
+function addCatalogueEntry(template, partNumber, description, updatedAt = new Date().toISOString()) {
   db.run(
-    `INSERT INTO part_specs (id, template_id, part_number, description, spec_data) VALUES (?, ?, ?, ?, '{}')`,
-    [crypto.randomUUID(), template.id, partNumber, description]
+    `INSERT INTO part_specs (id, template_id, part_number, description, spec_data, updated_at) VALUES (?, ?, ?, ?, '{}', ?)`,
+    [crypto.randomUUID(), template.id, partNumber, description, updatedAt]
   );
 }
 
@@ -99,6 +99,29 @@ test('rows carry the part description: the inspection\'s own, else the catalogue
     'falls back to the catalogue, matching the part number regardless of case and spaces');
   assert.strictEqual(byId.get(otherFormOnly), null, 'a catalogue entry on another form is not used');
   assert.strictEqual(byId.get(none), null, 'no description anywhere');
+});
+
+test('an exact part number match wins over one that differs only in case or spaces', async () => {
+  const [form] = db.all('SELECT id, component_type, form_no FROM inspection_templates ORDER BY id LIMIT 1', []);
+  // The differently-cased entries are the most recently updated, so an exact
+  // match has to win on its own, not by being newer.
+  addCatalogueEntry(form, 'PN-EXACT-WIN', 'Exact catalogue wording', '2020-01-01T00:00:00.000Z');
+  addCatalogueEntry(form, 'pn-exact-win', 'Lower-case catalogue wording', '2030-01-01T00:00:00.000Z');
+  addCatalogueEntry(form, 'PN-CASE-ONLY', 'Older case-insensitive match', '2020-01-01T00:00:00.000Z');
+  addCatalogueEntry(form, ' pn-case-only ', 'Newer case-insensitive match', '2030-01-01T00:00:00.000Z');
+
+  const upper = addInspection(form, { part_number: 'PN-EXACT-WIN' });
+  const lower = addInspection(form, { part_number: 'pn-exact-win' });
+  const mixed = addInspection(form, { part_number: 'Pn-Case-Only' });
+
+  const { inspections } = await list({ search: 'exact-win', limit: 50 });
+  const byId = new Map(inspections.map((i) => [i.id, i.part_description]));
+  assert.strictEqual(byId.get(upper), 'Exact catalogue wording');
+  assert.strictEqual(byId.get(lower), 'Lower-case catalogue wording');
+
+  const caseOnly = await list({ search: 'case-only', limit: 50 });
+  assert.strictEqual(caseOnly.inspections.find((i) => i.id === mixed).part_description,
+    'Newer case-insensitive match', 'with no exact match, the most recently updated entry is used');
 });
 
 test('the search box matches the part description', async () => {
