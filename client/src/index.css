@@ -31,6 +31,16 @@
    The 0px fallbacks keep these rules inert on hardware without insets and on
    browsers that do not support env(). */
 @layer components {
+  /* The app shell fills exactly the visible screen and scrolls inside itself.
+     100dvh follows Safari's toolbars as they show and hide (100vh is the
+     taller, toolbars-hidden height, which pushes the bottom of every page
+     under the browser chrome); 100vh stays as the fallback for browsers
+     without dynamic viewport units. */
+  .app-shell {
+    height: 100vh;
+    height: 100dvh;
+  }
+
   /* Mobile top bar: clears the status bar / notch. */
   .app-topbar {
     padding-top: calc(0.625rem + env(safe-area-inset-top, 0px));

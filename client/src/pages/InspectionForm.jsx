@@ -1154,7 +1154,9 @@ export default function InspectionForm() {
       </div>
 
       {/* Body */}
-      <div className="flex-1 overflow-y-auto">
+      {/* overscroll containment: reaching the end of the form doesn't drag the
+          page behind it along (iOS rubber-banding). */}
+      <div className="flex-1 overflow-y-auto overscroll-y-contain">
         <div className="max-w-[1440px] mx-auto p-3 sm:p-6 space-y-3 sm:space-y-4">
 
           {/* Accepted items notice for non-admins */}
