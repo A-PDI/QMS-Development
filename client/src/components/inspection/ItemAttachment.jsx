@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Camera, ImagePlus, X, Loader2, RotateCcw, AlertTriangle, Trash2, Check } from 'lucide-react'
+import { Camera, X, Loader2, RotateCcw, Trash2 } from 'lucide-react'
 import AuthImage from '../AuthImage'
 import { Dialog } from '../ui/dialog'
+import CameraCapture from './CameraCapture'
 import { useToast } from '../../hooks/useToast'
-import { IMAGE_ACCEPT, partitionPhotos, pointAttachments, uploadErrorMessage } from '../../lib/photoUpload'
+import {
+  IMAGE_ACCEPT, partitionPhotos, pointAttachments, uploadErrorMessage, prefersInAppCamera,
+} from '../../lib/photoUpload'
 
 let nextEntryId = 1
 
@@ -13,13 +16,13 @@ let nextEntryId = 1
 const MAX_INLINE_PHOTOS = 3
 
 /**
- * Photos for one inspection point — one button.
+ * Photos for one inspection point — one button, as few taps as possible.
  *
- * The button opens the device's own picker: on iOS / Android that offers
- * "Take Photo" or the photo library, where several photos can be selected at
- * once; on a desktop it is the file picker. Once photos are added a dialog
- * keeps the session open — "Add more photos" or "Done" — so photos can be
- * taken one after another without starting over each time.
+ * - Phones and tablets: the button opens the in-app camera. Every tap of the
+ *   shutter is a saved photo (no per-photo confirmation); "Library" in the
+ *   camera adds existing photos, several at once; "Done" returns to the form.
+ * - Desktops (or when the in-app camera can't run): the button opens the file
+ *   picker, where several photos can be chosen at once.
  *
  * Every photo is uploaded on its own (in the order it was taken or picked) and
  * filed against this point's section key + item id at the moment it was
@@ -57,9 +60,12 @@ export default function ItemAttachment({
   const onUploadRef = useRef(onUpload)
   onUploadRef.current = onUpload
 
-  // Photo session: { id, sectionKey, itemId } while open; uploaded ids shown in it.
+  // Camera session: its id while the in-app camera is open, and the photos it
+  // has saved ({ id: attachment id, url: local preview, order }).
   const [session, setSession] = useState(null)
-  const [sessionUploads, setSessionUploads] = useState([])
+  const sessionRef = useRef(null)
+  const [sessionSaved, setSessionSaved] = useState([])
+  const sessionSavedRef = useRef([])
   const [preview, setPreview] = useState(null)
   const [galleryOpen, setGalleryOpen] = useState(false)
 
@@ -68,9 +74,15 @@ export default function ItemAttachment({
     setQueueState(queueRef.current)
   }
 
+  function setSaved(updater) {
+    sessionSavedRef.current = updater(sessionSavedRef.current)
+    setSessionSaved(sessionSavedRef.current)
+  }
+
   // Release the local previews when the point goes away.
   useEffect(() => () => {
     for (const entry of queueRef.current) URL.revokeObjectURL(entry.url)
+    for (const saved of sessionSavedRef.current) URL.revokeObjectURL(saved.url)
   }, [])
 
   const key = `${sectionKey}_${itemId}`
@@ -93,10 +105,13 @@ export default function ItemAttachment({
         setQueue(q => q.map(e => (e.id === next.id ? { ...e, status: 'uploading', error: '' } : e)))
         try {
           const attachment = await onUploadRef.current(next.file, next.sectionKey, next.itemId)
-          URL.revokeObjectURL(next.url)
           setQueue(q => q.filter(e => e.id !== next.id))
-          if (next.session && attachment?.id) {
-            setSessionUploads(list => [...list, { session: next.session, id: attachment.id }])
+          // Still in the camera: keep the local preview so the strip doesn't
+          // download the photo it just sent.
+          if (next.session && next.session === sessionRef.current && attachment?.id) {
+            setSaved(list => [...list, { id: attachment.id, url: next.url, order: next.id }])
+          } else {
+            URL.revokeObjectURL(next.url)
           }
         } catch (err) {
           setQueue(q => q.map(e => (e.id === next.id ? { ...e, status: 'failed', error: uploadErrorMessage(err) } : e)))
@@ -141,55 +156,72 @@ export default function ItemAttachment({
     })
   }
 
-  // Opened straight from the tap — the user gesture mobile browsers require.
-  function openPicker() {
+  // One button. Opened straight from the tap — the user gesture mobile
+  // browsers require for the camera and the file picker.
+  function handleAddPhotos() {
+    if (prefersInAppCamera()) {
+      const id = `s${nextEntryId++}`
+      sessionRef.current = id
+      setSession(id)
+      return
+    }
     pickerRef.current?.click()
   }
 
-  function closeSession() {
+  function closeCamera() {
+    for (const saved of sessionSavedRef.current) URL.revokeObjectURL(saved.url)
+    setSaved(() => [])
+    sessionRef.current = null
     setSession(null)
-    setSessionUploads([])
   }
 
   function handlePicked(e) {
     const files = Array.from(e.target.files || [])
     e.target.value = ''   // allow picking the same photos again
-    if (!files.length) return   // picker cancelled
-    let sessionId = session?.id
-    if (!sessionId) {
-      sessionId = `s${nextEntryId++}`
-      setSession({ id: sessionId, sectionKey, itemId })
-      setSessionUploads([])
-    }
-    addFiles(files, sessionId)
+    if (files.length) addFiles(files, sessionRef.current)
   }
 
-  async function removeAttachment(attachmentId) {
+  async function removeSaved(attachmentId) {
     setPreview(null)
-    setSessionUploads(list => list.filter(u => u.id !== attachmentId))
+    setSaved(list => {
+      const hit = list.find(s => s.id === attachmentId)
+      if (hit) URL.revokeObjectURL(hit.url)
+      return list.filter(s => s.id !== attachmentId)
+    })
     await onDelete?.(attachmentId)
   }
 
-  const sessionEntries = session ? queue.filter(e => e.session === session.id) : []
-  const sessionSaved = session
-    ? sessionUploads.filter(u => u.session === session.id).map(u => attachments.find(a => a.id === u.id) || { id: u.id, file_name: 'Photo' })
+  // The camera strip: this session's photos in the order they were taken.
+  const cameraPhotos = session
+    ? [
+        ...sessionSaved.map(s => ({
+          key: `a${s.id}`, order: s.order, url: s.url, attachmentId: s.id, status: 'saved',
+          onRemove: () => removeSaved(s.id),
+        })),
+        ...queue.filter(e => e.session === session).map(e => ({
+          key: `q${e.id}`, order: e.id, url: e.url,
+          status: e.status === 'failed' ? 'failed' : 'uploading',
+          onRetry: e.status === 'failed' ? () => retry(e.id) : undefined,
+          onRemove: e.status === 'uploading' ? undefined : () => discard(e.id),
+        })),
+      ].sort((a, b) => a.order - b.order)
     : []
-  const sessionCount = sessionSaved.length + sessionEntries.length
-  const sessionBusy = sessionEntries.some(e => e.status !== 'failed')
 
   const inlinePhotos = itemAttachments.slice(0, MAX_INLINE_PHOTOS)
   const morePhotos = itemAttachments.length - inlinePhotos.length
 
   return (
-    <div className="flex items-center gap-1 flex-wrap" data-testid="point-photos" data-photo-count={itemAttachments.length}>
+    // `relative`: the visually hidden file input is absolutely positioned, and
+    // without a positioned ancestor it is placed against the page body — far
+    // down a long form, stretching the document so phones could scroll the
+    // whole page past the app and show blank space.
+    <div className="relative flex items-center gap-1 flex-wrap" data-testid="point-photos" data-photo-count={itemAttachments.length}>
       {!readOnly && (
         <>
           <button
             type="button"
-            onClick={openPicker}
-            title={isFail
-              ? 'Add photos — required for failed items (camera or library, several at once)'
-              : 'Add photos (camera or library, several at once)'}
+            onClick={handleAddPhotos}
+            title={isFail ? 'Add photos — required for failed items' : 'Add photos'}
             aria-label={isFail ? 'Add photos (required)' : 'Add photos'}
             className={`inline-flex items-center justify-center w-8 h-8 sm:w-7 sm:h-7 rounded transition-colors
               ${requiresImage
@@ -200,8 +232,8 @@ export default function ItemAttachment({
             {busy ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
           </button>
           {/* Visually hidden (not display:none) so programmatic clicks work on
-              every mobile browser. No `capture` attribute: that would force the
-              camera and hide the library — without it iOS and Android offer both. */}
+              every mobile browser. No `capture` attribute, so a phone's picker
+              still offers the photo library. */}
           <input
             ref={pickerRef}
             type="file"
@@ -240,7 +272,6 @@ export default function ItemAttachment({
           )}
         </div>
       ))}
-
       {morePhotos > 0 && (
         <button
           type="button"
@@ -282,60 +313,14 @@ export default function ItemAttachment({
         <span className="text-[10px] text-red-600 whitespace-nowrap" role="alert">{failed.length} failed</span>
       )}
 
-      {/* Photo session */}
-      {session && createPortal(
-        <Dialog open onClose={closeSession} title="Photos" className="sm:max-w-md">
-          <div className="space-y-4">
-            <p className="text-sm text-gray-600">
-              {sessionCount === 0
-                ? 'No photos added in this session.'
-                : `${sessionCount} photo${sessionCount === 1 ? '' : 's'} added to this inspection point.`}
-              {' '}Add more with the camera or from the library, or finish.
-            </p>
-            {sessionCount > 0 && (
-              <div className="grid grid-cols-4 gap-2" data-testid="photo-session-photos">
-                {sessionSaved.map(att => (
-                  <div key={att.id} className="relative aspect-square">
-                    <AuthImage attachmentId={att.id} alt={att.file_name} className="w-full h-full object-cover rounded border border-gray-200" />
-                    <span className="absolute top-1 left-1 w-4 h-4 rounded-full bg-pdi-green text-white flex items-center justify-center" title="Saved"><Check size={10} strokeWidth={3} /></span>
-                    <button type="button" onClick={() => removeAttachment(att.id)} aria-label="Remove photo" title="Remove photo"
-                      className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center"><X size={12} /></button>
-                  </div>
-                ))}
-                {sessionEntries.map(entry => (
-                  <div key={entry.id} className="relative aspect-square">
-                    <img src={entry.url} alt={entry.file.name} className={`w-full h-full object-cover rounded border ${entry.status === 'failed' ? 'border-red-500 opacity-60' : 'border-gray-200 opacity-70'}`} />
-                    {entry.status !== 'failed'
-                      ? <span className="absolute inset-0 flex items-center justify-center"><Loader2 size={18} className="animate-spin text-pdi-navy" /></span>
-                      : (
-                        <span className="absolute inset-x-0 bottom-1 flex justify-center gap-1">
-                          <button type="button" onClick={() => retry(entry.id)} className="px-1.5 py-0.5 text-[10px] rounded bg-pdi-navy text-white">Retry</button>
-                          <button type="button" onClick={() => discard(entry.id)} className="px-1.5 py-0.5 text-[10px] rounded bg-gray-600 text-white">Discard</button>
-                        </span>
-                      )}
-                  </div>
-                ))}
-              </div>
-            )}
-            {sessionEntries.some(e => e.status === 'failed') && (
-              <p className="flex items-start gap-1.5 text-xs text-red-600" role="alert">
-                <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" />
-                Some photos didn’t upload. Retry them, or they stay on the inspection point to retry later.
-              </p>
-            )}
-            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2 border-t border-gray-100">
-              <button type="button" onClick={closeSession}
-                className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[44px]">
-                {sessionBusy ? 'Done (finishing uploads)' : 'Done'}
-              </button>
-              <button type="button" onClick={openPicker}
-                className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-pdi-navy text-white rounded-lg hover:bg-pdi-navy-light min-h-[44px]">
-                <ImagePlus size={15} /> Add more photos
-              </button>
-            </div>
-          </div>
-        </Dialog>,
-        document.body
+      {/* In-app camera */}
+      {session && (
+        <CameraCapture
+          photos={cameraPhotos}
+          onCapture={file => addFiles([file], session)}
+          onPickLibrary={() => pickerRef.current?.click()}
+          onDone={closeCamera}
+        />
       )}
 
       {/* All photos of the point */}
@@ -368,7 +353,7 @@ export default function ItemAttachment({
               <span className="text-xs text-gray-500 truncate">{preview.file_name}</span>
               <div className="flex gap-2 flex-shrink-0">
                 {!readOnly && (
-                  <button type="button" onClick={() => removeAttachment(preview.id)}
+                  <button type="button" onClick={() => removeSaved(preview.id)}
                     className="flex items-center gap-1.5 px-3 py-2 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50 min-h-[40px]">
                     <Trash2 size={14} /> Remove photo
                   </button>

@@ -8,6 +8,7 @@ import assert from 'node:assert'
 
 import {
   photoRejectionReason, partitionPhotos, pointAttachments, uploadErrorMessage, IMAGE_ACCEPT,
+  prefersInAppCamera, cameraErrorMessage, capturedPhotoName,
 } from '../src/lib/photoUpload.js'
 
 const file = (name, type, size = 1024) => ({ name, type, size })
@@ -50,4 +51,36 @@ test('upload errors are explained', () => {
   assert.strictEqual(uploadErrorMessage({ response: { data: { error: 'File too large. Maximum size is 25MB.' } } }), 'File too large. Maximum size is 25MB.')
   assert.match(uploadErrorMessage({ code: 'ERR_NETWORK', message: 'Network Error' }), /no connection/)
   assert.strictEqual(uploadErrorMessage(null), 'upload failed')
+})
+
+// ── In-app camera ───────────────────────────────────────────────────────────
+
+const fakeWindow = ({ secure = true, gum = true, coarse = true } = {}) => ({
+  isSecureContext: secure,
+  navigator: { mediaDevices: gum ? { getUserMedia: () => {} } : undefined },
+  matchMedia: q => ({ matches: q === '(pointer: coarse)' && coarse }),
+})
+
+test('phones and tablets on a secure page get the in-app camera', () => {
+  assert.strictEqual(prefersInAppCamera(fakeWindow()), true)
+})
+
+test('desktops, insecure pages and browsers without camera access keep the file picker', () => {
+  assert.strictEqual(prefersInAppCamera(fakeWindow({ coarse: false })), false, 'mouse / trackpad')
+  assert.strictEqual(prefersInAppCamera(fakeWindow({ secure: false })), false, 'http page — the browser refuses the camera')
+  assert.strictEqual(prefersInAppCamera(fakeWindow({ gum: false })), false, 'no getUserMedia')
+  assert.strictEqual(prefersInAppCamera(undefined), false)
+})
+
+test('camera failures are explained with a way forward', () => {
+  assert.match(cameraErrorMessage({ name: 'NotAllowedError' }), /blocked.*library/)
+  assert.match(cameraErrorMessage({ name: 'NotFoundError' }), /No camera/)
+  assert.match(cameraErrorMessage({ name: 'NotReadableError' }), /another app/)
+  assert.match(cameraErrorMessage(null), /library/)
+})
+
+test('captured photos get distinct, sortable JPEG names', () => {
+  const at = new Date(2026, 10, 24, 9, 5, 7)
+  assert.strictEqual(capturedPhotoName(at, 1), 'photo-20261124-090507-001.jpg')
+  assert.strictEqual(capturedPhotoName(at, 12), 'photo-20261124-090507-012.jpg')
 })

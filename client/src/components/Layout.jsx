@@ -4,6 +4,7 @@ import { Menu } from 'lucide-react'
 import Sidebar from './Sidebar'
 import { ToastContainer } from './ui/toast'
 import { useToast } from '../hooks/useToast'
+import { installDocumentScrollRestore } from '../lib/viewport'
 
 export default function Layout() {
   const { toasts, dismiss } = useToast()
@@ -16,6 +17,10 @@ export default function Layout() {
     setDrawerOpen(false)
   }, [location.pathname])
 
+  // iOS leaves the document scrolled after the keyboard closes, pushing the
+  // shell up with blank space beneath it; put it back (see lib/viewport.js).
+  useEffect(() => installDocumentScrollRestore(), [])
+
   // Lock body scroll while the mobile drawer is open so the underlying page
   // doesn't scroll when the user swipes inside the drawer.
   useEffect(() => {
@@ -27,7 +32,7 @@ export default function Layout() {
   }, [drawerOpen])
 
   return (
-    <div className="flex h-screen bg-gray-50 overflow-hidden print:block print:h-auto print:overflow-visible print:bg-white">
+    <div className="app-shell flex bg-gray-50 overflow-hidden print:block print:h-auto print:overflow-visible print:bg-white">
       <Sidebar open={drawerOpen} onClose={() => setDrawerOpen(false)} />
 
       <div className="flex-1 flex flex-col min-w-0 print:block">
@@ -57,7 +62,7 @@ export default function Layout() {
 
         {/* `app-scroll-area` keeps the last row of every page clear of the
             home indicator and the browser's bottom chrome. */}
-        <main className="app-scroll-area flex-1 overflow-y-auto print:overflow-visible print:p-0">
+        <main className="app-scroll-area flex-1 overflow-y-auto overscroll-y-contain print:overflow-visible print:p-0">
           <Outlet />
         </main>
       </div>

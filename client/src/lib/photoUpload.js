@@ -49,3 +49,46 @@ export function uploadErrorMessage(err) {
   if (err.code === 'ECONNABORTED') return 'the upload timed out — retry'
   return err.message || 'upload failed'
 }
+
+// ── In-app camera ───────────────────────────────────────────────────────────
+// Phones and tablets get a live viewfinder inside the app: each tap of the
+// shutter is a saved photo, with no "Use Photo" confirmation per shot (the
+// file input hands off to the system camera, which always asks). It needs a
+// secure page (https or localhost) and getUserMedia; desktops keep the file
+// picker, which suits a mouse better.
+
+/** Whether the in-app camera should be offered on this device. */
+export function prefersInAppCamera(win = typeof window === 'undefined' ? undefined : window) {
+  if (!win) return false
+  if (!win.isSecureContext) return false
+  if (typeof win.navigator?.mediaDevices?.getUserMedia !== 'function') return false
+  try {
+    return !!win.matchMedia?.('(pointer: coarse)')?.matches
+  } catch {
+    return false
+  }
+}
+
+/** Why the camera could not start, in words an inspector can act on. */
+export function cameraErrorMessage(err) {
+  switch (err?.name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return 'Camera access is blocked. Allow the camera for this site in the browser settings (Safari: aA › Website Settings › Camera), or add photos from the library.'
+    case 'NotFoundError':
+    case 'OverconstrainedError':
+      return 'No camera was found on this device. Add photos from the library instead.'
+    case 'NotReadableError':
+    case 'AbortError':
+      return 'The camera is being used by another app. Close it and try again, or add photos from the library.'
+    default:
+      return 'The camera could not be started. Add photos from the library instead.'
+  }
+}
+
+/** File name for a photo taken with the in-app camera. */
+export function capturedPhotoName(date = new Date(), sequence = 1) {
+  const pad = (n, w = 2) => String(n).padStart(w, '0')
+  const stamp = `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+  return `photo-${stamp}-${pad(sequence, 3)}.jpg`
+}
