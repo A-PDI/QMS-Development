@@ -98,7 +98,7 @@ export default function MyInspections() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      {['Form No', 'Component', 'Part Number', 'Status', 'Due Date', 'Assigned', 'Started'].map(h => (
+                      {['Description', 'Component', 'Part Number', 'Status', 'Due Date', 'Assigned', 'Started'].map(h => (
                         <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
                       ))}
                     </tr>
@@ -111,7 +111,7 @@ export default function MyInspections() {
                         className="hover:bg-blue-50/50 cursor-pointer"
                       >
                         <td className="px-4 py-3">
-                          <div className="font-medium text-gray-800">{insp.form_no}</div>
+                          <div className="font-medium text-gray-800 max-w-[16rem] truncate" title={insp.part_description || undefined}>{insp.part_description || '—'}</div>
                         </td>
                         <td className="px-4 py-3 text-sm text-gray-700">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</td>
                         <td className="px-4 py-3 font-mono text-xs text-gray-700">{insp.part_number || '—'}</td>
@@ -138,7 +138,7 @@ export default function MyInspections() {
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
-                        <div className="font-medium text-gray-800 text-sm">{insp.form_no}</div>
+                        <div className="font-medium text-gray-800 text-sm truncate">{insp.part_description || '—'}</div>
                         <div className="text-xs text-gray-600 mt-1">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type || '—'}</div>
                       </div>
                       <div className="flex-shrink-0">

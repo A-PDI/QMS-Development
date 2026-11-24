@@ -30,7 +30,7 @@ export default function InspectionList() {
   const deleteInspection = useDeleteInspection()
 
   // Delete confirmation state
-  const [deleteTarget, setDeleteTarget] = useState(null) // { id, form_no }
+  const [deleteTarget, setDeleteTarget] = useState(null) // inspection object
   const [deleting, setDeleting] = useState(false)
 
   // Assign modal state
@@ -136,7 +136,8 @@ export default function InspectionList() {
           <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4">
             <h3 className="text-base font-semibold text-gray-900">Delete Inspection?</h3>
             <p className="text-sm text-gray-600">
-              Delete <span className="font-mono font-bold">{deleteTarget.form_no}</span>? This cannot be undone.
+              Delete <span className="font-bold">{deleteTarget.part_description || 'No description'}</span>
+              {' — '}<span className="font-mono">{deleteTarget.part_number || 'No part #'}</span>? This cannot be undone.
             </p>
             <div className="flex gap-2 justify-end">
               <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 min-h-[40px]">Cancel</button>
@@ -153,7 +154,10 @@ export default function InspectionList() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4">
             <h3 className="text-base font-semibold text-gray-900">Assign Inspection</h3>
-            <p className="text-sm text-gray-500 font-mono">{assignTarget.form_no}</p>
+            <p className="text-sm text-gray-500">
+              <span className="font-medium text-gray-700">{assignTarget.part_description || 'No description'}</span>
+              {' — '}<span className="font-mono">{assignTarget.part_number || 'No part #'}</span>
+            </p>
             <div className="space-y-3">
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">Inspector</label>
@@ -206,7 +210,7 @@ export default function InspectionList() {
             <form onSubmit={applySearch} className="flex gap-2 flex-1 min-w-0">
               <div className="relative flex-1 min-w-0">
                 <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input type="text" placeholder="Part #, PO, Lot/Serial, inspector…"
+                <input type="text" placeholder="Part #, description, PO, Lot/Serial, inspector…"
                   className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-pdi-navy"
                   value={search} onChange={e => setSearch(e.target.value)} />
               </div>
@@ -307,7 +311,9 @@ export default function InspectionList() {
                   <tr key={insp.id} onClick={() => navigate(`/inspections/${insp.id}`)} className="hover:bg-blue-50/50 cursor-pointer">
                     <td className="px-4 py-3">
                       <div className="font-medium text-gray-800">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type}</div>
-                      <div className="text-xs text-gray-400 font-mono mt-0.5">{insp.form_no}</div>
+                      {insp.part_description && (
+                        <div className="text-xs text-gray-500 mt-0.5 max-w-[9rem] line-clamp-2" title={insp.part_description}>{insp.part_description}</div>
+                      )}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs">{insp.part_number || '—'}</td>
                     <td className="px-4 py-3 font-mono text-xs">{insp.po_number || '—'}</td>
@@ -339,7 +345,7 @@ export default function InspectionList() {
                             className="p-1.5 text-purple-600 hover:bg-purple-50 rounded transition-colors disabled:opacity-40">
                             {pdfLoadingId === insp.id ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
                           </button>
-                          <button onClick={() => setDeleteTarget({ id: insp.id, form_no: insp.form_no })} title="Delete"
+                          <button onClick={() => setDeleteTarget(insp)} title="Delete"
                             className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors">
                             <Trash2 size={14} />
                           </button>
@@ -365,7 +371,9 @@ export default function InspectionList() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="font-medium text-gray-800 text-sm truncate">{COMPONENT_TYPE_LABELS[insp.component_type] || insp.component_type}</div>
-                      <div className="text-xs text-gray-400 font-mono mt-0.5 truncate">{insp.form_no}</div>
+                      {insp.part_description && (
+                        <div className="text-xs text-gray-500 mt-0.5 truncate">{insp.part_description}</div>
+                      )}
                     </div>
                     <div className="flex flex-col items-end gap-1 flex-shrink-0">
                       <StatusBadge status={insp.status} />
@@ -392,7 +400,7 @@ export default function InspectionList() {
                     <button onClick={e => handlePrint(e, insp)} disabled={pdfLoadingId === insp.id} className="flex items-center gap-1 px-2 py-1 text-xs text-purple-600 border border-purple-200 rounded hover:bg-purple-50 disabled:opacity-40">
                       {pdfLoadingId === insp.id ? <Loader2 size={12} className="animate-spin" /> : <Printer size={12} />} PDF
                     </button>
-                    <button onClick={() => setDeleteTarget({ id: insp.id, form_no: insp.form_no })} className="flex items-center gap-1 px-2 py-1 text-xs text-red-500 border border-red-200 rounded hover:bg-red-50 ml-auto">
+                    <button onClick={() => setDeleteTarget(insp)} className="flex items-center gap-1 px-2 py-1 text-xs text-red-500 border border-red-200 rounded hover:bg-red-50 ml-auto">
                       <Trash2 size={12} /> Delete
                     </button>
                   </div>

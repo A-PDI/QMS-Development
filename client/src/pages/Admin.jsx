@@ -1214,7 +1214,7 @@ function AssignModal({ inspection, onClose, showToast }) {
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X size={18} /></button>
         </div>
         <div className="text-xs text-gray-500">
-          <span className="font-medium text-gray-700">{inspection.form_no}</span> — {inspection.part_number || 'No part #'}
+          <span className="font-medium text-gray-700">{inspection.part_description || 'No description'}</span> — {inspection.part_number || 'No part #'}
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">Assign to User</label>
@@ -1276,7 +1276,7 @@ function ReopenModal({ inspection, onClose, showToast }) {
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X size={18} /></button>
         </div>
         <div className="text-xs text-gray-500">
-          <span className="font-medium text-gray-700">{inspection.form_no}</span> — {inspection.part_number || 'No part #'}
+          <span className="font-medium text-gray-700">{inspection.part_description || 'No description'}</span> — {inspection.part_number || 'No part #'}
         </div>
         <div className="flex gap-2 bg-amber-50 border border-amber-200 rounded-lg p-3">
           <AlertTriangle size={15} className="text-amber-600 flex-shrink-0 mt-0.5" />
@@ -1380,7 +1380,7 @@ function InspectionDataTab({ showToast }) {
           <form onSubmit={applySearch} className="flex gap-2 flex-1 sm:flex-none min-w-0">
             <div className="relative flex-1 sm:flex-none">
               <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input type="text" placeholder="Part #, PO, inspector, lot…"
+              <input type="text" placeholder="Part #, description, PO, inspector, lot…"
                 className="w-full sm:w-56 pl-8 pr-3 py-2 sm:py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-pdi-navy min-h-[40px] sm:min-h-0"
                 value={search} onChange={e => setSearch(e.target.value)} />
             </div>
@@ -1424,7 +1424,7 @@ function InspectionDataTab({ showToast }) {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                {['Form No', 'Part #', 'PO #', 'Inspector', 'Date Received', 'Status', ''].map(h => (
+                {['Description', 'Part #', 'PO #', 'Inspector', 'Date Received', 'Status', ''].map(h => (
                   <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
                 ))}
               </tr>
@@ -1432,7 +1432,7 @@ function InspectionDataTab({ showToast }) {
             <tbody className="divide-y divide-gray-100">
               {inspections.map(insp => (
                 <tr key={insp.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</td>
+                  <td className="px-4 py-3 text-sm font-semibold text-pdi-navy max-w-[16rem] truncate" title={insp.part_description || undefined}>{insp.part_description || '—'}</td>
                   <td className="px-4 py-3 text-sm">{insp.part_number || '—'}</td>
                   <td className="px-4 py-3 text-sm text-gray-500">{insp.po_number || '—'}</td>
                   <td className="px-4 py-3 text-sm">{insp.inspector_name || '—'}</td>
@@ -1461,7 +1461,7 @@ function InspectionDataTab({ showToast }) {
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-mono text-xs font-bold text-pdi-navy">{insp.form_no}</span>
+                    <span className="text-sm font-semibold text-pdi-navy min-w-0 truncate">{insp.part_description || '—'}</span>
                     <StatusBadge status={insp.status} />
                   </div>
                   <div className="text-sm text-gray-800 mt-0.5">{insp.part_number || '—'}</div>
